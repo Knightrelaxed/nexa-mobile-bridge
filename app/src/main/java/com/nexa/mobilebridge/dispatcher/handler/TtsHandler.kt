@@ -101,7 +101,12 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
             val params = Bundle().apply {
                 putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             }
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+            val result = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+            if (result == TextToSpeech.ERROR) {
+                if (continuation.isActive) {
+                    continuation.resume(CommandResult.failure(command.command_id, "TTS failed to enqueue the utterance"))
+                }
+            }
         }
     }
 }

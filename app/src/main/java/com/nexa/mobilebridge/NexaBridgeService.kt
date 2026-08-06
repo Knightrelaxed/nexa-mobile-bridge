@@ -44,7 +44,24 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class NexaBridgeService : Service() {
 
-    @Inject lateinit var webSocketClient: NexaWebSocketClient
+    companion object {
+        /** Weak reference to the active WebSocket client for sending call events from Activities. */
+        @Volatile private var activeWebSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient? = null
+        @Volatile private var activeJson: kotlinx.serialization.json.Json? = null
+
+        /**
+         * Send a raw JSON payload to the N.E.X.A server via the active WebSocket connection.
+         * Safe to call from any thread or Activity (e.g., FakeCallActivity).
+         * Returns true if the message was enqueued successfully.
+         */
+        fun sendEvent(payload: String): Boolean {
+            return activeWebSocketClient?.send(payload) ?: false
+        }
+
+        fun encodeJson(): kotlinx.serialization.json.Json? = activeJson
+    }
+
+    @Inject lateinit var webSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient
     @Inject lateinit var dispatcher: DeviceCommandDispatcher
     @Inject lateinit var dataStore: DataStore<Preferences>
     @Inject lateinit var json: Json
@@ -79,6 +96,9 @@ class NexaBridgeService : Service() {
         createNotificationChannels()
         acquireWakeLock()
         initAlertTts()
+        // Expose WebSocket client to companion object for cross-component access
+        activeWebSocketClient = webSocketClient
+        activeJson = json
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -369,6 +389,9 @@ class NexaBridgeService : Service() {
     }
 
     override fun onDestroy() {
+        // Clear companion references before tearing down
+        activeWebSocketClient = null
+        activeJson = null
         super.onDestroy()
         sensorObserverManager?.stopObserving()
         sensorObserverManager = null

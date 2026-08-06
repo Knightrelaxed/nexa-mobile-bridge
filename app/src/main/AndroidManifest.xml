@@ -22,7 +22,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" /> <!-- For GPS -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" /> <!-- For GPS -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> <!-- For Geofencing in Background -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" /> <!-- For Step Counter & Motion -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" /> <!-- For voice input during call interaction -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" /> <!-- For recording in foreground -->
 
     <application
         android:name=".NexaBridgeApp"
@@ -63,6 +66,16 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:launchMode="singleTop"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.call.FakeCallActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:exported="false" />
 
         <service
