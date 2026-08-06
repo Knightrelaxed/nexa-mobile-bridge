@@ -36,17 +36,18 @@ class LocationHandler(private val context: Context) {
                 return CommandResult.failure(command.command_id, "Location services are disabled on the device.")
             }
 
-            val location = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                suspendCancellableCoroutine<Location?> { continuation ->
-                    val provider = if (isGpsEnabled) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
+            // 1. Try last known location first for instant response (works indoors/outdoors)
+            var location: Location? = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+
+            // 2. If null and API >= 30, request current location using NETWORK_PROVIDER or GPS
+            if (location == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val provider = if (isNetworkEnabled) LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
+                location = suspendCancellableCoroutine<Location?> { continuation ->
                     val cancellationSignal = android.os.CancellationSignal()
-                    
-                    continuation.invokeOnCancellation {
-                        cancellationSignal.cancel()
-                    }
+                    continuation.invokeOnCancellation { cancellationSignal.cancel() }
                     
                     val executor = Executor { it.run() }
-                    
                     locationManager.getCurrentLocation(
                         provider,
                         cancellationSignal,
@@ -57,12 +58,21 @@ class LocationHandler(private val context: Context) {
                         }
                     }
                 }
-            } else {
-                locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                    ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
             }
 
             if (location != null) {
+                var addressText: String? = null
+                try {
+                    val geocoder = android.location.Geocoder(context, java.util.Locale("id", "ID"))
+                    @Suppress("DEPRECATION")
+                    val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+                    if (!addresses.isNullOrEmpty()) {
+                        addressText = addresses[0].getAddressLine(0)
+                    }
+                } catch (e: Exception) {
+                    // Geocoder lookup failed or offline, fallback to coordinates
+                }
+
                 CommandResult(
                     command_id = command.command_id,
                     status = ResultStatus.SUCCESS,
@@ -72,6 +82,7 @@ class LocationHandler(private val context: Context) {
                         put("longitude", kotlinx.serialization.json.JsonPrimitive(location.longitude))
                         put("accuracy", kotlinx.serialization.json.JsonPrimitive(location.accuracy))
                         put("provider", kotlinx.serialization.json.JsonPrimitive(location.provider))
+                        put("address", kotlinx.serialization.json.JsonPrimitive(addressText ?: ""))
                     }
                 )
             } else {

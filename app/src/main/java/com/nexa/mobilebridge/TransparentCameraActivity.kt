@@ -68,11 +68,19 @@ class TransparentCameraActivity : ComponentActivity() {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
 
-                imageCapture = ImageCapture.Builder().build()
+                imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setTargetResolution(android.util.Size(1280, 960))
+                    .build()
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(this, cameraSelector, imageCapture)
 
-                takePhoto()
+                // Give CameraX 700ms to initialize hardware session on multi-lens sensors
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (!isFinishing && !isDestroyed) {
+                        takePhoto()
+                    }
+                }, 700L)
                 
             } catch (exc: Exception) {
                 onPhotoTaken?.invoke(null, "Camera initialization failed: ${exc.message}")

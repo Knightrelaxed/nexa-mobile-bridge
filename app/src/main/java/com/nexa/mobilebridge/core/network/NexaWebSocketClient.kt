@@ -6,8 +6,6 @@ import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.protocol.NexaCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -23,7 +21,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.pow
 
 @Singleton
 class NexaWebSocketClient @Inject constructor(
@@ -39,16 +36,22 @@ class NexaWebSocketClient @Inject constructor(
     val incomingCommands: SharedFlow<NexaCommand> = _incomingCommands.asSharedFlow()
 
     private var webSocket: WebSocket? = null
-    private var reconnectJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private var currentUrl: String = ""
     private var currentToken: String = ""
     private var hmacSecret: String = ""
 
-    private var reconnectAttempt = 0
-    private val INITIAL_DELAY_MS = 1000L
-    private val MAX_DELAY_MS = 30000L
+    // ─────────────────────────────────────────────
+    // ReconnectOrchestrator — delegasi semua logika retry ke sini
+    // ─────────────────────────────────────────────
+    private val orchestrator: ReconnectOrchestrator by lazy {
+        ReconnectOrchestrator(scope) { initiateConnection() }
+    }
+
+    /** SharedFlow kegagalan fase — di-subscribe oleh NexaBridgeService untuk notifikasi & TTS. */
+    val phaseFailureEvents: SharedFlow<PhaseFailureEvent>
+        get() = orchestrator.phaseFailureEvents
 
     fun setHmacSecret(secret: String) {
         hmacSecret = secret
@@ -59,15 +62,16 @@ class NexaWebSocketClient @Inject constructor(
 
         currentUrl = url
         currentToken = token
-        reconnectAttempt = 0
-
+        // Reset orchestrator agar sesi koneksi baru bisa berjalan,
+        // terutama penting setelah service di-restart oleh user.
+        orchestrator.reset()
         initiateConnection()
     }
 
     private fun initiateConnection() {
+        if (orchestrator.isStopped) return
         if (currentUrl.isBlank()) return
 
-        reconnectJob?.cancel()
         _connectionState.value = ConnectionState.Connecting
 
         val request = Request.Builder()
@@ -76,44 +80,47 @@ class NexaWebSocketClient @Inject constructor(
             .build()
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket Opened")
-                reconnectAttempt = 0
+                Log.i(TAG, "✅ WebSocket Terbuka")
+                orchestrator.onConnectionSuccess()
                 _connectionState.value = ConnectionState.Connected
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val command = json.decodeFromString<NexaCommand>(text)
-                    // Verify HMAC if signature is present (GodMode actions)
+
+                    // Verifikasi HMAC jika signature hadir (GodMode)
                     if (command.signature != null && hmacSecret.isNotBlank()) {
-                        // Level is extracted from params if available, default 3 for GodMode
                         val level = command.params?.get("level")
                             ?.toString()?.toIntOrNull() ?: 3
-                        val isValid = HmacVerifier.verify(command.timestamp, level, command.signature, hmacSecret)
+                        val isValid = HmacVerifier.verify(
+                            command.timestamp, level, command.signature, hmacSecret
+                        )
                         if (!isValid) {
-                            Log.e(TAG, "Invalid HMAC signature for command: ${command.command_id}")
+                            Log.e(TAG, "❌ HMAC signature tidak valid: ${command.command_id}")
                             return
                         }
                     }
 
-                    scope.launch {
-                        _incomingCommands.emit(command)
-                    }
+                    scope.launch { _incomingCommands.emit(command) }
+
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing incoming message: ${e.message}")
+                    Log.e(TAG, "Gagal mem-parse pesan masuk: ${e.message}")
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "WebSocket Closed: $reason")
+                Log.i(TAG, "WebSocket Ditutup: $reason")
                 _connectionState.value = ConnectionState.Disconnected(reason)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket Failure: ${t.message}")
+                Log.e(TAG, "❌ WebSocket Gagal: ${t.javaClass.simpleName} — ${t.message}")
                 _connectionState.value = ConnectionState.Disconnected(t.message)
-                scheduleReconnect()
+                // Delegasikan ke orchestrator untuk menentukan kapan dan apakah harus reconnect
+                orchestrator.onConnectionFailed(t)
             }
         })
     }
@@ -123,32 +130,15 @@ class NexaWebSocketClient @Inject constructor(
         return if (ws != null && _connectionState.value is ConnectionState.Connected) {
             ws.send(payload)
         } else {
-            Log.w(TAG, "Cannot send — WebSocket not connected.")
+            Log.w(TAG, "Tidak bisa kirim — WebSocket tidak terkoneksi.")
             false
         }
     }
 
     fun disconnect() {
-        reconnectJob?.cancel()
+        orchestrator.stop()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected("Disconnected by user")
-    }
-
-    private fun scheduleReconnect() {
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            reconnectAttempt++
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-            val delayMs = (INITIAL_DELAY_MS * 2.0.pow((reconnectAttempt - 1).toDouble()))
-                .toLong()
-                .coerceAtMost(MAX_DELAY_MS)
-
-            _connectionState.value = ConnectionState.Reconnecting(reconnectAttempt, delayMs)
-            Log.i(TAG, "Reconnecting in ${delayMs}ms (Attempt $reconnectAttempt)")
-
-            delay(delayMs)
-            initiateConnection()
-        }
     }
 }

@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Nexa Mobile Bridge</string>
+    <string name="app_name">Nexa Bridge</string>
     <string name="accessibility_service_description">N.E.X.A Assistant requires this service to capture screenshots remotely when requested by the Core AI.</string>
 </resources>

@@ -89,6 +89,9 @@ dependencies {
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
+  // Location & Geofencing
+  implementation("com.google.android.gms:play-services-location:21.1.0")
+
   // Dependency Injection & DataStore
   implementation(libs.hilt.android)
   kapt(libs.hilt.compiler)

@@ -24,18 +24,32 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
         if (status == TextToSpeech.SUCCESS) {
             // Prefer Indonesian Locale
             val locale = Locale("id", "ID")
-            if (tts?.isLanguageAvailable(locale) == TextToSpeech.LANG_AVAILABLE) {
+            val result = tts?.isLanguageAvailable(locale) ?: TextToSpeech.LANG_NOT_SUPPORTED
+            if (result >= TextToSpeech.LANG_AVAILABLE) {
                 tts?.language = locale
             } else {
-                tts?.language = Locale.ENGLISH
+                val fallbackLocale = Locale("id")
+                val fallbackResult = tts?.isLanguageAvailable(fallbackLocale) ?: TextToSpeech.LANG_NOT_SUPPORTED
+                if (fallbackResult >= TextToSpeech.LANG_AVAILABLE) {
+                    tts?.language = fallbackLocale
+                } else {
+                    tts?.language = Locale.ENGLISH
+                }
             }
             isInitialized = true
         }
     }
 
     suspend fun execute(command: NexaCommand): CommandResult {
+        // Wait up to 5 seconds for TTS engine to initialize
+        var retries = 50
+        while (!isInitialized && retries > 0) {
+            kotlinx.coroutines.delay(100)
+            retries--
+        }
+
         if (!isInitialized || tts == null) {
-            return CommandResult.failure(command.command_id, "TTS engine not ready")
+            return CommandResult.failure(command.command_id, "TTS engine not ready after timeout")
         }
         
         val text = command.params?.get("text")?.let { 

@@ -7,6 +7,7 @@ import com.nexa.mobilebridge.dispatcher.handler.CameraHandler
 import com.nexa.mobilebridge.dispatcher.handler.FlashlightHandler
 import com.nexa.mobilebridge.dispatcher.handler.LocationHandler
 import com.nexa.mobilebridge.dispatcher.handler.NetworkHandler
+import com.nexa.mobilebridge.dispatcher.handler.OverlayHandler
 import com.nexa.mobilebridge.dispatcher.handler.ScreenHandler
 import com.nexa.mobilebridge.dispatcher.handler.ScreenshotHandler
 import com.nexa.mobilebridge.dispatcher.handler.TtsHandler
@@ -43,6 +44,8 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.FORCE_DND          -> volumeHandler.executeDnd(command)
                 NexaActions.GET_BATTERY_STATUS -> batteryHandler.execute(command)
                 NexaActions.GO_HOME_SCREEN     -> screenHandler.execute(command)
+                NexaActions.GO_BACK            -> screenHandler.executeBack(command)
+                NexaActions.SHOW_RECENTS       -> screenHandler.executeRecents(command)
                 NexaActions.LOCK_SCREEN        -> screenHandler.executeLock(command)
                 NexaActions.LAUNCH_APP         -> appLauncherHandler.execute(command)
                 NexaActions.TOGGLE_WIFI        -> networkHandler.execute(command)
@@ -51,6 +54,7 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.SPEAK_TEXT         -> ttsHandler.execute(command)
                 NexaActions.TAKE_PHOTO         -> cameraHandler.execute(command)
                 NexaActions.TAKE_SCREENSHOT    -> screenshotHandler.execute(command)
+                NexaActions.SHOW_OVERLAY_MSG   -> OverlayHandler(context).execute(command)
                 else -> CommandResult.unknown(command.command_id, command.action)
             }
         } catch (e: SecurityException) {
