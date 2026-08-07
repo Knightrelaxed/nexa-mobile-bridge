@@ -27,23 +27,33 @@ class LocationHandler(private val context: Context) {
                 return CommandResult.failure(command.command_id, "Location permission denied.")
             }
 
-            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            
-            val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-            val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-            
-            if (!isGpsEnabled && !isNetworkEnabled) {
-                return CommandResult.failure(command.command_id, "Location services are disabled on the device.")
+            // 1. Try Google Play Services FusedLocationProviderClient first (Primary & Most Accurate)
+            val fusedClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+            var location: Location? = suspendCancellableCoroutine { continuation ->
+                fusedClient.lastLocation
+                    .addOnSuccessListener { loc ->
+                        if (continuation.isActive) continuation.resume(loc)
+                    }
+                    .addOnFailureListener {
+                        if (continuation.isActive) continuation.resume(null)
+                    }
             }
 
-            // 1. Try last known location first for instant response (works indoors/outdoors)
-            var location: Location? = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            // 2. Fallback to LocationManager (GPS -> Network -> Passive) if fused location was null
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            if (location == null) {
+                location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                    ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                    ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+            }
 
-            // 2. If null and API >= 30, request current location using NETWORK_PROVIDER or GPS
+            // 3. Fallback to getCurrentLocation (Android 11+) if still null
             if (location == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
                 val provider = if (isNetworkEnabled) LocationManager.NETWORK_PROVIDER else LocationManager.GPS_PROVIDER
-                location = suspendCancellableCoroutine<Location?> { continuation ->
+
+                location = suspendCancellableCoroutine { continuation ->
                     val cancellationSignal = android.os.CancellationSignal()
                     continuation.invokeOnCancellation { cancellationSignal.cancel() }
                     
@@ -53,9 +63,7 @@ class LocationHandler(private val context: Context) {
                         cancellationSignal,
                         executor
                     ) { loc ->
-                        if (continuation.isActive) {
-                            continuation.resume(loc)
-                        }
+                        if (continuation.isActive) continuation.resume(loc)
                     }
                 }
             }

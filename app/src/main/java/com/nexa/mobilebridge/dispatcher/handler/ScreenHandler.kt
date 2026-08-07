@@ -21,12 +21,24 @@ class ScreenHandler(private val context: Context) {
     }
 
     fun executeLock(command: NexaCommand): CommandResult {
-        // LOCK_SCREEN requires DevicePolicyManager with BIND_DEVICE_ADMIN — complex ADB setup.
-        // Intentionally not implemented in Phase 1.
-        return CommandResult.failure(
-            command.command_id,
-            "LOCK_SCREEN requires BIND_DEVICE_ADMIN permission. Not implemented in Phase 1."
-        )
+        return try {
+            val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
+            if (service != null) {
+                val success = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
+                if (success) {
+                    CommandResult.success(command.command_id, "Screen locked successfully.")
+                } else {
+                    CommandResult.failure(command.command_id, "Failed to lock screen.")
+                }
+            } else {
+                CommandResult.failure(
+                    command.command_id,
+                    "Nexa Accessibility Service is not running. Please enable it in Settings > Accessibility."
+                )
+            }
+        } catch (e: Exception) {
+            CommandResult.failure(command.command_id, "Error locking screen: ${e.message}")
+        }
     }
 
     fun executeBack(command: NexaCommand): CommandResult {
