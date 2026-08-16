@@ -50,13 +50,13 @@ data class PhaseFailureEvent(
 /**
  * Mengelola logika percobaan ulang koneksi (reconnect) secara bertingkat (4 fase).
  *
- * FASE 1 — Segera: 20 percobaan dengan exponential backoff (maks 30 detik/percobaan).
- *          Jika gagal semua → tunggu 1 jam.
- * FASE 2 — +1 Jam: 20 percobaan lagi.
- *          Jika gagal semua → kirim [PhaseFailureEvent] → tunggu 6 jam.
- * FASE 3 — +6 Jam: 20 percobaan lagi.
- *          Jika gagal semua → kirim [PhaseFailureEvent] → tunggu 24 jam.
- * FASE 4 — +24 Jam: 20 percobaan terakhir.
+ * FASE 1 — Segera: 10 percobaan dengan exponential backoff (maks 30 detik/percobaan).
+ *          Jika gagal semua → tunggu 5 menit.
+ * FASE 2 — +5 Menit: 10 percobaan lagi.
+ *          Jika gagal semua → kirim [PhaseFailureEvent] → tunggu 30 menit.
+ * FASE 3 — +30 Menit: 10 percobaan lagi.
+ *          Jika gagal semua → kirim [PhaseFailureEvent] → tunggu 2 jam.
+ * FASE 4 — +2 Jam: 10 percobaan terakhir.
  *          Jika gagal semua → kirim [PhaseFailureEvent] (isFinal=true) → BERHENTI TOTAL.
  *
  * @param scope          CoroutineScope tempat semua coroutine reconnect dijalankan.
@@ -81,14 +81,14 @@ class ReconnectOrchestrator(
     private var reconnectJob: Job? = null
 
     companion object {
-        const val MAX_ATTEMPTS      = 20
-        const val INITIAL_DELAY_MS  = 1_000L
+        const val MAX_ATTEMPTS      = 10
+        const val INITIAL_DELAY_MS  = 2_000L
         const val MAX_BACKOFF_MS    = 30_000L
 
-        // Durasi tunggu antar-fase
-        val WAIT_PHASE_2_MS = 1L  * 60 * 60 * 1_000   // 1 jam
-        val WAIT_PHASE_3_MS = 6L  * 60 * 60 * 1_000   // 6 jam
-        val WAIT_PHASE_4_MS = 24L * 60 * 60 * 1_000   // 24 jam
+        // Durasi tunggu antar-fase (jauh lebih singkat & realistis)
+        val WAIT_PHASE_2_MS =  5L * 60 * 1_000     // 5 menit
+        val WAIT_PHASE_3_MS = 30L * 60 * 1_000     // 30 menit
+        val WAIT_PHASE_4_MS =  2L * 60 * 60 * 1_000 // 2 jam
     }
 
     /** Dipanggil ketika koneksi WebSocket berhasil dibuka. Mereset semua state fase. */
@@ -165,27 +165,27 @@ class ReconnectOrchestrator(
 
                 when (currentPhase) {
                     1 -> {
-                        // Fase 1 habis → tunggu 1 jam → mulai Fase 2 (tanpa notifikasi)
-                        Log.w(TAG, "⏳ Fase 1 habis (${MAX_ATTEMPTS}x). Menunggu 1 jam sebelum Fase 2...")
+                        // Fase 1 habis → tunggu 5 menit → mulai Fase 2 (tanpa notifikasi)
+                        Log.w(TAG, "⏳ Fase 1 habis (${MAX_ATTEMPTS}x). Menunggu 5 menit sebelum Fase 2...")
                         currentPhase = 2
                         delay(WAIT_PHASE_2_MS)
                         if (!isStopped) triggerConnect()
                     }
                     2 -> {
-                        // Fase 2 habis → NOTIFIKASI → tunggu 6 jam → mulai Fase 3
-                        Log.w(TAG, "⚠️ Fase 2 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 6 jam...")
+                        // Fase 2 habis → NOTIFIKASI → tunggu 30 menit → mulai Fase 3
+                        Log.w(TAG, "⚠️ Fase 2 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 30 menit...")
                         _phaseFailureEvents.emit(
-                            PhaseFailureEvent(2, errorType, techMsg, false, "6 jam")
+                            PhaseFailureEvent(2, errorType, techMsg, false, "30 menit")
                         )
                         currentPhase = 3
                         delay(WAIT_PHASE_3_MS)
                         if (!isStopped) triggerConnect()
                     }
                     3 -> {
-                        // Fase 3 habis → NOTIFIKASI → tunggu 24 jam → mulai Fase 4
-                        Log.w(TAG, "⚠️ Fase 3 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 24 jam...")
+                        // Fase 3 habis → NOTIFIKASI → tunggu 2 jam → mulai Fase 4
+                        Log.w(TAG, "⚠️ Fase 3 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 2 jam...")
                         _phaseFailureEvents.emit(
-                            PhaseFailureEvent(3, errorType, techMsg, false, "24 jam")
+                            PhaseFailureEvent(3, errorType, techMsg, false, "2 jam")
                         )
                         currentPhase = 4
                         delay(WAIT_PHASE_4_MS)

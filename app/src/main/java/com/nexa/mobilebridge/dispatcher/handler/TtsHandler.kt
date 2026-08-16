@@ -52,13 +52,16 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
             return CommandResult.failure(command.command_id, "TTS engine not ready after timeout")
         }
         
-        val text = command.params?.get("text")?.let { 
+        val rawText = command.params?.get("text")?.let { 
             if (it is kotlinx.serialization.json.JsonPrimitive) it.content else it.toString() 
         }
         
-        if (text.isNullOrBlank()) {
+        if (rawText.isNullOrBlank()) {
             return CommandResult.failure(command.command_id, "Missing 'text' parameter")
         }
+
+        // Sanitize phonetic pronunciation: replace "N.E.X.A" with "NEXA" so Android TTS speaks "Nexa" (not "en-e-ex-a")
+        val text = rawText.replace(Regex("(?i)\\bN\\.?E\\.?X\\.?A\\.?\\b|N\\.E\\.X\\.A"), "NEXA")
 
         // Unmute and set volume to ~70% so the AI can be heard
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager

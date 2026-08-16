@@ -46,6 +46,7 @@ class DeviceCommandDispatcher @Inject constructor(
     private val intentHandler = IntentHandler(context)
     private val audioPlayerHandler = com.nexa.mobilebridge.dispatcher.handler.AudioPlayerHandler(context)
     private val fakeCallHandler = com.nexa.mobilebridge.dispatcher.handler.FakeCallHandler(context, audioPlayerHandler)
+    private val geofenceHandler = com.nexa.mobilebridge.dispatcher.handler.GeofenceHandler(context, com.nexa.mobilebridge.core.sensor.GeofenceManager(context))
 
     suspend fun dispatch(command: NexaCommand): CommandResult = withContext(Dispatchers.Default) {
         try {
@@ -66,6 +67,12 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.TAKE_PHOTO         -> cameraHandler.execute(command)
                 NexaActions.TAKE_SCREENSHOT    -> screenshotHandler.execute(command)
                 NexaActions.SHOW_OVERLAY_MSG   -> OverlayHandler(context).execute(command)
+
+                // Dynamic Geofencing Actions
+                NexaActions.SET_GEOFENCE       -> geofenceHandler.executeSet(command)
+                NexaActions.MARK_GEOFENCE_HERE -> geofenceHandler.executeMarkCurrent(command)
+                NexaActions.REMOVE_GEOFENCE    -> geofenceHandler.executeRemove(command)
+                NexaActions.LIST_GEOFENCES     -> geofenceHandler.executeList(command)
 
                 // Hands & Eyes Expansion Actions
                 NexaActions.GET_CLIPBOARD       -> clipboardHandler.executeGet(command)

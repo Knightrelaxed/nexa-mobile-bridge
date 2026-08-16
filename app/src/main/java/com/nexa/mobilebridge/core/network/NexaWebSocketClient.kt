@@ -141,4 +141,17 @@ class NexaWebSocketClient @Inject constructor(
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected("Disconnected by user")
     }
+
+    /** Mengembalikan true jika WebSocket saat ini dalam status Connected. */
+    fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
+
+    /**
+     * Mereset ReconnectOrchestrator ke fase 1 tanpa mengubah konfigurasi koneksi.
+     * Digunakan oleh NetworkWatcher saat jaringan kembali tersedia — agar
+     * orchestrator tidak melanjutkan delay fase yang sedang berjalan.
+     */
+    fun resetOrchestrator() {
+        orchestrator.reset()
+        Log.i(TAG, "🔄 Orchestrator direset oleh NetworkWatcher.")
+    }
 }

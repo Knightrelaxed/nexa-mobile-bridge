@@ -71,7 +71,7 @@ class LocationHandler(private val context: Context) {
             if (location != null) {
                 var addressText: String? = null
                 try {
-                    val geocoder = android.location.Geocoder(context, java.util.Locale("id", "ID"))
+                    val geocoder = android.location.Geocoder(context, java.util.Locale.forLanguageTag("id-ID"))
                     @Suppress("DEPRECATION")
                     val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
                     if (!addresses.isNullOrEmpty()) {

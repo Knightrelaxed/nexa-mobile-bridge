@@ -34,11 +34,17 @@ object NexaActions {
     const val GET_CLIPBOARD          = "GET_CLIPBOARD"
     const val SET_CLIPBOARD          = "SET_CLIPBOARD"
     const val OPEN_INTENT            = "OPEN_INTENT"
-    // Audio Player & Emergency Finder
+    // Emergency Audio Player & Fake Call Simulation Actions
     const val PLAY_RINGTONE           = "PLAY_RINGTONE"
     const val PLAY_MEDIA              = "PLAY_MEDIA"
     const val STOP_MEDIA              = "STOP_MEDIA"
     const val SIMULATE_INCOMING_CALL  = "SIMULATE_INCOMING_CALL"
+
+    // Dynamic Geofencing Actions
+    const val SET_GEOFENCE            = "SET_GEOFENCE"
+    const val MARK_GEOFENCE_HERE      = "MARK_GEOFENCE_HERE"
+    const val REMOVE_GEOFENCE         = "REMOVE_GEOFENCE"
+    const val LIST_GEOFENCES          = "LIST_GEOFENCES"
 
     // Bidirectional Call Interaction Events
     const val CALL_ACCEPTED           = "CALL_ACCEPTED"   // App → Server: user swiped accept

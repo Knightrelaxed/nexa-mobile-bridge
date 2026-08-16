@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.IBinder
 import android.os.PowerManager
 import android.speech.tts.TextToSpeech
@@ -33,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -87,6 +92,7 @@ class NexaBridgeService : Service() {
     private var sensorObserverManager: SensorObserverManager? = null
     private var contextEngine: ContextEngine? = null
     private var geofenceManager: GeofenceManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -104,6 +110,14 @@ class NexaBridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildServiceNotification()
         startForeground(NOTIF_SERVICE_ID, notification)
+
+        // Intercept action from SafeBankingLauncherActivity
+        if (intent?.action == "com.nexa.mobilebridge.ACTION_START_USAGE_OBSERVER") {
+            val targetPackage = intent.getStringExtra("WATCHING_PACKAGE")
+            if (!targetPackage.isNullOrBlank()) {
+                startUsageObserver(targetPackage)
+            }
+        }
 
         if (!isServiceStarted) {
             isServiceStarted = true
@@ -131,13 +145,18 @@ class NexaBridgeService : Service() {
                 }
                 contextEngine = ContextEngine(serviceScope)
 
-                // 6. Inisialisasi GeofenceManager
+                // 6. Inisialisasi GeofenceManager & muat semua geofence aktif
                 geofenceManager = GeofenceManager(this@NexaBridgeService).apply {
-                    startGeofencing()
+                    loadAndRegisterAll()
                 }
 
                 // 7. Mulai pendengar event sensor & sintesis konteks
                 launchSensorObserverListener()
+
+                // 8. Mulai Network-Availability Watcher
+                // Saat internet kembali setelah hilang, langsung reset orchestrator
+                // dan coba reconnect dari awal — tanpa menunggu delay antar-fase.
+                registerNetworkWatcher(config.serverUrl, config.authToken)
             }
         }
 
@@ -150,9 +169,33 @@ class NexaBridgeService : Service() {
             }
         }
 
-        // START_NOT_STICKY — service TIDAK akan otomatis dihidupkan kembali oleh OS
-        // saat dihentikan oleh user. Harus dinyalakan secara eksplisit.
-        return START_NOT_STICKY
+        // START_STICKY — Jika service dimatikan oleh OS karena kekurangan memori
+        // atau user swipe dari Recent Apps, Android akan otomatis mencoba menghidupkannya lagi.
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.w("NexaBridge", "⚠️ Aplikasi di-swipe dari Recent Apps! Mencoba menghidupkan kembali service via AlarmManager...")
+        
+        try {
+            val restartServiceIntent = Intent(applicationContext, NexaBridgeService::class.java)
+            val restartServicePendingIntent = android.app.PendingIntent.getService(
+                applicationContext,
+                1,
+                restartServiceIntent,
+                android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            val alarmService = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            alarmService.set(
+                android.app.AlarmManager.ELAPSED_REALTIME,
+                android.os.SystemClock.elapsedRealtime() + 1000, // restart dalam 1 detik
+                restartServicePendingIntent
+            )
+        } catch (e: Exception) {
+            Log.e("NexaBridge", "Gagal menjadwalkan restart via AlarmManager: ${e.message}")
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -197,6 +240,44 @@ class NexaBridgeService : Service() {
                 val sent = webSocketClient.send(payload)
                 Log.d("NexaBridge", "📡 ContextReport terkirim (success=$sent): ${report.event}")
             }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Network Watcher — Reset & reconnect saat internet kembali
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Mendaftarkan NetworkCallback ke OS Android.
+     * Saat jaringan internet KEMBALI TERSEDIA (setelah sempat hilang),
+     * callback ini akan langsung mereset ReconnectOrchestrator dari fase 1
+     * dan memicu percobaan koneksi ulang — tanpa menunggu delay antar-fase.
+     */
+    private fun registerNetworkWatcher(serverUrl: String, authToken: String) {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i("NexaBridge", "🌐 Jaringan kembali tersedia! Memicu reconnect ulang dari Fase 1...")
+                serviceScope.launch {
+                    // Hanya reset & reconnect jika sedang tidak dalam status terhubung
+                    if (!webSocketClient.isConnected()) {
+                        webSocketClient.resetOrchestrator()
+                        webSocketClient.connect(serverUrl, authToken)
+                    }
+                }
+            }
+        }
+
+        try {
+            cm.registerNetworkCallback(request, networkCallback!!)
+            Log.i("NexaBridge", "✅ NetworkWatcher terdaftar.")
+        } catch (e: Exception) {
+            Log.e("NexaBridge", "❌ Gagal mendaftarkan NetworkWatcher: ${e.message}")
         }
     }
 
@@ -250,6 +331,70 @@ class NexaBridgeService : Service() {
             "$errorDesc. Akan dicoba kembali dalam ${event.nextRetryIn}."
         }
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // M-Banking Shield Mode (UsageStats Observer)
+    // ─────────────────────────────────────────────────────────────
+    
+    private var usageObserverJob: kotlinx.coroutines.Job? = null
+    
+    private fun startUsageObserver(targetPackage: String) {
+        usageObserverJob?.cancel() // Batalkan jika ada yang sedang berjalan
+        Log.i("Nexa-MBankingShield", "Memulai pengamatan UsageStats untuk package: $targetPackage")
+        
+        usageObserverJob = serviceScope.launch {
+            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            var isTargetStillForeground = true
+            var hasTargetBeenForeground = false
+            var cyclesWaitingForTarget = 0
+            
+            while (isActive && isTargetStillForeground) {
+                val endTime = System.currentTimeMillis()
+                val startTime = endTime - 5000 // Cek 5 detik terakhir
+                
+                val events = usageStatsManager.queryEvents(startTime, endTime)
+                val event = android.app.usage.UsageEvents.Event()
+                
+                var latestForegroundPackage: String? = null
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                        latestForegroundPackage = event.packageName
+                    }
+                }
+                
+                if (!hasTargetBeenForeground) {
+                    if (latestForegroundPackage == targetPackage) {
+                        hasTargetBeenForeground = true
+                        Log.i("Nexa-MBankingShield", "Target ($targetPackage) berhasil naik ke foreground.")
+                    } else {
+                        cyclesWaitingForTarget++
+                        if (cyclesWaitingForTarget > 15) { // 15 detik batas tunggu sebelum timeout
+                            Log.w("Nexa-MBankingShield", "Target ($targetPackage) tidak pernah muncul setelah 15 detik. Timeout.")
+                            isTargetStillForeground = false
+                        }
+                    }
+                } else {
+                    // Target sudah masuk, awasi kalau tertutup
+                    if (latestForegroundPackage != null && 
+                        latestForegroundPackage != targetPackage &&
+                        latestForegroundPackage != "com.nexa.mobilebridge" && // Jaga-jaga activity siluman
+                        latestForegroundPackage != "com.android.systemui") {
+                        
+                        Log.i("Nexa-MBankingShield", "Target ditutup/bergeser ke background. Foreground saat ini: $latestForegroundPackage")
+                        isTargetStillForeground = false
+                    }
+                }
+                
+                kotlinx.coroutines.delay(1000) // Polling setiap 1 detik
+            }
+            
+            // Saat keluar dari loop, berarti M-Banking sudah tidak di foreground
+            Log.i("Nexa-MBankingShield", "M-Banking tertutup atau timeout. Merestorasi izin Aksesibilitas N.E.X.A...")
+            com.nexa.mobilebridge.core.security.MBankingShieldManager.enableNexaAccessibility(this@NexaBridgeService)
+        }
+    }
+
 
     private fun postAlertNotification(title: String, body: String) {
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -398,6 +543,14 @@ class NexaBridgeService : Service() {
         geofenceManager?.stopGeofencing()
         geofenceManager = null
         contextEngine = null
+        // Unregister network watcher agar tidak ada memory leak
+        networkCallback?.let {
+            try {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
+                    .unregisterNetworkCallback(it)
+            } catch (e: Exception) { /* Diabaikan */ }
+            networkCallback = null
+        }
         webSocketClient.disconnect()
         serviceScope.cancel() // Batalkan semua coroutine milik service ini
         alertTts?.shutdown()
