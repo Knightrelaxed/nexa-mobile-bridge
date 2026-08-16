@@ -1,33 +1,41 @@
 package com.nexa.mobilebridge
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
+import android.util.Log
+import android.util.Size
+import android.view.Surface
+import android.view.TextureView
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TransparentCameraActivity : ComponentActivity() {
 
     private lateinit var cameraExecutor: ExecutorService
-    private var imageCapture: ImageCapture? = null
-    
+    private var textureView: TextureView? = null
+    private val isCaptured = AtomicBoolean(false)
+
     companion object {
-        // We will communicate the result back through a global static callback for simplicity in this bridge architecture
+        private const val TAG = "NexaCamera"
         var onPhotoTaken: ((String?, String?) -> Unit)? = null
     }
 
@@ -35,119 +43,236 @@ class TransparentCameraActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            startCameraAndTakePhoto()
+            setupViewsAndStartCamera()
         } else {
-            onPhotoTaken?.invoke(null, "Camera permission denied")
-            finish()
+            sendResult(null, "Izin kamera (Manifest.permission.CAMERA) ditolak di HP.")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "onCreate: TransparentCameraActivity started")
+
+        // Ensure activity window does not steal user touches
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCameraAndTakePhoto()
+            Log.i(TAG, "Camera permission already granted")
+            setupViewsAndStartCamera()
         } else {
+            Log.i(TAG, "Requesting camera permission")
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
-    private fun startCameraAndTakePhoto() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+    private fun setupViewsAndStartCamera() {
+        Log.i(TAG, "setupViewsAndStartCamera: Creating TextureView")
 
+        // TextureView MUST have real dimensions for Samsung HAL to create a valid surface
+        val tv = TextureView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            // Make the TextureView invisible but still laid out (Samsung HAL needs the surface)
+            alpha = 0.01f
+        }
+        textureView = tv
+        setContentView(tv)
+
+        // Wait for surface to be ready before binding camera
+        tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                Log.i(TAG, "Surface available: ${width}x${height}")
+                bindCameraUseCases()
+            }
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+        }
+
+        // If surface is already available (unlikely but defensive)
+        if (tv.isAvailable) {
+            Log.i(TAG, "Surface already available")
+            bindCameraUseCases()
+        }
+    }
+
+    private fun bindCameraUseCases() {
+        Log.i(TAG, "bindCameraUseCases: Getting camera provider")
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
-                
-                // Get preferred camera from intent
+
                 val useFrontCamera = intent.getBooleanExtra("USE_FRONT_CAMERA", false)
+                Log.i(TAG, "Camera facing: ${if (useFrontCamera) "FRONT" else "BACK"}")
+
                 val cameraSelector = if (useFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
 
-                imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .setTargetResolution(android.util.Size(1280, 960))
-                    .build()
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, imageCapture)
+                // ══════════════════════════════════════════════════════
+                // USE CASE 1: Preview — CRITICAL for Samsung HAL
+                // Samsung Exynos camera HAL requires an active Preview
+                // surface to start the repeating capture request.
+                // Without this, ImageAnalysis never receives frames.
+                // ══════════════════════════════════════════════════════
+                val preview = Preview.Builder().build()
 
-                // Give CameraX 700ms to initialize hardware session on multi-lens sensors
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    if (!isFinishing && !isDestroyed) {
-                        takePhoto()
+                preview.setSurfaceProvider { request ->
+                    Log.i(TAG, "SurfaceProvider: Creating surface for preview (${request.resolution})")
+                    val tv = textureView
+                    if (tv != null && tv.isAvailable) {
+                        val st = tv.surfaceTexture
+                        if (st != null) {
+                            st.setDefaultBufferSize(request.resolution.width, request.resolution.height)
+                            val surface = Surface(st)
+                            request.provideSurface(surface, cameraExecutor) { result ->
+                                Log.d(TAG, "Preview surface released")
+                                surface.release()
+                            }
+                        } else {
+                            Log.w(TAG, "SurfaceTexture is null, creating standalone surface")
+                            provideFallbackSurface(request)
+                        }
+                    } else {
+                        Log.w(TAG, "TextureView not available, creating standalone surface")
+                        provideFallbackSurface(request)
                     }
-                }, 700L)
-                
+                }
+
+                // ══════════════════════════════════════════════════════
+                // USE CASE 2: ImageAnalysis — Frame capture engine
+                // Uses default YUV format (most compatible).
+                // ══════════════════════════════════════════════════════
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                var frameCount = 0
+                imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                    frameCount++
+                    Log.d(TAG, "Frame #$frameCount received (${imageProxy.width}x${imageProxy.height}, rotation=${imageProxy.imageInfo.rotationDegrees})")
+
+                    // Skip first 3 frames for AE/AWB stabilization
+                    if (frameCount >= 3 && !isCaptured.get()) {
+                        try {
+                            val bitmap = imageProxy.toBitmap()
+                            val rotation = imageProxy.imageInfo.rotationDegrees
+                            val processed = processAndRotateBitmap(bitmap, rotation, useFrontCamera)
+
+                            if (isCaptured.compareAndSet(false, true)) {
+                                Log.i(TAG, "✅ Photo captured! Size: ${processed.width}x${processed.height}")
+                                val base64 = bitmapToBase64(processed)
+                                sendResult(base64, null)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Frame processing error: ${e.message}", e)
+                            if (isCaptured.compareAndSet(false, true)) {
+                                sendResult(null, "Gagal memproses frame kamera: ${e.message}")
+                            }
+                        }
+                    }
+                    imageProxy.close()
+                }
+
+                // ══════════════════════════════════════════════════════
+                // BIND BOTH use cases — this starts the camera pipeline
+                // ══════════════════════════════════════════════════════
+                cameraProvider.unbindAll()
+                val camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+                Log.i(TAG, "✅ Camera bound successfully: Preview + ImageAnalysis")
+
+                // Safety timeout: 6s (allow extra time for Samsung HAL initialization)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (isCaptured.compareAndSet(false, true)) {
+                        Log.e(TAG, "❌ Timeout: No frames received in 6 seconds")
+                        sendResult(null, "Timeout kamera: Tidak ada frame yang diterima dari sensor.")
+                    }
+                }, 6000L)
+
             } catch (exc: Exception) {
-                onPhotoTaken?.invoke(null, "Camera initialization failed: ${exc.message}")
-                finish()
+                Log.e(TAG, "Camera init failed: ${exc.message}", exc)
+                if (isCaptured.compareAndSet(false, true)) {
+                    sendResult(null, "Inisialisasi kamera gagal: ${exc.message}")
+                }
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun takePhoto() {
-        val imageCapture = imageCapture ?: return
-
-        imageCapture.takePicture(
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    try {
-                        val buffer: ByteBuffer = image.planes[0].buffer
-                        val bytes = ByteArray(buffer.capacity())
-                        buffer.get(bytes)
-                        var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, null)
-                        
-                        // Handle rotation
-                        val matrix = Matrix()
-                        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                        bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-
-                        // Resize
-                        bitmap = resizeBitmap(bitmap, 1280)
-                        
-                        val outputStream = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
-                        val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-                        
-                        onPhotoTaken?.invoke(base64, null)
-                    } catch (e: Exception) {
-                        onPhotoTaken?.invoke(null, "Failed to process image: ${e.message}")
-                    } finally {
-                        image.close()
-                        finish()
-                    }
-                }
-
-                override fun onError(exception: ImageCaptureException) {
-                    onPhotoTaken?.invoke(null, "Capture failed: ${exception.message}")
-                    finish()
-                }
-            }
-        )
-    }
-    
-    private fun resizeBitmap(image: Bitmap, maxSize: Int): Bitmap {
-        var width = image.width
-        var height = image.height
-        val bitmapRatio = width.toFloat() / height.toFloat()
-        if (bitmapRatio > 1) {
-            width = maxSize
-            height = (width / bitmapRatio).toInt()
-        } else {
-            height = maxSize
-            width = (height * bitmapRatio).toInt()
+    /**
+     * Fallback: create a standalone SurfaceTexture for Preview
+     * when the TextureView's SurfaceTexture is unavailable.
+     */
+    private fun provideFallbackSurface(request: SurfaceRequest) {
+        val st = SurfaceTexture(0)
+        st.setDefaultBufferSize(request.resolution.width, request.resolution.height)
+        val surface = Surface(st)
+        request.provideSurface(surface, cameraExecutor) {
+            surface.release()
+            st.release()
         }
-        return Bitmap.createScaledBitmap(image, width, height, true)
+    }
+
+    private fun processAndRotateBitmap(source: Bitmap, rotationDegrees: Int, isFrontCamera: Boolean): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(rotationDegrees.toFloat())
+        if (isFrontCamera) {
+            // Mirror front camera horizontally
+            matrix.postScale(-1f, 1f)
+        }
+        var rotated = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+
+        // Resize to maximum 1280px for fast transmission over WebSocket
+        val maxDim = 1280
+        if (rotated.width > maxDim || rotated.height > maxDim) {
+            val ratio = rotated.width.toFloat() / rotated.height.toFloat()
+            val newW: Int
+            val newH: Int
+            if (ratio > 1) {
+                newW = maxDim
+                newH = (maxDim / ratio).toInt()
+            } else {
+                newH = maxDim
+                newW = (maxDim * ratio).toInt()
+            }
+            rotated = Bitmap.createScaledBitmap(rotated, newW, newH, true)
+        }
+        return rotated
+    }
+
+    private fun bitmapToBase64(bitmap: Bitmap): String {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+    }
+
+    private fun sendResult(base64: String?, error: String?) {
+        Log.i(TAG, "sendResult: error=${error != null}, base64Size=${base64?.length ?: 0}")
+        runOnUiThread {
+            onPhotoTaken?.invoke(base64, error)
+            finish()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        cameraExecutor.shutdown()
+        Log.i(TAG, "onDestroy called")
+        if (isCaptured.compareAndSet(false, true)) {
+            onPhotoTaken?.invoke(null, "Aktivitas kamera ditutup.")
+        }
+        try {
+            cameraExecutor.shutdown()
+        } catch (_: Exception) {}
         onPhotoTaken = null
     }
 }

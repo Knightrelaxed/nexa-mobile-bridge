@@ -31,7 +31,12 @@ class NexaAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Not used, we query rootInActiveWindow on demand
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val pkg = event.packageName?.toString()
+            if (!pkg.isNullOrEmpty()) {
+                com.nexa.mobilebridge.core.usage.AppUsageTracker.onForegroundAppChanged(this, pkg)
+            }
+        }
     }
 
     override fun onInterrupt() {

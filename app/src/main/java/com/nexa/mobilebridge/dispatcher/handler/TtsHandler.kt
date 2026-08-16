@@ -81,6 +81,13 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
                 override fun onStart(utteranceId: String?) {}
                 
                 override fun onDone(utteranceId: String?) {
+                    // Notify any active FakeCallActivity that the spoken reply is complete
+                    try {
+                        val completeIntent = android.content.Intent("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
+                        completeIntent.setPackage(context.packageName)
+                        context.sendBroadcast(completeIntent)
+                    } catch (_: Exception) {}
+
                     if (continuation.isActive) {
                         continuation.resume(
                             CommandResult(

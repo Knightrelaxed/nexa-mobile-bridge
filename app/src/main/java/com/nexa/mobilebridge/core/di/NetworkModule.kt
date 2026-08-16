@@ -17,9 +17,10 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
-            .pingInterval(30, TimeUnit.SECONDS) // WS heartbeat
+            .pingInterval(20, TimeUnit.SECONDS) // Active WS keepalive to prevent NAT / Proxy timeout
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS) // No read timeout for WS
+            .retryOnConnectionFailure(true)
             .build()
     }
 

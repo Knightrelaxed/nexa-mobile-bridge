@@ -10,6 +10,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.speech.tts.TextToSpeech
@@ -33,6 +35,7 @@ import com.nexa.mobilebridge.protocol.TelemetryReport
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -93,6 +96,8 @@ class NexaBridgeService : Service() {
     private var contextEngine: ContextEngine? = null
     private var geofenceManager: GeofenceManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkDebounceJob: Job? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -101,6 +106,7 @@ class NexaBridgeService : Service() {
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         createNotificationChannels()
         acquireWakeLock()
+        acquireWifiLock()
         initAlertTts()
         // Expose WebSocket client to companion object for cross-component access
         activeWebSocketClient = webSocketClient
@@ -262,10 +268,11 @@ class NexaBridgeService : Service() {
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.i("NexaBridge", "🌐 Jaringan kembali tersedia! Memicu reconnect ulang dari Fase 1...")
-                serviceScope.launch {
-                    // Hanya reset & reconnect jika sedang tidak dalam status terhubung
+                networkDebounceJob?.cancel()
+                networkDebounceJob = serviceScope.launch {
+                    delay(1500L) // 1.5s debounce to let network settle
                     if (!webSocketClient.isConnected()) {
+                        Log.i("NexaBridge", "🌐 Jaringan stabil terdeteksi! Memicu reconnect ulang dari Fase 1...")
                         webSocketClient.resetOrchestrator()
                         webSocketClient.connect(serverUrl, authToken)
                     }
@@ -459,10 +466,13 @@ class NexaBridgeService : Service() {
                 val payload = json.encodeToString(TelemetryReport.serializer(), telemetry)
                 webSocketClient.send(payload)
                 Log.d("NexaBridge", "Telemetri terkirim: ${level}%, charging=$charging")
+
+                // Periksa sesi aplikasi aktif secara periodik
+                com.nexa.mobilebridge.core.usage.AppUsageTracker.checkActiveSessionTick(this@NexaBridgeService)
             } catch (e: Exception) {
                 Log.e("NexaBridge", "Error telemetri: ${e.message}")
             }
-            delay(60_000L)
+            delay(30_000L)
         }
     }
 
@@ -533,11 +543,28 @@ class NexaBridgeService : Service() {
         wakeLock?.acquire()
     }
 
+    private fun acquireWifiLock() {
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wifiManager.createWifiLock(mode, "NexaBridge::WifiLock").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+        Log.i("NexaBridge", "📶 WifiLock acquired (mode: $mode)")
+    }
+
     override fun onDestroy() {
         // Clear companion references before tearing down
         activeWebSocketClient = null
         activeJson = null
         super.onDestroy()
+        networkDebounceJob?.cancel()
+        networkDebounceJob = null
         sensorObserverManager?.stopObserving()
         sensorObserverManager = null
         geofenceManager?.stopGeofencing()
@@ -556,6 +583,9 @@ class NexaBridgeService : Service() {
         alertTts?.shutdown()
         alertTts = null
         wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        wifiLock?.let { if (it.isHeld) it.release() }
+        wifiLock = null
         Log.i("NexaBridge", "Service Dihentikan")
     }
 

@@ -72,6 +72,14 @@ class NexaWebSocketClient @Inject constructor(
         if (orchestrator.isStopped) return
         if (currentUrl.isBlank()) return
 
+        // 1. Explicitly cancel previous socket instance to prevent ghost socket race conditions
+        try {
+            webSocket?.cancel()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error cancelling previous webSocket: ${e.message}")
+        }
+        webSocket = null
+
         _connectionState.value = ConnectionState.Connecting
 
         val request = Request.Builder()
@@ -79,15 +87,17 @@ class NexaWebSocketClient @Inject constructor(
             .addHeader("Authorization", "Bearer $currentToken")
             .build()
 
-        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+        val listener = object : WebSocketListener() {
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
                 Log.i(TAG, "✅ WebSocket Terbuka")
                 orchestrator.onConnectionSuccess()
                 _connectionState.value = ConnectionState.Connected
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
                 try {
                     val command = json.decodeFromString<NexaCommand>(text)
 
@@ -112,17 +122,24 @@ class NexaWebSocketClient @Inject constructor(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "WebSocket Ditutup: $reason")
+                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
+                Log.i(TAG, "WebSocket Ditutup ($code): $reason")
                 _connectionState.value = ConnectionState.Disconnected(reason)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (webSocket !== this@NexaWebSocketClient.webSocket) {
+                    Log.d(TAG, "Mengabaikan onFailure dari socket usang: ${t.message}")
+                    return
+                }
                 Log.e(TAG, "❌ WebSocket Gagal: ${t.javaClass.simpleName} — ${t.message}")
                 _connectionState.value = ConnectionState.Disconnected(t.message)
                 // Delegasikan ke orchestrator untuk menentukan kapan dan apakah harus reconnect
                 orchestrator.onConnectionFailed(t)
             }
-        })
+        }
+
+        webSocket = okHttpClient.newWebSocket(request, listener)
     }
 
     fun send(payload: String): Boolean {
@@ -137,7 +154,9 @@ class NexaWebSocketClient @Inject constructor(
 
     fun disconnect() {
         orchestrator.stop()
-        webSocket?.close(1000, "User disconnected")
+        try {
+            webSocket?.cancel()
+        } catch (_: Exception) {}
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected("Disconnected by user")
     }
