@@ -129,7 +129,7 @@ object AppUsageTracker {
             val pm = context.packageManager
             val appInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
             pm.getApplicationLabel(appInfo).toString()
-        } catch (_) {
+        } catch (e: Exception) {
             packageName.substringAfterLast('.')
         }
     }
