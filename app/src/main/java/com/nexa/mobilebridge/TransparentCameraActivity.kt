@@ -53,10 +53,19 @@ class TransparentCameraActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "onCreate: TransparentCameraActivity started")
 
-        // Ensure activity window does not steal user touches
+        // ══════════════════════════════════════════════════════════
+        // CRITICAL: Wake screen & show over lock screen.
+        // Samsung Exynos camera HAL will NOT deliver frames if the
+        // screen is off. These flags mirror FakeCallActivity behavior.
+        // ══════════════════════════════════════════════════════════
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+
         window.addFlags(
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         )
 
         cameraExecutor = Executors.newSingleThreadExecutor()
