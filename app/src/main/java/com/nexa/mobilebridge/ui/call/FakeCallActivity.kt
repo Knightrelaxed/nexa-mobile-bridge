@@ -76,6 +76,7 @@ class FakeCallActivity : ComponentActivity() {
     private lateinit var ttsHandler: TtsHandler
     private lateinit var audioPlayerHandler: AudioPlayerHandler
     private lateinit var voiceRecorderHandler: VoiceRecorderHandler
+    private lateinit var voiceStreamHandler: com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler
 
     private var commandId: String = ""
     private var callerName: String = "N.E.X.A Assistant"
@@ -88,12 +89,25 @@ class FakeCallActivity : ComponentActivity() {
     // Track how many times user has rejected (sent to server for importance evaluation)
     private var rejectionCount = 0
 
-    // BroadcastReceiver for CALL_REPLY_COMPLETE (server audio reply finished playing)
+    // BroadcastReceiver for server audio events (Live Audio Play, Interrupted, Reply Complete)
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE") {
                 Log.i(TAG, "📩 CALL_REPLY_COMPLETE received — closing call UI")
+                voiceStreamHandler.stopStreaming()
                 callState.value = CallState.FINISHED
+            } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
+                val rawJson = intent.getStringExtra("raw_json") ?: return
+                if (rawJson.contains("CALL_AUDIO_PLAY")) {
+                    val pcmRegex = Regex("\"pcm_chunk\"\\s*:\\s*\"([^\"]+)\"")
+                    val match = pcmRegex.find(rawJson)
+                    val pcmChunk = match?.groups?.get(1)?.value
+                    if (pcmChunk != null) {
+                        voiceStreamHandler.enqueueAudioChunk(pcmChunk)
+                    }
+                } else if (rawJson.contains("CALL_AUDIO_INTERRUPTED")) {
+                    voiceStreamHandler.flushOutputBuffer()
+                }
             }
         }
     }
@@ -103,12 +117,11 @@ class FakeCallActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            Log.i(TAG, "RECORD_AUDIO permission granted — starting recording")
-            startVoiceRecording()
+            Log.i(TAG, "RECORD_AUDIO permission granted — starting live stream")
+            startContinuousLiveVoice()
         } else {
-            Log.w(TAG, "RECORD_AUDIO permission denied — skipping recording")
-            // Skip recording, send empty event so server knows
-            sendCallEvent(NexaActions.CALL_AUDIO_REPLY, audioBase64 = null)
+            Log.w(TAG, "RECORD_AUDIO permission denied — closing call")
+            sendCallEvent(NexaActions.CALL_REJECTED)
             callState.value = CallState.FINISHED
         }
     }
@@ -120,14 +133,18 @@ class FakeCallActivity : ComponentActivity() {
         ttsHandler = TtsHandler(applicationContext)
         audioPlayerHandler = AudioPlayerHandler(applicationContext)
         voiceRecorderHandler = VoiceRecorderHandler(applicationContext)
+        voiceStreamHandler = com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler(applicationContext)
 
         commandId = intent.getStringExtra("command_id") ?: "fake_call_${System.currentTimeMillis()}"
         callerName = intent.getStringExtra("caller_name") ?: "N.E.X.A Assistant"
         callMessage = intent.getStringExtra("message") ?: "Tuan Faqih, ada pesan penting dari N.E.X.A!"
         val playRingtone = intent.getBooleanExtra("play_ringtone", true)
 
-        // Register receiver for server reply completion
-        val filter = IntentFilter("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
+        // Register receiver for server live audio & reply events
+        val filter = IntentFilter().apply {
+            addAction("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
+            addAction("com.nexa.mobilebridge.CALL_LIVE_EVENT")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(callReplyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -158,6 +175,7 @@ class FakeCallActivity : ComponentActivity() {
             LaunchedEffect(state) {
                 if (state == CallState.FINISHED) {
                     delay(400L) // Brief pause for any final animation
+                    voiceStreamHandler.stopStreaming()
                     finish()
                 }
             }
@@ -173,33 +191,34 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
-    // ─── Accept Handler ───────────────────────────────────────────────────────
+    // ─── Accept Handler (Live Voice Streaming Mode) ──────────────────────────
     private fun handleAccept() {
         if (callState.value != CallState.RINGING) return
         callState.value = CallState.ACCEPTED_SPEAKING
         audioPlayerHandler.stopAll()
 
-        // Notify server: call accepted
+        // Notify server: call accepted (launches Google Gemini Live session)
         sendCallEvent(NexaActions.CALL_ACCEPTED)
 
-        lifecycleScope.launch {
-            // N.E.X.A speaks the call message
-            ttsHandler.execute(
-                NexaCommand(
-                    type = "EXECUTE_COMMAND",
-                    command_id = "call_tts_${System.currentTimeMillis()}",
-                    action = "SPEAK_TEXT",
-                    params = buildJsonObject { put("text", callMessage) }
-                )
-            )
+        val hasPermission = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
 
-            // TTS done — wait for audio session to fully release before opening mic
-            // Without this, TTS echo/residue bleeds into the recording (transcribed as "So" etc.)
-            delay(700L)
+        if (hasPermission) {
+            startContinuousLiveVoice()
+        } else {
+            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
-            // Transition to recording phase
-            callState.value = CallState.RECORDING
-            beginRecordingPhase()
+    private fun startContinuousLiveVoice() {
+        voiceStreamHandler.startStreaming(lifecycleScope) { pcmChunk ->
+            val payload = buildJsonObject {
+                put("type", "CALL_AUDIO_STREAM")
+                put("command_id", commandId)
+                put("pcm_chunk", pcmChunk)
+            }.toString()
+            NexaBridgeService.sendEvent(payload)
         }
     }
 
@@ -208,14 +227,13 @@ class FakeCallActivity : ComponentActivity() {
         if (callState.value != CallState.RINGING) return
         callState.value = CallState.REJECTED_SPEAKING
         audioPlayerHandler.stopAll()
+        voiceStreamHandler.stopStreaming()
         rejectionCount++
 
-        // Notify server: call rejected with count (server decides whether to call again)
         sendCallEvent(NexaActions.CALL_REJECTED, rejectionCount = rejectionCount)
 
         lifecycleScope.launch {
-            // N.E.X.A speaks a brief rejection message
-            val rejectionMsg = "Baik, saya mengerti. Namun tolong ingat, ini penting untuk Anda."
+            val rejectionMsg = "Baik, saya mengerti. Panggilan ditutup."
             ttsHandler.execute(
                 NexaCommand(
                     type = "EXECUTE_COMMAND",
@@ -224,8 +242,6 @@ class FakeCallActivity : ComponentActivity() {
                     params = buildJsonObject { put("text", rejectionMsg) }
                 )
             )
-
-            // After TTS done, close
             callState.value = CallState.FINISHED
         }
     }
@@ -312,6 +328,7 @@ class FakeCallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try { voiceStreamHandler.stopStreaming() } catch (_) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()
     }

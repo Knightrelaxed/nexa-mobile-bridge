@@ -1,9 +1,12 @@
 package com.nexa.mobilebridge.core.network
 
+import android.content.Context
+import android.content.Intent
 import android.util.Log
 import com.nexa.mobilebridge.core.security.HmacVerifier
 import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.protocol.NexaCommand
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -24,6 +27,7 @@ import javax.inject.Singleton
 
 @Singleton
 class NexaWebSocketClient @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
     private val json: Json,
 ) {
@@ -57,13 +61,18 @@ class NexaWebSocketClient @Inject constructor(
         hmacSecret = secret
     }
 
+    fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
+
+    fun resetOrchestrator() {
+        orchestrator.reset()
+    }
+
     fun connect(url: String, token: String) {
         if (_connectionState.value is ConnectionState.Connected) return
 
         currentUrl = url
         currentToken = token
-        // Reset orchestrator agar sesi koneksi baru bisa berjalan,
-        // terutama penting setelah service di-restart oleh user.
+        // Reset orchestrator agar sesi koneksi baru bisa berjalan
         orchestrator.reset()
         initiateConnection()
     }
@@ -98,6 +107,17 @@ class NexaWebSocketClient @Inject constructor(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
+
+                // 1. Fast path for Live Voice Stream Events (Audio Play & Interrupted)
+                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY")) {
+                    val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
+                        putExtra("raw_json", text)
+                        setPackage(context.packageName)
+                    }
+                    context.sendBroadcast(intent)
+                    return
+                }
+
                 try {
                     val command = json.decodeFromString<NexaCommand>(text)
 
