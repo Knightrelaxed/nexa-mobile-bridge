@@ -61,10 +61,14 @@ class NexaWebSocketClient @Inject constructor(
         hmacSecret = secret
     }
 
-    fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
+    fun forceReconnect(url: String = currentUrl, token: String = currentToken) {
+        if (_connectionState.value is ConnectionState.Connected) return
 
-    fun resetOrchestrator() {
+        currentUrl = url
+        currentToken = token
+        // Reset orchestrator membatalkan jeda tidur fase dan mengembalikan ke Fase 1 Percobaan 0
         orchestrator.reset()
+        initiateConnection()
     }
 
     fun connect(url: String, token: String) {

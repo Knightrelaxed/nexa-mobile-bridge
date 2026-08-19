@@ -89,6 +89,13 @@ class FakeCallActivity : ComponentActivity() {
     private var callerName: String = "N.E.X.A Assistant"
     private var callMessage: String = "Tuan Faqih, ada interupsi penting dari N.E.X.A."
 
+    companion object {
+        private const val TAG = "FakeCallActivity"
+
+        @Volatile
+        var isCallActive: Boolean = false
+    }
+
     // Mutable state hoisted to Activity level so coroutines can update it
     private val callState = mutableStateOf(CallState.RINGING)
     private val recordingElapsedMs = mutableLongStateOf(0L)
@@ -135,6 +142,7 @@ class FakeCallActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        isCallActive = true
         setupShowWhenLocked()
 
         ttsHandler = TtsHandler(applicationContext)
@@ -352,8 +360,14 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        Log.w(TAG, "⚠️ onNewIntent received while call in state: ${callState.value} — ignoring duplicate launch.")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        isCallActive = false
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()

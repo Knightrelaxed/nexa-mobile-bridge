@@ -18,6 +18,12 @@ class FakeCallHandler @Inject constructor(
     private val TAG = "FakeCallHandler"
 
     fun execute(command: NexaCommand): CommandResult {
+        // CONCURRENCY GUARD: If a call is already active on screen, ignore incoming trigger
+        if (com.nexa.mobilebridge.ui.call.FakeCallActivity.isCallActive) {
+            Log.w(TAG, "⚠️ Simulated incoming call ignored: an active call is already in progress.")
+            return CommandResult.success(command.command_id, "Call already active, ignored duplicate trigger.")
+        }
+
         val callerName = (command.params?.get("caller_name") as? JsonPrimitive)?.content ?: "N.E.X.A Assistant"
         val message = (command.params?.get("message") as? JsonPrimitive)?.content ?: "Tuan Faqih, ada interupsi penting dari N.E.X.A!"
         val playRingtoneStr = (command.params?.get("play_ringtone") as? JsonPrimitive)?.content

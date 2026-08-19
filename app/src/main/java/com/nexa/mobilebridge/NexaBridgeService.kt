@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -255,34 +256,51 @@ class NexaBridgeService : Service() {
 
     /**
      * Mendaftarkan NetworkCallback ke OS Android.
-     * Saat jaringan internet KEMBALI TERSEDIA (setelah sempat hilang),
-     * callback ini akan langsung mereset ReconnectOrchestrator dari fase 1
-     * dan memicu percobaan koneksi ulang — tanpa menunggu delay antar-fase.
+     * Menggunakan [registerDefaultNetworkCallback] agar memantau rute internet aktif secara langsung.
+     * Dilengkapi multi-trigger ([onAvailable], [onCapabilitiesChanged], [onLinkPropertiesChanged])
+     * sehingga saat ada koneksi baru (Wi-Fi/4G) yang masuk meski sinyal lemah,
+     * sistem langsung membatalkan jeda tidur fase dan memicu reconnect instan.
      */
     private fun registerNetworkWatcher(serverUrl: String, authToken: String) {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .build()
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                triggerInstantReconnect("onAvailable")
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    triggerInstantReconnect("onCapabilitiesChanged (Internet Ready)")
+                }
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                triggerInstantReconnect("onLinkPropertiesChanged (IP Route Assigned)")
+            }
+
+            private fun triggerInstantReconnect(source: String) {
                 networkDebounceJob?.cancel()
                 networkDebounceJob = serviceScope.launch {
-                    delay(1500L) // 1.5s debounce to let network settle
+                    delay(800L) // 800ms debounce cepat untuk stabilisasi rute
                     if (!webSocketClient.isConnected()) {
-                        Log.i("NexaBridge", "🌐 Jaringan stabil terdeteksi! Memicu reconnect ulang dari Fase 1...")
-                        webSocketClient.resetOrchestrator()
-                        webSocketClient.connect(serverUrl, authToken)
+                        Log.i("NexaBridge", "🌐 Sinyal internet masuk [$source]! Memicu reconnect instan dari Fase 1...")
+                        webSocketClient.forceReconnect(serverUrl, authToken)
                     }
                 }
             }
         }
 
         try {
-            cm.registerNetworkCallback(request, networkCallback!!)
-            Log.i("NexaBridge", "✅ NetworkWatcher terdaftar.")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(networkCallback!!)
+            } else {
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(request, networkCallback!!)
+            }
+            Log.i("NexaBridge", "✅ Modern NetworkWatcher (Default + Reactive Multi-Trigger) terdaftar.")
         } catch (e: Exception) {
             Log.e("NexaBridge", "❌ Gagal mendaftarkan NetworkWatcher: ${e.message}")
         }
