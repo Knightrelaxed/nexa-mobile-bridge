@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +24,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material3.*
@@ -495,97 +501,72 @@ fun FakeCallScreen(
                             )
                         }
                     } else if (callState != CallState.FINISHED) {
-                        // Ongoing call active: Show Loudspeaker Toggle (Left) & End Call (Right)
+                        // Ongoing call active: Show Loudspeaker Toggle (Left) & End Call (Right) - Icon Only
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 32.dp),
+                                .padding(horizontal = 48.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val haptic = LocalHapticFeedback.current
 
-                            // ── Left: Loudspeaker / Earpiece Toggle ──
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (isLoudspeaker) {
-                                                Brush.radialGradient(
-                                                    colors = listOf(Color(0xFF00FFCC), Color(0xFF00897B))
-                                                )
-                                            } else {
-                                                Brush.radialGradient(
-                                                    colors = listOf(Color(0xFF1E293B), Color(0xFF0F172A))
-                                                )
-                                            }
-                                        )
-                                        .border(
-                                            2.dp,
-                                            if (isLoudspeaker) Color(0xFF64FFDA) else Color(0xFF475569),
-                                            CircleShape
-                                        )
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onToggleLoudspeaker(!isLoudspeaker)
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Phone,
-                                        contentDescription = "Toggle Speaker",
-                                        tint = if (isLoudspeaker) Color.Black else Color(0xFF64FFDA),
-                                        modifier = Modifier.size(32.dp)
+                            // ── Left: Loudspeaker Toggle (Icon Only) ──
+                            Box(
+                                modifier = Modifier
+                                    .size(68.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isLoudspeaker) {
+                                            Brush.radialGradient(
+                                                colors = listOf(Color(0xFF00E5FF), Color(0xFF00838F))
+                                            )
+                                        } else {
+                                            Brush.radialGradient(
+                                                colors = listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+                                            )
+                                        }
                                     )
-                                }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = if (isLoudspeaker) "Speaker: Utama" else "Speaker: Atas",
-                                    color = if (isLoudspeaker) Color(0xFF64FFDA) else Color(0xFF94A3B8),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    .border(
+                                        2.dp,
+                                        if (isLoudspeaker) Color(0xFF84FFFF) else Color(0xFF475569),
+                                        CircleShape
+                                    )
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onToggleLoudspeaker(!isLoudspeaker)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                SpeakerIcon(
+                                    isLoudspeaker = isLoudspeaker,
+                                    tint = if (isLoudspeaker) Color(0xFF002B36) else Color(0xFF94A3B8),
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
 
-                            // ── Right: End Call ("Tutup Panggilan") ──
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.radialGradient(
-                                                colors = listOf(Color(0xFFFF3366), Color(0xFFFF003C), Color(0xFF990024))
-                                            )
+                            // ── Right: End Call (Icon Only) ──
+                            Box(
+                                modifier = Modifier
+                                    .size(68.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            colors = listOf(Color(0xFFFF1744), Color(0xFFB71C1C))
                                         )
-                                        .border(2.dp, Color(0xFFFF8099), CircleShape)
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onReject()
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Tutup Panggilan",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(32.dp)
                                     )
-                                }
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = "Tutup Panggilan",
-                                    color = Color(0xFFFF8099),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    .border(2.dp, Color(0xFFFF8A80), CircleShape)
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onReject()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Tutup Panggilan",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(34.dp)
                                 )
                             }
                         }
@@ -791,5 +772,61 @@ fun SwipeButton(
             tint = tint,
             modifier = Modifier.size(36.dp)
         )
+    }
+}
+
+// ─── Professional Speaker & Speaker Slashed Vector Icon ─────────────────────────
+@Composable
+fun SpeakerIcon(
+    isLoudspeaker: Boolean,
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        // Draw clean minimalist speaker cone & body
+        val bodyPath = Path().apply {
+            moveTo(w * 0.16f, h * 0.36f)
+            lineTo(w * 0.38f, h * 0.36f)
+            lineTo(w * 0.64f, h * 0.16f)
+            lineTo(w * 0.64f, h * 0.84f)
+            lineTo(w * 0.38f, h * 0.64f)
+            lineTo(w * 0.16f, h * 0.64f)
+            close()
+        }
+        drawPath(bodyPath, color = tint)
+
+        if (isLoudspeaker) {
+            // Draw Sound Wave Arcs (Loudspeaker Active)
+            drawArc(
+                color = tint,
+                startAngle = -40f,
+                sweepAngle = 80f,
+                useCenter = false,
+                topLeft = Offset(w * 0.46f, h * 0.30f),
+                size = Size(w * 0.38f, h * 0.40f),
+                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+            )
+            drawArc(
+                color = tint,
+                startAngle = -40f,
+                sweepAngle = 80f,
+                useCenter = false,
+                topLeft = Offset(w * 0.36f, h * 0.18f),
+                size = Size(w * 0.58f, h * 0.64f),
+                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+            )
+        } else {
+            // Draw Elegant Diagonal Slash Line (Earpiece / Muted Speaker)
+            drawLine(
+                color = Color(0xFFFF5252),
+                start = Offset(w * 0.14f, h * 0.14f),
+                end = Offset(w * 0.86f, h * 0.86f),
+                strokeWidth = 2.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
     }
 }
