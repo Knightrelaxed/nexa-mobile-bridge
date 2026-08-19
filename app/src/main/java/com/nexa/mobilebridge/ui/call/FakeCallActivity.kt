@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -222,26 +223,34 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
-    // ─── Reject Handler ───────────────────────────────────────────────────────
+    // ─── Reject & Hangup Handler ──────────────────────────────────────────────
     private fun handleReject() {
-        if (callState.value != CallState.RINGING) return
-        callState.value = CallState.REJECTED_SPEAKING
-        audioPlayerHandler.stopAll()
-        voiceStreamHandler.stopStreaming()
-        rejectionCount++
+        if (callState.value == CallState.RINGING) {
+            callState.value = CallState.REJECTED_SPEAKING
+            audioPlayerHandler.stopAll()
+            voiceStreamHandler.stopStreaming()
+            rejectionCount++
 
-        sendCallEvent(NexaActions.CALL_REJECTED, rejectionCount = rejectionCount)
+            sendCallEvent(NexaActions.CALL_REJECTED, rejectionCount = rejectionCount)
 
-        lifecycleScope.launch {
-            val rejectionMsg = "Baik, saya mengerti. Panggilan ditutup."
-            ttsHandler.execute(
-                NexaCommand(
-                    type = "EXECUTE_COMMAND",
-                    command_id = "reject_tts_${System.currentTimeMillis()}",
-                    action = "SPEAK_TEXT",
-                    params = buildJsonObject { put("text", rejectionMsg) }
+            lifecycleScope.launch {
+                val rejectionMsg = "Baik, saya mengerti. Panggilan ditolak."
+                ttsHandler.execute(
+                    NexaCommand(
+                        type = "EXECUTE_COMMAND",
+                        command_id = "reject_tts_${System.currentTimeMillis()}",
+                        action = "SPEAK_TEXT",
+                        params = buildJsonObject { put("text", rejectionMsg) }
+                    )
                 )
-            )
+                callState.value = CallState.FINISHED
+            }
+        } else {
+            // Ending active ongoing live voice call
+            Log.i(TAG, "🛑 User hung up active live call — closing session")
+            audioPlayerHandler.stopAll()
+            voiceStreamHandler.stopStreaming()
+            sendCallEvent("CALL_FINISHED")
             callState.value = CallState.FINISHED
         }
     }
@@ -328,7 +337,7 @@ class FakeCallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { voiceStreamHandler.stopStreaming() } catch (_) {}
+        try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()
     }
@@ -474,6 +483,44 @@ fun FakeCallScreen(
                                 tint = Color(0xFF64FFDA),
                                 containerColor = Color(0xFF64FFDA).copy(alpha = 0.15f),
                                 onThresholdReached = onAnswer
+                            )
+                        }
+                    } else if (callState != CallState.FINISHED) {
+                        // Ongoing call active: Show clear End Call button
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            val haptic = LocalHapticFeedback.current
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            colors = listOf(Color(0xFFFF3366), Color(0xFFFF003C), Color(0xFF990024))
+                                        )
+                                    )
+                                    .border(2.dp, Color(0xFFFF8099), CircleShape)
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onReject()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Tutup Panggilan",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Tutup Panggilan",
+                                color = Color(0xFFFF8099),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     } else {
