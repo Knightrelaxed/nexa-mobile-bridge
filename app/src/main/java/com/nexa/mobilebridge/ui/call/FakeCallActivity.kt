@@ -181,13 +181,20 @@ class FakeCallActivity : ComponentActivity() {
                 }
             }
 
+            val isLoudspeaker = remember { mutableStateOf(false) }
+
             FakeCallScreen(
                 callerName = callerName,
                 callMessage = callMessage,
                 callState = state,
+                isLoudspeaker = isLoudspeaker.value,
                 recordingElapsedMs = elapsedMs,
                 onAnswer = { handleAccept() },
-                onReject = { handleReject() }
+                onReject = { handleReject() },
+                onToggleLoudspeaker = { enabled ->
+                    isLoudspeaker.value = enabled
+                    voiceStreamHandler.setLoudspeaker(enabled)
+                }
             )
         }
     }
@@ -349,9 +356,11 @@ fun FakeCallScreen(
     callerName: String,
     callMessage: String,
     callState: CallState,
+    isLoudspeaker: Boolean = false,
     recordingElapsedMs: Long,
     onAnswer: () -> Unit,
-    onReject: () -> Unit
+    onReject: () -> Unit,
+    onToggleLoudspeaker: (Boolean) -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
@@ -486,42 +495,99 @@ fun FakeCallScreen(
                             )
                         }
                     } else if (callState != CallState.FINISHED) {
-                        // Ongoing call active: Show clear End Call button
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                        // Ongoing call active: Show Loudspeaker Toggle (Left) & End Call (Right)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 32.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             val haptic = LocalHapticFeedback.current
-                            Box(
-                                modifier = Modifier
-                                    .size(72.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        Brush.radialGradient(
-                                            colors = listOf(Color(0xFFFF3366), Color(0xFFFF003C), Color(0xFF990024))
-                                        )
-                                    )
-                                    .border(2.dp, Color(0xFFFF8099), CircleShape)
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onReject()
-                                    },
-                                contentAlignment = Alignment.Center
+
+                            // ── Left: Loudspeaker / Earpiece Toggle ──
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Tutup Panggilan",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(36.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(68.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isLoudspeaker) {
+                                                Brush.radialGradient(
+                                                    colors = listOf(Color(0xFF00FFCC), Color(0xFF00897B))
+                                                )
+                                            } else {
+                                                Brush.radialGradient(
+                                                    colors = listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+                                                )
+                                            }
+                                        )
+                                        .border(
+                                            2.dp,
+                                            if (isLoudspeaker) Color(0xFF64FFDA) else Color(0xFF475569),
+                                            CircleShape
+                                        )
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onToggleLoudspeaker(!isLoudspeaker)
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Phone,
+                                        contentDescription = "Toggle Speaker",
+                                        tint = if (isLoudspeaker) Color.Black else Color(0xFF64FFDA),
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = if (isLoudspeaker) "Speaker: Utama" else "Speaker: Atas",
+                                    color = if (isLoudspeaker) Color(0xFF64FFDA) else Color(0xFF94A3B8),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Text(
-                                text = "Tutup Panggilan",
-                                color = Color(0xFFFF8099),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
+
+                            // ── Right: End Call ("Tutup Panggilan") ──
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(68.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.radialGradient(
+                                                colors = listOf(Color(0xFFFF3366), Color(0xFFFF003C), Color(0xFF990024))
+                                            )
+                                        )
+                                        .border(2.dp, Color(0xFFFF8099), CircleShape)
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onReject()
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Tutup Panggilan",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = "Tutup Panggilan",
+                                    color = Color(0xFFFF8099),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     } else {
                         Spacer(modifier = Modifier.height(80.dp))
