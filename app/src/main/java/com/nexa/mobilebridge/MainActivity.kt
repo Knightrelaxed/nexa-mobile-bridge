@@ -22,6 +22,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setupBankingShortcuts()
+
+        // Auto-start NexaBridgeService foreground service upon activity launch
+        try {
+            val serviceIntent = Intent(this, NexaBridgeService::class.java)
+            startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         
         setContent {
             NexaMobileBridgeTheme {

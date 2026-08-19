@@ -6,7 +6,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -143,6 +145,9 @@ class FakeCallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         isCallActive = true
+        try {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } catch (_: Exception) {}
         setupShowWhenLocked()
 
         ttsHandler = TtsHandler(applicationContext)
@@ -360,9 +365,14 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         Log.w(TAG, "⚠️ onNewIntent received while call in state: ${callState.value} — ignoring duplicate launch.")
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        Log.i(TAG, "📱 Orientation/Config change handled smoothly without activity recreation")
     }
 
     override fun onDestroy() {

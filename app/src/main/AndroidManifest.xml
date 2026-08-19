@@ -78,13 +78,15 @@
         <activity
             android:name=".ui.call.FakeCallActivity"
             android:theme="@style/Theme.NexaMobileBridge"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
             android:excludeFromRecents="true"
             android:taskAffinity="com.nexa.mobilebridge.call"
             android:launchMode="singleInstance"
-            android:noHistory="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:exported="false" />
+            android:exported="false"
+            tools:ignore="LockedOrientationActivity" />
 
         <!-- M-Banking Shield Launcher (Invisible Bypass) -->
         <activity
