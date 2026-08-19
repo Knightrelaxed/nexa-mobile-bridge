@@ -9,6 +9,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -19,14 +21,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.math.sqrt
 
 /**
  * VoiceStreamHandler — Ultra-Low Latency Bi-Directional PCM Audio Streamer
  * Used for Google Gemini Multimodal Live API Real-Time Voice Calls.
  *
  * Features:
+ * - Hardware Acoustic Echo Cancellation (AEC) & Noise Suppression (NS)
  * - Anti-Jitter Pre-buffering: Eliminates choppy audio gaps / stuttering
- * - Dynamic Earpiece <-> Loudspeaker Switching
+ * - Smart Echo-Gate: Prevents loudspeaker acoustic feedback from triggering false Barge-In
+ * - Dynamic Earpiece <-> Loudspeaker Hardware Routing
  * - Digital 16-bit PCM Soft-Clipping Gain Booster
  * - Instant Barge-In Interruption (<5ms buffer flush)
  */
@@ -46,12 +51,19 @@ class VoiceStreamHandler(private val context: Context) {
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+
     private var recordingJob: Job? = null
     private var playbackJob: Job? = null
     private var isStreaming = false
 
     // Output playback queue with blocking take for zero-gap playback
     private val playbackQueue = LinkedBlockingQueue<ByteArray>()
+
+    // Track active playback timestamp to prevent false barge-in
+    @Volatile
+    private var lastPlaybackChunkTime: Long = 0L
 
     // Speakerphone state (Default: false = Earpiece speaker atas)
     var isLoudspeakerActive: Boolean = false
@@ -95,10 +107,35 @@ class VoiceStreamHandler(private val context: Context) {
                 return
             }
 
+            // Enable Hardware Acoustic Echo Cancellation & Noise Suppression
+            val sessionId = audioRecord?.audioSessionId ?: 0
+            if (sessionId != 0) {
+                if (AcousticEchoCanceler.isAvailable()) {
+                    try {
+                        echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
+                            enabled = true
+                            Log.i(TAG, "🛡️ Hardware AcousticEchoCanceler ACTIVE")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not enable AEC: ${e.message}")
+                    }
+                }
+                if (NoiseSuppressor.isAvailable()) {
+                    try {
+                        noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
+                            enabled = true
+                            Log.i(TAG, "🛡️ Hardware NoiseSuppressor ACTIVE")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not enable NoiseSuppressor: ${e.message}")
+                    }
+                }
+            }
+
             audioRecord?.startRecording()
             Log.i(TAG, "🎙️ AudioRecord started streaming (16kHz PCM Mono)")
 
-            // 1. Recording Loop (Microphone -> Server)
+            // 1. Recording Loop (Microphone -> Server with Smart Echo Gating)
             recordingJob = scope.launch(Dispatchers.IO) {
                 val audioBuffer = ByteArray(1024) // ~32ms chunks
                 while (isActive && isStreaming) {
@@ -109,6 +146,20 @@ class VoiceStreamHandler(private val context: Context) {
                         } else {
                             audioBuffer.copyOf(readBytes)
                         }
+
+                        // Smart Echo Gate during Loudspeaker Playback:
+                        // When speaker is actively outputting sound, check mic energy.
+                        // If it's just speaker leakage (< 2200 RMS), do not forward to Google
+                        // to prevent Google server-side false Barge-In stuttering!
+                        val isPlaying = (System.currentTimeMillis() - lastPlaybackChunkTime) < 250
+                        if (isLoudspeakerActive && isPlaying) {
+                            val rms = calculateRms(chunk)
+                            if (rms < 2200.0) {
+                                // Suppress echo leakage
+                                continue
+                            }
+                        }
+
                         val base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP)
                         onAudioChunk(base64Chunk)
                     }
@@ -121,6 +172,7 @@ class VoiceStreamHandler(private val context: Context) {
                     try {
                         val chunk = playbackQueue.poll(50, TimeUnit.MILLISECONDS)
                         if (chunk != null && audioTrack != null) {
+                            lastPlaybackChunkTime = System.currentTimeMillis()
                             audioTrack?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
                         }
                     } catch (_: InterruptedException) {
@@ -133,6 +185,20 @@ class VoiceStreamHandler(private val context: Context) {
             Log.e(TAG, "Error starting voice stream: ${e.message}")
             stopStreaming()
         }
+    }
+
+    /**
+     * Calculate RMS (Root Mean Square) energy of PCM 16-bit audio chunk.
+     */
+    private fun calculateRms(pcmBytes: ByteArray): Double {
+        var sum = 0.0
+        val sampleCount = pcmBytes.size / 2
+        if (sampleCount == 0) return 0.0
+        for (i in 0 until pcmBytes.size - 1 step 2) {
+            val sample = (pcmBytes[i + 1].toInt() shl 8) or (pcmBytes[i].toInt() and 0xFF)
+            sum += sample * sample
+        }
+        return sqrt(sum / sampleCount)
     }
 
     /**
@@ -264,6 +330,12 @@ class VoiceStreamHandler(private val context: Context) {
         recordingJob?.cancel()
         playbackJob?.cancel()
         playbackQueue.clear()
+
+        try { echoCanceler?.release() } catch (_: Exception) {}
+        echoCanceler = null
+
+        try { noiseSuppressor?.release() } catch (_: Exception) {}
+        noiseSuppressor = null
 
         try {
             audioRecord?.stop()
