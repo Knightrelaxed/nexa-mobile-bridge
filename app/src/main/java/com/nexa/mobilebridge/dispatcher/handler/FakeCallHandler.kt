@@ -2,6 +2,7 @@ package com.nexa.mobilebridge.dispatcher.handler
 
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.util.Log
 import com.nexa.mobilebridge.protocol.CommandResult
 import com.nexa.mobilebridge.protocol.NexaCommand
@@ -23,16 +24,36 @@ class FakeCallHandler @Inject constructor(
         val playRingtone = playRingtoneStr?.toBooleanStrictOrNull() ?: true
 
         return try {
+            // 1. Wake up device screen from sleep / lock state immediately
+            try {
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                @Suppress("DEPRECATION")
+                val wakeLock = powerManager?.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    "NexaBridge:IncomingCallWakeLock"
+                )
+                wakeLock?.acquire(10000L) // 10s bright wake lock
+                Log.i(TAG, "💡 Screen WakeLock acquired for incoming call")
+            } catch (e: Exception) {
+                Log.w(TAG, "WakeLock acquisition skipped: ${e.message}")
+            }
+
+            // 2. Launch FakeCallActivity in an isolated single-instance task
             val intent = Intent(context, com.nexa.mobilebridge.ui.call.FakeCallActivity::class.java).apply {
                 putExtra("command_id", command.command_id)
                 putExtra("caller_name", callerName)
                 putExtra("message", message)
                 putExtra("play_ringtone", playRingtone)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                )
             }
 
             context.startActivity(intent)
-            Log.i(TAG, "📞 FakeCallActivity launched for caller: $callerName")
+            Log.i(TAG, "📞 FakeCallActivity launched over lockscreen for caller: $callerName")
             CommandResult.success(command.command_id, "Simulated incoming call displayed successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch FakeCallActivity", e)

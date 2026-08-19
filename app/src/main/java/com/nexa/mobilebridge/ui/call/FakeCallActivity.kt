@@ -178,12 +178,14 @@ class FakeCallActivity : ComponentActivity() {
                 }
             }
 
-            // Auto-finish when state becomes FINISHED
+            // Auto-finish and remove task completely when state becomes FINISHED
             LaunchedEffect(state) {
                 if (state == CallState.FINISHED) {
-                    delay(400L) // Brief pause for any final animation
+                    delay(300L)
                     voiceStreamHandler.stopStreaming()
-                    finish()
+                    finishAndRemoveTask()
+                    @Suppress("DEPRECATION")
+                    overridePendingTransition(0, android.R.anim.fade_out)
                 }
             }
 
@@ -335,16 +337,18 @@ class FakeCallActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            keyguardManager.requestDismissKeyguard(this, null)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
+        }
+        @Suppress("DEPRECATION")
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+            WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
+        )
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            keyguardManager?.requestDismissKeyguard(this, null)
         }
     }
 
@@ -483,21 +487,25 @@ fun FakeCallScreen(
                 ) {
                     if (callState == CallState.RINGING) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Bottom
                         ) {
-                            SwipeButton(
+                            DynamicSwipeUpButton(
+                                label = "TOLAK",
                                 icon = Icons.Default.Close,
-                                tint = Color(0xFFFF003C),
-                                containerColor = Color(0xFFFF003C).copy(alpha = 0.15f),
-                                onThresholdReached = onReject
+                                accentColor = Color(0xFFD50000),
+                                glowColor = Color(0xFFFF5252),
+                                onTriggered = onReject
                             )
-                            SwipeButton(
+                            DynamicSwipeUpButton(
+                                label = "ANGKAT",
                                 icon = Icons.Default.Phone,
-                                tint = Color(0xFF64FFDA),
-                                containerColor = Color(0xFF64FFDA).copy(alpha = 0.15f),
-                                onThresholdReached = onAnswer
+                                accentColor = Color(0xFF00BFA5),
+                                glowColor = Color(0xFF64FFDA),
+                                onTriggered = onAnswer
                             )
                         }
                     } else if (callState != CallState.FINISHED) {
@@ -714,17 +722,60 @@ fun WaitingReplySection() {
     }
 }
 
-// ─── Swipe Button Composable ──────────────────────────────────────────────────
+// ─── Glowing Floating Upward Chevrons ─────────────────────────────────────────
 @Composable
-fun SwipeButton(
-    icon: ImageVector,
+fun UpwardChevrons(
     tint: Color,
-    containerColor: Color,
-    onThresholdReached: () -> Unit
+    alpha: Float,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "chevronAnim")
+    val animProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
+        label = "chevronAnim"
+    )
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        for (i in 0..2) {
+            val phase = (animProgress + i * 0.33f) % 1f
+            val y = h - (phase * h)
+            val chevronAlpha = ((1f - phase) * alpha * 0.85f).coerceIn(0f, 1f)
+
+            val path = Path().apply {
+                moveTo(w * 0.22f, y + 5.dp.toPx())
+                lineTo(w * 0.5f, y)
+                lineTo(w * 0.78f, y + 5.dp.toPx())
+            }
+            drawPath(
+                path = path,
+                color = tint.copy(alpha = chevronAlpha),
+                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+    }
+}
+
+// ─── Dynamic Futuristic Swipe-Up Capsule Button ──────────────────────────────
+@Composable
+fun DynamicSwipeUpButton(
+    label: String,
+    icon: ImageVector,
+    accentColor: Color,
+    glowColor: Color,
+    onTriggered: () -> Unit
 ) {
     val density = LocalDensity.current
-    val maxDragDistance = with(density) { -120.dp.toPx() }
-    val threshold = with(density) { -80.dp.toPx() }
+    val trackHeight = 180.dp
+    val trackWidth = 84.dp
+    val discSize = 68.dp
+
+    val maxDragDistance = with(density) { -104.dp.toPx() }
+    val threshold = with(density) { -75.dp.toPx() }
 
     var offsetY by remember { mutableFloatStateOf(0f) }
     var isTriggered by remember { mutableStateOf(false) }
@@ -733,45 +784,136 @@ fun SwipeButton(
         targetValue = offsetY,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ), label = "swipeSpring"
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "swipeSpring"
     )
 
+    val progress = (animatedOffsetY / maxDragDistance).coerceIn(0f, 1f)
     val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = Modifier
-            .offset { IntOffset(0, animatedOffsetY.roundToInt()) }
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onDragEnd = {
-                        if (!isTriggered) offsetY = 0f
-                    },
-                    onDragCancel = {
-                        if (!isTriggered) offsetY = 0f
-                    }
-                ) { change, dragAmount ->
-                    change.consume()
-                    if (isTriggered) return@detectVerticalDragGestures
-                    offsetY = (offsetY + dragAmount).coerceIn(maxDragDistance, 0f)
-                    if (offsetY <= threshold) {
-                        isTriggered = true
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onThresholdReached()
+            .width(trackWidth)
+            .height(trackHeight)
+            .clip(RoundedCornerShape(42.dp))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        accentColor.copy(alpha = 0.08f + progress * 0.25f),
+                        Color(0xFF0A192F).copy(alpha = 0.85f)
+                    )
+                )
+            )
+            .border(
+                width = (1.5f + progress * 1.5f).dp,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        glowColor.copy(alpha = 0.5f + progress * 0.5f),
+                        accentColor.copy(alpha = 0.2f + progress * 0.4f)
+                    )
+                ),
+                shape = RoundedCornerShape(42.dp)
+            ),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        // 1. Top Section: Label & Upward Floating Animated Chevrons
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 16.dp, bottom = 76.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                color = glowColor.copy(alpha = 0.9f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp
+            )
+
+            UpwardChevrons(
+                tint = glowColor,
+                alpha = (1f - progress).coerceIn(0f, 1f),
+                modifier = Modifier
+                    .width(36.dp)
+                    .height(44.dp)
+            )
+        }
+
+        // 2. Interactive Sliding Glowing Disc
+        Box(
+            modifier = Modifier
+                .padding(bottom = 8.dp)
+                .offset { IntOffset(0, animatedOffsetY.roundToInt()) }
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (!isTriggered) offsetY = 0f
+                        },
+                        onDragCancel = {
+                            if (!isTriggered) offsetY = 0f
+                        }
+                    ) { change, dragAmount ->
+                        change.consume()
+                        if (isTriggered) return@detectVerticalDragGestures
+                        offsetY = (offsetY + dragAmount).coerceIn(maxDragDistance, 0f)
+                        if (offsetY <= threshold && !isTriggered) {
+                            isTriggered = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onTriggered()
+                        }
                     }
                 }
+                .size(discSize)
+                .scale(1.0f + (progress * 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            // Glow Halo behind disc
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .scale(1.25f + progress * 0.3f)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                glowColor.copy(alpha = 0.4f + progress * 0.45f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+            )
+
+            // Disc Surface
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                glowColor,
+                                accentColor,
+                                accentColor.copy(alpha = 0.85f)
+                            )
+                        )
+                    )
+                    .border(2.dp, Color.White.copy(alpha = 0.7f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = Color(0xFF040B16),
+                    modifier = Modifier
+                        .size(32.dp)
+                        .scale(1.0f + (progress * 0.1f))
+                )
             }
-            .size(80.dp)
-            .background(containerColor, CircleShape)
-            .border(2.dp, tint, CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier.size(36.dp)
-        )
+        }
     }
 }
 

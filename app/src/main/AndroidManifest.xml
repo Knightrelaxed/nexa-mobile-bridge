@@ -77,10 +77,11 @@
 
         <activity
             android:name=".ui.call.FakeCallActivity"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@style/Theme.NexaMobileBridge"
             android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:launchMode="singleTop"
+            android:taskAffinity="com.nexa.mobilebridge.call"
+            android:launchMode="singleInstance"
+            android:noHistory="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:exported="false" />
