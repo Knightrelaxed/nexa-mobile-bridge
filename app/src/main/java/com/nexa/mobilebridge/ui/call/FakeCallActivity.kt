@@ -121,6 +121,10 @@ class FakeCallActivity : ComponentActivity() {
     private val hudState = mutableStateOf(LiveVoiceHudState.LISTENING)
     private val recordingElapsedMs = mutableLongStateOf(0L)
 
+    // Tracks when hudState entered THINKING or PROCESSING (used by watchdog to detect true slow network)
+    @Volatile
+    private var pendingStateEntryTime: Long = 0L
+
     // Track how many times user has rejected (sent to server for importance evaluation)
     private var rejectionCount = 0
 
@@ -143,6 +147,7 @@ class FakeCallActivity : ComponentActivity() {
                 val rawJson = intent.getStringExtra("raw_json") ?: return
                 if (rawJson.contains("CALL_AUDIO_PLAY")) {
                     hudState.value = LiveVoiceHudState.SPEAKING
+                    pendingStateEntryTime = 0L // Reset — no longer pending
                     val pcmRegex = Regex("\"pcm_chunk\"\\s*:\\s*\"([^\"]+)\"")
                     val match = pcmRegex.find(rawJson)
                     val pcmChunk = match?.groups?.get(1)?.value
@@ -152,14 +157,19 @@ class FakeCallActivity : ComponentActivity() {
                 } else if (rawJson.contains("CALL_STATUS_UPDATE")) {
                     if (rawJson.contains("\"THINKING\"")) {
                         hudState.value = LiveVoiceHudState.THINKING
+                        pendingStateEntryTime = System.currentTimeMillis()
                     } else if (rawJson.contains("\"PROCESSING\"")) {
                         hudState.value = LiveVoiceHudState.PROCESSING
+                        pendingStateEntryTime = System.currentTimeMillis()
                     } else if (rawJson.contains("\"SPEAKING\"")) {
                         hudState.value = LiveVoiceHudState.SPEAKING
+                        pendingStateEntryTime = 0L
                     } else if (rawJson.contains("\"LISTENING\"")) {
                         hudState.value = LiveVoiceHudState.LISTENING
+                        pendingStateEntryTime = 0L
                     } else if (rawJson.contains("\"RECONNECTING\"")) {
                         hudState.value = LiveVoiceHudState.RECONNECTING
+                        pendingStateEntryTime = 0L
                     }
                 } else if (rawJson.contains("CALL_AUDIO_INTERRUPTED")) {
                     voiceStreamHandler.flushOutputBuffer()
@@ -322,23 +332,36 @@ class FakeCallActivity : ComponentActivity() {
             while (isActive && isCallActive) {
                 val isWsConnected = NexaBridgeService.isConnected()
                 val isSpeaking = voiceStreamHandler.isPlayingAudio()
-                val lastAudio = voiceStreamHandler.lastAudioReceivedTime
                 val now = System.currentTimeMillis()
+                val entryTime = pendingStateEntryTime
 
                 withContext(Dispatchers.Main) {
+                    val currentHud = hudState.value
+
                     if (!isWsConnected) {
+                        // WebSocket disconnected — highest priority override
                         hudState.value = LiveVoiceHudState.RECONNECTING
-                    } else if (isSpeaking) {
-                        hudState.value = LiveVoiceHudState.SPEAKING
-                    } else if (hudState.value == LiveVoiceHudState.THINKING || hudState.value == LiveVoiceHudState.PROCESSING) {
-                        if (lastAudio > 0 && now - lastAudio > 4000) {
-                            hudState.value = LiveVoiceHudState.SLOW_NETWORK
-                        }
-                    } else if (hudState.value != LiveVoiceHudState.THINKING && hudState.value != LiveVoiceHudState.PROCESSING && hudState.value != LiveVoiceHudState.SLOW_NETWORK) {
+                    } else if (currentHud == LiveVoiceHudState.RECONNECTING) {
+                        // WebSocket just reconnected — fall back to listening
                         hudState.value = LiveVoiceHudState.LISTENING
+                        pendingStateEntryTime = 0L
+                    } else if (isSpeaking) {
+                        // AudioTrack actively playing Nexa's voice
+                        hudState.value = LiveVoiceHudState.SPEAKING
+                        pendingStateEntryTime = 0L
+                    } else if (currentHud == LiveVoiceHudState.SPEAKING && !isSpeaking) {
+                        // Nexa just finished speaking — mic returns to listening
+                        hudState.value = LiveVoiceHudState.LISTENING
+                        pendingStateEntryTime = 0L
+                    } else if ((currentHud == LiveVoiceHudState.THINKING || currentHud == LiveVoiceHudState.PROCESSING)
+                        && entryTime > 0L && now - entryTime > 7000) {
+                        // Server said THINKING/PROCESSING but no audio arrived within 7 seconds
+                        hudState.value = LiveVoiceHudState.SLOW_NETWORK
                     }
+                    // All other states (LISTENING, THINKING, PROCESSING) are driven
+                    // exclusively by server CALL_STATUS_UPDATE — watchdog does NOT override them
                 }
-                delay(150)
+                delay(250)
             }
         }
     }
