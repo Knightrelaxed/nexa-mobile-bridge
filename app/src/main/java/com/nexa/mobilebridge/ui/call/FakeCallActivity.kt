@@ -282,6 +282,8 @@ class FakeCallActivity : ComponentActivity() {
                 callMessage = callMessage,
                 callState = state,
                 hudState = currentHudState,
+                isSpeaking = voiceStreamHandler.isPlayingAudio(),
+                audioEnergy = voiceStreamHandler.currentAudioEnergy,
                 isLoudspeaker = isLoudspeaker.value,
                 recordingElapsedMs = elapsedMs,
                 onAnswer = { handleAccept() },
@@ -575,6 +577,8 @@ fun FakeCallScreen(
     callMessage: String,
     callState: CallState,
     hudState: LiveVoiceHudState = LiveVoiceHudState.LISTENING,
+    isSpeaking: Boolean = false,
+    audioEnergy: Float = 0f,
     isLoudspeaker: Boolean = false,
     recordingElapsedMs: Long,
     onAnswer: () -> Unit,
@@ -615,77 +619,77 @@ fun FakeCallScreen(
                 // ── Header ──────────────────────────────────────────────
                 CallHeader(callState = callState, hudState = hudState, callerName = callerName)
 
-                // ── Center: Avatar + Message / Recording UI ──────────────
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Pulsing Orb
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(180.dp)
-                    ) {
+                // ── Center: Avatar / Expressive Eyes + Message UI ────────
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (callState == CallState.RINGING) {
+                        // Incoming call pulsing phone orb
                         Box(
-                            modifier = Modifier.fillMaxSize().scale(pulseScale2)
-                                .clip(CircleShape)
-                                .background(Color(0xFF64FFDA).copy(alpha = pulseAlpha))
-                        )
-                        Box(
-                            modifier = Modifier.size(130.dp).scale(pulseScale1)
-                                .clip(CircleShape)
-                                .background(Color(0xFF64FFDA).copy(alpha = 0.2f))
-                        )
-                        Box(
-                            modifier = Modifier.size(100.dp).clip(CircleShape)
-                                .background(
-                                    Brush.radialGradient(
-                                        colors = listOf(
-                                            Color(0xFFE6F1FF), Color(0xFF64FFDA), Color(0xFF0A192F)
-                                        )
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(180.dp)
                         ) {
-                            Icon(
-                                imageVector = if (callState == CallState.RECORDING)
-                                    Icons.Default.Phone else Icons.Default.Phone,
-                                contentDescription = "Call",
-                                tint = Color(0xFF0A192F),
-                                modifier = Modifier.size(40.dp)
+                            Box(
+                                modifier = Modifier.fillMaxSize().scale(pulseScale2)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF64FFDA).copy(alpha = pulseAlpha))
                             )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(40.dp))
-
-                    // Dynamic center content based on state
-                    when (callState) {
-                        CallState.RINGING, CallState.ACCEPTED_SPEAKING, CallState.REJECTED_SPEAKING -> {
-                            // Show message card
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFF112240).copy(alpha = 0.7f)
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF233554)),
-                                shape = RoundedCornerShape(20.dp),
-                                modifier = Modifier.fillMaxWidth(0.9f)
+                            Box(
+                                modifier = Modifier.size(130.dp).scale(pulseScale1)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF64FFDA).copy(alpha = 0.2f))
+                            )
+                            Box(
+                                modifier = Modifier.size(100.dp).clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            colors = listOf(
+                                                Color(0xFFE6F1FF), Color(0xFF64FFDA), Color(0xFF0A192F)
+                                            )
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = callMessage,
-                                    color = Color(0xFFCCD6F6),
-                                    fontSize = 16.sp,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(24.dp),
-                                    lineHeight = 24.sp
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "Incoming Call",
+                                    tint = Color(0xFF0A192F),
+                                    modifier = Modifier.size(40.dp)
                                 )
                             }
                         }
-                        CallState.RECORDING -> {
-                            // Recording UI with countdown timer
-                            RecordingSection(elapsedMs = recordingElapsedMs, totalMs = 10_000L)
+
+                        Spacer(modifier = Modifier.height(32.dp))
+
+                        // Incoming Message Card
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFF112240).copy(alpha = 0.7f)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF233554)),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            Text(
+                                text = callMessage,
+                                color = Color(0xFFCCD6F6),
+                                fontSize = 16.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(24.dp),
+                                lineHeight = 24.sp
+                            )
                         }
-                        CallState.WAITING_REPLY -> {
-                            // Waiting for server reply
-                            WaitingReplySection()
-                        }
-                        CallState.FINISHED -> { /* nothing */ }
+                    } else {
+                        // 🤖 Active Live Call Session: Cybernetic Expressive OLED Eyes!
+                        NexaExpressiveEyes(
+                            hudState = hudState,
+                            isSpeaking = isSpeaking,
+                            audioEnergy = audioEnergy,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp)
+                        )
                     }
                 }
 

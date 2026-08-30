@@ -70,6 +70,10 @@ class VoiceStreamHandler(private val context: Context) {
     var lastAudioReceivedTime: Long = 0L
         private set
 
+    @Volatile
+    var currentAudioEnergy: Float = 0f
+        private set
+
     var isLoudspeakerActive: Boolean = false
         private set
 
@@ -181,11 +185,13 @@ class VoiceStreamHandler(private val context: Context) {
                         if (chunk != null && audioTrack != null) {
                             isAssistantSpeaking = true
                             lastAudioReceivedTime = System.currentTimeMillis()
+                            currentAudioEnergy = calculatePcmRms(chunk)
                             audioTrack?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
                         } else {
-                            // When queue drains, clear speaking flag after 300ms tail
+                            // When queue drains, clear speaking flag and energy after 300ms tail
                             if (System.currentTimeMillis() - lastAudioReceivedTime > 300) {
                                 isAssistantSpeaking = false
+                                currentAudioEnergy = 0f
                             }
                         }
                     } catch (_: InterruptedException) {
@@ -348,5 +354,18 @@ class VoiceStreamHandler(private val context: Context) {
         audioManager.mode = AudioManager.MODE_NORMAL
 
         Log.i(TAG, "🛑 Voice stream stopped & audio hardware released.")
+    }
+
+    private fun calculatePcmRms(bytes: ByteArray): Float {
+        if (bytes.size < 2) return 0f
+        var sum = 0.0
+        val sampleCount = bytes.size / 2
+        for (i in 0 until sampleCount) {
+            val sample = (bytes[i * 2].toInt() and 0xFF) or (bytes[i * 2 + 1].toInt() shl 8)
+            val shortSample = sample.toShort().toFloat() / 32768.0f
+            sum += shortSample * shortSample
+        }
+        val rms = Math.sqrt(sum / sampleCount).toFloat()
+        return (rms * 3.5f).coerceIn(0f, 1f)
     }
 }
