@@ -28,9 +28,6 @@ import java.io.ByteArrayOutputStream
 
 class NexaAccessibilityService : AccessibilityService() {
 
-    private var lastVolumeUpPressTime: Long = 0L
-    private val DOUBLE_PRESS_WINDOW_MS: Long = 700L
-
     companion object {
         private const val TAG = "NexaAccessibility"
         var instance: NexaAccessibilityService? = null
@@ -74,34 +71,69 @@ class NexaAccessibilityService : AccessibilityService() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 0. Physical Hardware Button Intercept (Double-Press Volume Up)
+    // 0. Physical Hardware Button Intercept (Chord Press: Vol Up + Vol Down)
     // ─────────────────────────────────────────────────────────────
+    private var isVolumeUpHeld = false
+    private var isVolumeDownHeld = false
+    private var lastVolumeUpPressTime: Long = 0L
+    private var lastVolumeDownPressTime: Long = 0L
+    private var lastChordTriggerTime: Long = 0L
+    private val CHORD_WINDOW_MS: Long = 500L
+    private val CHORD_DEBOUNCE_MS: Long = 2000L
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (event == null) return super.onKeyEvent(event)
 
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                val now = System.currentTimeMillis()
-                val diff = now - lastVolumeUpPressTime
+        val now = System.currentTimeMillis()
 
-                Log.d(TAG, "Volume Up pressed: diff=${diff}ms (window=${DOUBLE_PRESS_WINDOW_MS}ms)")
-
-                if (diff in 1..DOUBLE_PRESS_WINDOW_MS) {
-                    // Double press Volume Up detected!
-                    lastVolumeUpPressTime = 0L // Reset
-                    Log.i(TAG, "📞 Double-press Volume Up detected! -> Triggering Outgoing Nexa Call")
-
-                    // 1. Double haptic vibration feedback
-                    triggerDoubleVibration()
-
-                    // 2. Launch FakeCallActivity in Outgoing mode
-                    launchOutgoingNexaCall()
-
-                    // Consume the key event so system volume does not jump
-                    return true
-                } else {
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    isVolumeUpHeld = true
                     lastVolumeUpPressTime = now
+                    val diffDown = now - lastVolumeDownPressTime
+
+                    Log.d(TAG, "Volume Up DOWN: isVolDownHeld=$isVolumeDownHeld, diffDown=${diffDown}ms")
+
+                    // Check if Volume Down is currently held or was pressed within CHORD_WINDOW_MS
+                    if (isVolumeDownHeld || (diffDown in 1..CHORD_WINDOW_MS)) {
+                        if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
+                            lastChordTriggerTime = now
+                            isVolumeUpHeld = false
+                            isVolumeDownHeld = false
+                            Log.i(TAG, "📞 Volume Chord (Up + Down) detected! -> Triggering Outgoing Nexa Call")
+                            triggerDoubleVibration()
+                            launchOutgoingNexaCall()
+                            return true
+                        }
+                    }
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    isVolumeUpHeld = false
+                }
+            }
+
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    isVolumeDownHeld = true
+                    lastVolumeDownPressTime = now
+                    val diffUp = now - lastVolumeUpPressTime
+
+                    Log.d(TAG, "Volume Down DOWN: isVolUpHeld=$isVolumeUpHeld, diffUp=${diffUp}ms")
+
+                    // Check if Volume Up is currently held or was pressed within CHORD_WINDOW_MS
+                    if (isVolumeUpHeld || (diffUp in 1..CHORD_WINDOW_MS)) {
+                        if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
+                            lastChordTriggerTime = now
+                            isVolumeUpHeld = false
+                            isVolumeDownHeld = false
+                            Log.i(TAG, "📞 Volume Chord (Down + Up) detected! -> Triggering Outgoing Nexa Call")
+                            triggerDoubleVibration()
+                            launchOutgoingNexaCall()
+                            return true
+                        }
+                    }
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    isVolumeDownHeld = false
                 }
             }
         }
