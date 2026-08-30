@@ -73,7 +73,7 @@ fun HudScreen(
                         }
                     )
 
-                    Divider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
                     Text(
                         "COMMAND LOG",
@@ -171,7 +171,7 @@ fun CommandLogList(commands: List<CommandLogEntry>) {
                         fontWeight = FontWeight.Bold
                     )
                 }
-                Divider(color = MaterialTheme.colorScheme.background)
+                HorizontalDivider(color = MaterialTheme.colorScheme.background)
             }
         }
     }
