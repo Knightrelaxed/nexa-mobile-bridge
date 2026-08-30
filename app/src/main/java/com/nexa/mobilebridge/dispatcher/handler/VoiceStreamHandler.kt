@@ -199,6 +199,10 @@ class VoiceStreamHandler(private val context: Context) {
         }
     }
 
+    fun isPlayingAudio(): Boolean {
+        return isAssistantSpeaking || playbackQueue.isNotEmpty() || (System.currentTimeMillis() - lastAudioReceivedTime < 500)
+    }
+
     private fun initAudioTrack(sharedSessionId: Int) {
         try {
             val minTrackBuf = AudioTrack.getMinBufferSize(

@@ -66,6 +66,7 @@ import com.nexa.mobilebridge.dispatcher.handler.VoiceRecorderHandler
 import com.nexa.mobilebridge.protocol.CallEvent
 import com.nexa.mobilebridge.protocol.NexaActions
 import com.nexa.mobilebridge.protocol.NexaCommand
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -113,10 +114,18 @@ class FakeCallActivity : ComponentActivity() {
     // BroadcastReceiver for server audio events (Live Audio Play, Interrupted, Reply Complete)
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE") {
-                Log.i(TAG, "📩 CALL_REPLY_COMPLETE received — closing call UI")
-                voiceStreamHandler.stopStreaming()
-                callState.value = CallState.FINISHED
+            if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE" || intent?.action == "com.nexa.mobilebridge.END_CALL") {
+                Log.i(TAG, "📩 End Call signal received — waiting for audio playback to finish cleanly")
+                lifecycleScope.launch(Dispatchers.Main) {
+                    var waitLoops = 0
+                    while (voiceStreamHandler.isPlayingAudio() && waitLoops < 50) {
+                        kotlinx.coroutines.delay(100)
+                        waitLoops++
+                    }
+                    kotlinx.coroutines.delay(400) // Natural silence tail before closing UI
+                    voiceStreamHandler.stopStreaming()
+                    callState.value = CallState.FINISHED
+                }
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
                 val rawJson = intent.getStringExtra("raw_json") ?: return
                 if (rawJson.contains("CALL_AUDIO_PLAY")) {
