@@ -85,8 +85,13 @@
             android:launchMode="singleInstance"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:exported="false"
-            tools:ignore="LockedOrientationActivity" />
+            android:exported="true"
+            tools:ignore="LockedOrientationActivity">
+            <intent-filter>
+                <action android:name="com.nexa.mobilebridge.ACTION_CALL_NEXA" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <!-- M-Banking Shield Launcher (Invisible Bypass) -->
         <activity

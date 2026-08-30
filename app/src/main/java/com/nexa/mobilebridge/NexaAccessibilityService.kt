@@ -9,9 +9,17 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
+import android.content.Context
+import android.content.Intent
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.util.Log
 import android.view.Display
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.nexa.mobilebridge.ui.call.FakeCallActivity
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -20,7 +28,11 @@ import java.io.ByteArrayOutputStream
 
 class NexaAccessibilityService : AccessibilityService() {
 
+    private var lastVolumeUpPressTime: Long = 0L
+    private val DOUBLE_PRESS_WINDOW_MS: Long = 450L
+
     companion object {
+        private const val TAG = "NexaAccessibility"
         var instance: NexaAccessibilityService? = null
             private set
     }
@@ -28,6 +40,7 @@ class NexaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        Log.i(TAG, "NexaAccessibilityService connected with Key Event Filtering active.")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -43,9 +56,85 @@ class NexaAccessibilityService : AccessibilityService() {
         // Not used
     }
 
-    override fun onUnbind(intent: android.content.Intent?): Boolean {
+    override fun onUnbind(intent: Intent?): Boolean {
         instance = null
         return super.onUnbind(intent)
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 0. Physical Hardware Button Intercept (Double-Press Volume Up)
+    // ─────────────────────────────────────────────────────────────
+
+    override fun onKeyEvent(event: KeyEvent?): Boolean {
+        if (event == null) return super.onKeyEvent(event)
+
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val now = System.currentTimeMillis()
+                val diff = now - lastVolumeUpPressTime
+
+                if (diff in 1..DOUBLE_PRESS_WINDOW_MS) {
+                    // Double press Volume Up detected!
+                    lastVolumeUpPressTime = 0L // Reset to prevent triple-fire
+                    Log.i(TAG, "📞 Double-press Volume Up detected -> Triggering Outgoing Nexa Call")
+
+                    // 1. Double haptic vibration feedback
+                    triggerDoubleVibration()
+
+                    // 2. Launch FakeCallActivity in Outgoing mode
+                    launchOutgoingNexaCall()
+
+                    // Consume the key event so system volume does not jump
+                    return true
+                } else {
+                    lastVolumeUpPressTime = now
+                }
+            }
+        }
+
+        return super.onKeyEvent(event)
+    }
+
+    private fun triggerDoubleVibration() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                val vibrator = vibratorManager?.defaultVibrator
+                val effect = VibrationEffect.createWaveform(
+                    longArrayOf(0, 60, 70, 90),
+                    intArrayOf(0, 255, 0, 255),
+                    -1
+                )
+                vibrator?.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(longArrayOf(0, 60, 70, 90), -1)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Vibration feedback error: ${e.message}")
+        }
+    }
+
+    private fun launchOutgoingNexaCall() {
+        try {
+            val intent = Intent(this, FakeCallActivity::class.java).apply {
+                action = "com.nexa.mobilebridge.ACTION_CALL_NEXA"
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+                )
+                putExtra("IS_OUTGOING_CALL", true)
+                putExtra("CALLER_NAME", "N.E.X.A Voice Bridge")
+                putExtra("CALL_MESSAGE", "Halo Tuan Faqih, saya mendengarkan.")
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch outgoing Nexa call: ${e.message}", e)
+        }
     }
 
     // ─────────────────────────────────────────────────────────────

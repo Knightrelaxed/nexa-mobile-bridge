@@ -2,6 +2,9 @@ package com.nexa.mobilebridge.ui.call
 
 import android.Manifest
 import android.app.KeyguardManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -14,8 +17,10 @@ import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationCompat
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -155,10 +160,11 @@ class FakeCallActivity : ComponentActivity() {
         voiceRecorderHandler = VoiceRecorderHandler(applicationContext)
         voiceStreamHandler = com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler(applicationContext)
 
-        commandId = intent.getStringExtra("command_id") ?: "fake_call_${System.currentTimeMillis()}"
-        callerName = intent.getStringExtra("caller_name") ?: "N.E.X.A Assistant"
-        callMessage = intent.getStringExtra("message") ?: "Tuan Faqih, ada pesan penting dari N.E.X.A!"
-        val playRingtone = intent.getBooleanExtra("play_ringtone", true)
+        commandId = intent.getStringExtra("command_id") ?: "call_${System.currentTimeMillis()}"
+        callerName = intent.getStringExtra("caller_name") ?: "N.E.X.A Voice Bridge"
+        callMessage = intent.getStringExtra("message") ?: "Halo Tuan Faqih, saya mendengarkan."
+        val isOutgoingCall = intent.getBooleanExtra("IS_OUTGOING_CALL", false) || (intent.action == "com.nexa.mobilebridge.ACTION_CALL_NEXA")
+        val playRingtone = if (isOutgoingCall) false else intent.getBooleanExtra("play_ringtone", true)
 
         // Register receiver for server live audio & reply events
         val filter = IntentFilter().apply {
@@ -172,14 +178,33 @@ class FakeCallActivity : ComponentActivity() {
             registerReceiver(callReplyReceiver, filter)
         }
 
+        // VoIP Background Navigation: Back button minimizes to background without killing call
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val state = callState.value
+                if (state == CallState.ACCEPTED_SPEAKING || state == CallState.RECORDING || state == CallState.WAITING_REPLY) {
+                    Log.i(TAG, "📱 Back pressed during active call — moving task to background (VoIP style)")
+                    moveTaskToBack(true)
+                } else if (state == CallState.RINGING) {
+                    handleReject()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
         setContent {
             // Observe state for recomposition
             val state by callState
             val elapsedMs by recordingElapsedMs
 
-            // Start ringtone exactly when UI first renders
+            // Start call flow immediately on UI render
             LaunchedEffect(Unit) {
-                if (playRingtone) {
+                if (isOutgoingCall) {
+                    Log.i(TAG, "🚀 Outgoing call to N.E.X.A initiated — connecting live session immediately")
+                    handleAccept()
+                } else if (playRingtone) {
                     audioPlayerHandler.playRingtone(
                         NexaCommand(
                             type = "EXECUTE_COMMAND",
@@ -194,6 +219,7 @@ class FakeCallActivity : ComponentActivity() {
             // Auto-finish and remove task completely when state becomes FINISHED
             LaunchedEffect(state) {
                 if (state == CallState.FINISHED) {
+                    cancelOngoingCallNotification()
                     delay(300L)
                     voiceStreamHandler.stopStreaming()
                     finishAndRemoveTask()
@@ -225,6 +251,9 @@ class FakeCallActivity : ComponentActivity() {
         if (callState.value != CallState.RINGING) return
         callState.value = CallState.ACCEPTED_SPEAKING
         audioPlayerHandler.stopAll()
+
+        // Show VoIP Ongoing Notification in status bar
+        showOngoingCallNotification()
 
         // Notify server: call accepted (launches Google Gemini Live session)
         sendCallEvent(NexaActions.CALL_ACCEPTED)
@@ -345,6 +374,69 @@ class FakeCallActivity : ComponentActivity() {
         Log.i(TAG, "📡 CallEvent [$event] sent=$sent")
     }
 
+    // ─── VoIP Ongoing Notification ───────────────────────────────────────────
+    private val NOTIF_CALL_ONGOING_ID = 1005
+    private val CALL_ONGOING_CHANNEL_ID = "nexa_call_ongoing_channel"
+
+    private fun showOngoingCallNotification() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CALL_ONGOING_CHANNEL_ID,
+                    "N.E.X.A Panggilan Suara",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Status panggilan suara aktif N.E.X.A"
+                    setShowBadge(false)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            // Tapping notification reopens existing in-call UI immediately
+            val contentIntent = Intent(this, FakeCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            val contentPendingIntent = PendingIntent.getActivity(
+                this, 0, contentIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+            )
+
+            // "Matikan Telepon" action button right in the notification shade
+            val endCallIntent = Intent(this, FakeCallActivity::class.java).apply {
+                action = "ACTION_END_CALL_FROM_NOTIF"
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            val endCallPendingIntent = PendingIntent.getActivity(
+                this, 1, endCallIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+            )
+
+            val notification = NotificationCompat.Builder(this, CALL_ONGOING_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+                .setContentTitle("Panggilan N.E.X.A Aktif")
+                .setContentText("Sedang berlangsung di latar belakang (Ketuk untuk kembali)")
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setContentIntent(contentPendingIntent)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Matikan Telepon", endCallPendingIntent)
+                .build()
+
+            notificationManager.notify(NOTIF_CALL_ONGOING_ID, notification)
+            Log.i(TAG, "🔔 Ongoing call notification displayed.")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to show ongoing notification: ${e.message}")
+        }
+    }
+
+    private fun cancelOngoingCallNotification() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel(NOTIF_CALL_ONGOING_ID)
+            Log.i(TAG, "🔕 Ongoing call notification removed.")
+        } catch (_: Exception) {}
+    }
+
     // ─── Lifecycle ────────────────────────────────────────────────────────────
     private fun setupShowWhenLocked() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -367,7 +459,12 @@ class FakeCallActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        Log.w(TAG, "⚠️ onNewIntent received while call in state: ${callState.value} — ignoring duplicate launch.")
+        if (intent.action == "ACTION_END_CALL_FROM_NOTIF") {
+            Log.i(TAG, "🔴 End call requested from notification button action")
+            handleReject()
+            return
+        }
+        Log.w(TAG, "⚠️ onNewIntent received while call in state: ${callState.value} — bringing to front.")
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -378,6 +475,7 @@ class FakeCallActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         isCallActive = false
+        cancelOngoingCallNotification()
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()
