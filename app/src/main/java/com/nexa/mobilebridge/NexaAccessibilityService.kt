@@ -29,7 +29,7 @@ import java.io.ByteArrayOutputStream
 class NexaAccessibilityService : AccessibilityService() {
 
     private var lastVolumeUpPressTime: Long = 0L
-    private val DOUBLE_PRESS_WINDOW_MS: Long = 450L
+    private val DOUBLE_PRESS_WINDOW_MS: Long = 700L
 
     companion object {
         private const val TAG = "NexaAccessibility"
@@ -40,7 +40,19 @@ class NexaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "NexaAccessibilityService connected with Key Event Filtering active.")
+
+        // ══════════════════════════════════════════════════════════
+        // CRITICAL: Explicitly set FLAG_REQUEST_FILTER_KEY_EVENTS
+        // at runtime to ensure Android delivers hardware key events
+        // ══════════════════════════════════════════════════════════
+        val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
+        info.flags = info.flags or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        serviceInfo = info
+
+        Log.i(TAG, "✅ NexaAccessibilityService connected with Key Event Filtering active (flags=${info.flags})")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -69,14 +81,16 @@ class NexaAccessibilityService : AccessibilityService() {
         if (event == null) return super.onKeyEvent(event)
 
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 val now = System.currentTimeMillis()
                 val diff = now - lastVolumeUpPressTime
 
+                Log.d(TAG, "Volume Up pressed: diff=${diff}ms (window=${DOUBLE_PRESS_WINDOW_MS}ms)")
+
                 if (diff in 1..DOUBLE_PRESS_WINDOW_MS) {
                     // Double press Volume Up detected!
-                    lastVolumeUpPressTime = 0L // Reset to prevent triple-fire
-                    Log.i(TAG, "📞 Double-press Volume Up detected -> Triggering Outgoing Nexa Call")
+                    lastVolumeUpPressTime = 0L // Reset
+                    Log.i(TAG, "📞 Double-press Volume Up detected! -> Triggering Outgoing Nexa Call")
 
                     // 1. Double haptic vibration feedback
                     triggerDoubleVibration()
