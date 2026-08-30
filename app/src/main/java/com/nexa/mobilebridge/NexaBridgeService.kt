@@ -320,9 +320,9 @@ class NexaBridgeService : Service() {
         }
 
         val title = if (event.isFinal) {
-            "❌ N.E.X.A Bridge — Koneksi Dihentikan Total"
+            "N.E.X.A Bridge — Koneksi Dihentikan Total"
         } else {
-            "⚠️ N.E.X.A Bridge — Koneksi Gagal (Fase ${event.phase})"
+            "N.E.X.A Bridge — Koneksi Gagal (Fase ${event.phase})"
         }
 
         val body = if (event.isFinal) {

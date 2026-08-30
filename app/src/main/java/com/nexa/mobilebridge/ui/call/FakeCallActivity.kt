@@ -170,6 +170,7 @@ class FakeCallActivity : ComponentActivity() {
         val filter = IntentFilter().apply {
             addAction("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
             addAction("com.nexa.mobilebridge.CALL_LIVE_EVENT")
+            addAction("com.nexa.mobilebridge.END_CALL")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(callReplyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)

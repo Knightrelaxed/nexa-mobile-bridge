@@ -51,4 +51,6 @@ object NexaActions {
     const val CALL_REJECTED           = "CALL_REJECTED"   // App → Server: user swiped reject
     const val CALL_AUDIO_REPLY        = "CALL_AUDIO_REPLY" // App → Server: 10s voice recording (base64)
     const val PLAY_AUDIO_STREAM       = "PLAY_AUDIO_STREAM" // Server → App: play audio reply (base64)
+    const val END_CALL                = "END_CALL"          // Server → App: hang up and close call UI
+    const val HANGUP                  = "HANGUP"            // Alias for END_CALL
 }

@@ -89,6 +89,8 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.STOP_MEDIA          -> audioPlayerHandler.stopMedia(command)
                 NexaActions.SIMULATE_INCOMING_CALL -> fakeCallHandler.execute(command)
                 NexaActions.PLAY_AUDIO_STREAM   -> audioPlayerHandler.playAudioStream(command)
+                NexaActions.END_CALL,
+                NexaActions.HANGUP              -> executeEndCall(command)
 
                 else -> CommandResult.unknown(command.command_id, command.action)
             }
@@ -159,4 +161,18 @@ class DeviceCommandDispatcher @Inject constructor(
         return if (success) CommandResult.success(command.command_id, "Scroll $direction executed.")
         else CommandResult.failure(command.command_id, "Failed to scroll $direction.")
     }
+
+    private fun executeEndCall(command: NexaCommand): CommandResult {
+        return try {
+            val intent = android.content.Intent("com.nexa.mobilebridge.CALL_REPLY_COMPLETE").apply {
+                setPackage(context.packageName)
+            }
+            context.sendBroadcast(intent)
+            audioPlayerHandler.stopAll()
+            CommandResult.success(command.command_id, "Panggilan berhasil diakhiri dari server.")
+        } catch (e: Exception) {
+            CommandResult.failure(command.command_id, "Gagal mengakhiri panggilan: ${e.message}")
+        }
+    }
 }
+
