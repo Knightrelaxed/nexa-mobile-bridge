@@ -67,6 +67,10 @@ class NexaBridgeService : Service() {
             return activeWebSocketClient?.send(payload) ?: false
         }
 
+        fun isConnected(): Boolean {
+            return activeWebSocketClient?.connectionState?.value is com.nexa.mobilebridge.core.util.ConnectionState.Connected
+        }
+
         fun encodeJson(): kotlinx.serialization.json.Json? = activeJson
     }
 

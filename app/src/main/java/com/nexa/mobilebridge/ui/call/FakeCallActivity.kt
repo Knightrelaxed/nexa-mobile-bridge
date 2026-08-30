@@ -68,7 +68,9 @@ import com.nexa.mobilebridge.protocol.NexaActions
 import com.nexa.mobilebridge.protocol.NexaCommand
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -82,6 +84,16 @@ enum class CallState {
     WAITING_REPLY,      // Recording done — waiting for server audio reply
     REJECTED_SPEAKING,  // User rejected — N.E.X.A speaks last message, no buttons
     FINISHED            // Activity will call finish()
+}
+
+// ─── Live Voice Diagnostic HUD State ──────────────────────────────────────────
+enum class LiveVoiceHudState(val label: String, val colorHex: Long) {
+    LISTENING("Mendengarkan..", 0xFF64FFDA),        // Cyan Glow
+    THINKING("Berpikir..", 0xFF10B981),             // Emerald Green
+    PROCESSING("Memproses..", 0xFFF59E0B),          // Amber Gold
+    SPEAKING("Mentransmisikan..", 0xFF38BDF8),       // Electric Blue
+    SLOW_NETWORK("Jaringan Lemah..", 0xFFFB923C),   // Orange Coral
+    RECONNECTING("Memulihkan Koneksi..", 0xFFEF4444) // Crimson Red
 }
 
 class FakeCallActivity : ComponentActivity() {
@@ -106,6 +118,7 @@ class FakeCallActivity : ComponentActivity() {
 
     // Mutable state hoisted to Activity level so coroutines can update it
     private val callState = mutableStateOf(CallState.RINGING)
+    private val hudState = mutableStateOf(LiveVoiceHudState.LISTENING)
     private val recordingElapsedMs = mutableLongStateOf(0L)
 
     // Track how many times user has rejected (sent to server for importance evaluation)
@@ -129,11 +142,24 @@ class FakeCallActivity : ComponentActivity() {
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
                 val rawJson = intent.getStringExtra("raw_json") ?: return
                 if (rawJson.contains("CALL_AUDIO_PLAY")) {
+                    hudState.value = LiveVoiceHudState.SPEAKING
                     val pcmRegex = Regex("\"pcm_chunk\"\\s*:\\s*\"([^\"]+)\"")
                     val match = pcmRegex.find(rawJson)
                     val pcmChunk = match?.groups?.get(1)?.value
                     if (pcmChunk != null) {
                         voiceStreamHandler.enqueueAudioChunk(pcmChunk)
+                    }
+                } else if (rawJson.contains("CALL_STATUS_UPDATE")) {
+                    if (rawJson.contains("\"THINKING\"")) {
+                        hudState.value = LiveVoiceHudState.THINKING
+                    } else if (rawJson.contains("\"PROCESSING\"")) {
+                        hudState.value = LiveVoiceHudState.PROCESSING
+                    } else if (rawJson.contains("\"SPEAKING\"")) {
+                        hudState.value = LiveVoiceHudState.SPEAKING
+                    } else if (rawJson.contains("\"LISTENING\"")) {
+                        hudState.value = LiveVoiceHudState.LISTENING
+                    } else if (rawJson.contains("\"RECONNECTING\"")) {
+                        hudState.value = LiveVoiceHudState.RECONNECTING
                     }
                 } else if (rawJson.contains("CALL_AUDIO_INTERRUPTED")) {
                     voiceStreamHandler.flushOutputBuffer()
@@ -207,6 +233,7 @@ class FakeCallActivity : ComponentActivity() {
         setContent {
             // Observe state for recomposition
             val state by callState
+            val currentHudState by hudState
             val elapsedMs by recordingElapsedMs
 
             // Start call flow immediately on UI render
@@ -244,6 +271,7 @@ class FakeCallActivity : ComponentActivity() {
                 callerName = callerName,
                 callMessage = callMessage,
                 callState = state,
+                hudState = currentHudState,
                 isLoudspeaker = isLoudspeaker.value,
                 recordingElapsedMs = elapsedMs,
                 onAnswer = { handleAccept() },
@@ -287,6 +315,31 @@ class FakeCallActivity : ComponentActivity() {
                 put("pcm_chunk", pcmChunk)
             }.toString()
             NexaBridgeService.sendEvent(payload)
+        }
+
+        // Real-time HUD State Watchdog
+        lifecycleScope.launch(Dispatchers.Default) {
+            while (isActive && isCallActive) {
+                val isWsConnected = NexaBridgeService.isConnected()
+                val isSpeaking = voiceStreamHandler.isPlayingAudio()
+                val lastAudio = voiceStreamHandler.lastAudioReceivedTime
+                val now = System.currentTimeMillis()
+
+                withContext(Dispatchers.Main) {
+                    if (!isWsConnected) {
+                        hudState.value = LiveVoiceHudState.RECONNECTING
+                    } else if (isSpeaking) {
+                        hudState.value = LiveVoiceHudState.SPEAKING
+                    } else if (hudState.value == LiveVoiceHudState.THINKING || hudState.value == LiveVoiceHudState.PROCESSING) {
+                        if (lastAudio > 0 && now - lastAudio > 4000) {
+                            hudState.value = LiveVoiceHudState.SLOW_NETWORK
+                        }
+                    } else if (hudState.value != LiveVoiceHudState.THINKING && hudState.value != LiveVoiceHudState.PROCESSING && hudState.value != LiveVoiceHudState.SLOW_NETWORK) {
+                        hudState.value = LiveVoiceHudState.LISTENING
+                    }
+                }
+                delay(150)
+            }
         }
     }
 
@@ -498,6 +551,7 @@ fun FakeCallScreen(
     callerName: String,
     callMessage: String,
     callState: CallState,
+    hudState: LiveVoiceHudState = LiveVoiceHudState.LISTENING,
     isLoudspeaker: Boolean = false,
     recordingElapsedMs: Long,
     onAnswer: () -> Unit,
@@ -536,7 +590,7 @@ fun FakeCallScreen(
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 // ── Header ──────────────────────────────────────────────
-                CallHeader(callState = callState, callerName = callerName)
+                CallHeader(callState = callState, hudState = hudState, callerName = callerName)
 
                 // ── Center: Avatar + Message / Recording UI ──────────────
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -654,18 +708,13 @@ fun FakeCallScreen(
                             // ── Left: Loudspeaker Toggle (Icon Only) ──
                             Box(
                                 modifier = Modifier
-                                    .size(68.dp)
+                                    .size(64.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (isLoudspeaker) {
-                                            Brush.radialGradient(
-                                                colors = listOf(Color(0xFF00E5FF), Color(0xFF00838F))
-                                            )
-                                        } else {
-                                            Brush.radialGradient(
-                                                colors = listOf(Color(0xFF1E293B), Color(0xFF0F172A))
-                                            )
-                                        }
+                                        if (isLoudspeaker)
+                                            Brush.radialGradient(listOf(Color(0xFF00E5FF), Color(0xFF0097A7)))
+                                        else
+                                            Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
                                     )
                                     .border(
                                         2.dp,
@@ -721,35 +770,47 @@ fun FakeCallScreen(
 
 // ─── Header Composable ────────────────────────────────────────────────────────
 @Composable
-fun CallHeader(callState: CallState, callerName: String) {
-    val statusText = when (callState) {
-        CallState.RINGING          -> "INCOMING TRANSMISSION"
-        CallState.ACCEPTED_SPEAKING -> "SECURE CONNECTION"
-        CallState.RECORDING        -> "VOICE INPUT ACTIVE"
-        CallState.WAITING_REPLY    -> "PROCESSING REPLY"
-        CallState.REJECTED_SPEAKING -> "LAST MESSAGE"
-        CallState.FINISHED         -> "DISCONNECTING"
-    }
-    val statusColor = when (callState) {
-        CallState.RINGING          -> Color(0xFFFF5252)
-        CallState.ACCEPTED_SPEAKING, CallState.RECORDING -> Color(0xFF64FFDA)
-        CallState.WAITING_REPLY    -> Color(0xFFFFD740)
-        CallState.REJECTED_SPEAKING -> Color(0xFFFF6E40)
-        CallState.FINISHED         -> Color(0xFF8892B0)
-    }
-
+fun CallHeader(
+    callState: CallState,
+    hudState: LiveVoiceHudState = LiveVoiceHudState.LISTENING,
+    callerName: String
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.padding(top = 64.dp)
+        modifier = Modifier.padding(top = 56.dp)
     ) {
-        Text(
-            text = statusText,
-            color = statusColor,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            letterSpacing = 3.sp
-        )
+        if (callState == CallState.RINGING) {
+            Text(
+                text = "INCOMING TRANSMISSION",
+                color = Color(0xFFFF5252),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 3.sp
+            )
+        } else if (callState == CallState.FINISHED) {
+            Text(
+                text = "DISCONNECTING",
+                color = Color(0xFF8892B0),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 3.sp
+            )
+        } else if (callState == CallState.REJECTED_SPEAKING) {
+            Text(
+                text = "LAST MESSAGE",
+                color = Color(0xFFFF6E40),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 3.sp
+            )
+        } else {
+            // Live Active Call: Show clean, executive status pill
+            LiveStatusPill(state = hudState)
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = callerName,
@@ -766,6 +827,49 @@ fun CallHeader(callState: CallState, callerName: String) {
             fontFamily = FontFamily.Monospace,
             letterSpacing = 1.5.sp
         )
+    }
+}
+
+@Composable
+fun LiveStatusPill(state: LiveVoiceHudState, modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "hudPulse")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dotAlpha"
+    )
+    val color = Color(state.colorHex)
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color(0xFF0D1B2A).copy(alpha = 0.85f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.45f)),
+        modifier = modifier
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(color.copy(alpha = dotAlpha))
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = state.label,
+                color = color,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.2.sp
+            )
+        }
     }
 }
 

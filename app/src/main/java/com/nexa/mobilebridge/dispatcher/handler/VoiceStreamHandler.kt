@@ -67,7 +67,8 @@ class VoiceStreamHandler(private val context: Context) {
         private set
 
     @Volatile
-    private var lastAudioReceivedTime: Long = 0L
+    var lastAudioReceivedTime: Long = 0L
+        private set
 
     var isLoudspeakerActive: Boolean = false
         private set

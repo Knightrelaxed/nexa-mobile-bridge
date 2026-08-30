@@ -112,8 +112,8 @@ class NexaWebSocketClient @Inject constructor(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
 
-                // 1. Fast path for Live Voice Stream Events (Audio Play & Interrupted)
-                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY")) {
+                // 1. Fast path for Live Voice Stream Events (Audio Play, Status Updates, Interrupted)
+                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY") || text.contains("CALL_STATUS_UPDATE")) {
                     val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
                         putExtra("raw_json", text)
                         setPackage(context.packageName)
