@@ -1,6 +1,7 @@
-﻿package com.nexa.mobilebridge.ui.call
+package com.nexa.mobilebridge.ui.call
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -19,13 +20,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -36,6 +39,8 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlin.math.abs
 import kotlin.random.Random
 
 /**
@@ -43,6 +48,13 @@ import kotlin.random.Random
  *
  * Vector-rendered Cybernetic OLED Robot Eyes inspired by EMO & Vector robots.
  * Fully continuous fluid morphing across all 6 Call States in Jetpack Compose Canvas.
+ *
+ * Key design principles:
+ *   - PURE EYES ONLY (no mouth/smile on any state including Mentransmisikan)
+ *   - Fluid vector spring morphing, NOT discrete frame/sprite swaps
+ *   - Asymmetric emerald thinking pose (user's explicit design choice)
+ *   - Audio-reactive squash-and-stretch bounce on SPEAKING
+ *   - Decoupled autonomous natural blink engine
  */
 @Composable
 fun NexaExpressiveEyes(
@@ -52,11 +64,22 @@ fun NexaExpressiveEyes(
     modifier: Modifier = Modifier
 ) {
     // ─── 1. Autonomous Decoupled Blink Physics Engine ─────────────────────────────
-    var blinkScaleY by remember { mutableFloatStateOf(1f) }
+    // Uses Animatable for precise frame-aligned blink animation instead of
+    // System.currentTimeMillis() busy-loop which wastes CPU and is imprecise.
+    val blinkAnimatable = remember { Animatable(1f) }
     var eyeSaccadeX by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(hudState) {
-        while (true) {
+    // Smooth the saccade micro-shift so eyes glide rather than snap
+    val animatedSaccadeX by animateFloatAsState(
+        targetValue = eyeSaccadeX,
+        animationSpec = tween(280, easing = FastOutSlowInEasing),
+        label = "SaccadeX"
+    )
+
+    LaunchedEffect(Unit) {
+        // This runs independently of hudState changes so blinks don't restart
+        // when state transitions (which would look unnatural)
+        while (isActive) {
             val nextBlinkInterval = Random.nextLong(3200, 5200)
             delay(nextBlinkInterval)
 
@@ -66,32 +89,62 @@ fun NexaExpressiveEyes(
                 hudState == LiveVoiceHudState.SLOW_NETWORK
             ) {
                 // Natural Saccade Micro-Shift before blinking
-                eyeSaccadeX = Random.nextDouble(-3.0, 3.0).toFloat()
+                eyeSaccadeX = Random.nextFloat() * 6f - 3f
 
                 // Fast Blink Down (70ms)
-                val blinkStart = System.currentTimeMillis()
-                while (System.currentTimeMillis() - blinkStart < 70) {
-                    val progress = (System.currentTimeMillis() - blinkStart) / 70f
-                    blinkScaleY = (1f - (progress * 0.94f)).coerceIn(0.06f, 1f)
-                    delay(16)
-                }
-                blinkScaleY = 0.06f
+                blinkAnimatable.animateTo(
+                    targetValue = 0.06f,
+                    animationSpec = tween(70, easing = FastOutSlowInEasing)
+                )
+
+                // Hold closed briefly
                 delay(20)
 
-                // Springy Blink Up (90ms)
-                val reopenStart = System.currentTimeMillis()
-                while (System.currentTimeMillis() - reopenStart < 90) {
-                    val progress = (System.currentTimeMillis() - reopenStart) / 90f
-                    blinkScaleY = (0.06f + (progress * 0.94f)).coerceIn(0.06f, 1f)
-                    delay(16)
-                }
-                blinkScaleY = 1f
+                // Springy Blink Up (90ms with slight overshoot)
+                blinkAnimatable.animateTo(
+                    targetValue = 1f,
+                    animationSpec = spring(
+                        dampingRatio = 0.6f,
+                        stiffness = Spring.StiffnessHigh
+                    )
+                )
             }
         }
     }
 
-    // ─── 2. Continuous Organic Oscillators ─────────────────────────────────────────
+    // ─── 2. Audio-Reactive Smooth Energy Tracking ──────────────────────────────────
+    // The key fix: audioEnergy from VoiceStreamHandler is a @Volatile var
+    // that Compose cannot observe. We poll it every frame in a LaunchedEffect
+    // and smooth it with exponential moving average for buttery 60fps tracking.
+    var smoothedAudioEnergy by remember { mutableFloatStateOf(0f) }
+    var isCurrentlySpeaking by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        // Continuously sample audioEnergy at frame rate for smooth animation
+        while (isActive) {
+            withFrameMillis { _ ->
+                isCurrentlySpeaking = isSpeaking
+                val target = if (isSpeaking) audioEnergy.coerceIn(0f, 1f) else 0f
+                // Exponential moving average: quick attack (0.35), slower decay (0.12)
+                val smoothingFactor = if (target > smoothedAudioEnergy) 0.35f else 0.12f
+                smoothedAudioEnergy += (target - smoothedAudioEnergy) * smoothingFactor
+            }
+        }
+    }
+
+    // ─── 3. Continuous Organic Oscillators ─────────────────────────────────────────
     val infiniteTransition = rememberInfiniteTransition(label = "EyeOscillators")
+
+    // Subtle organic breathing pulse for LISTENING state
+    val breathingOscillator by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "Breathing"
+    )
 
     // Speech syllable synthetic talk bounce (active during speaking)
     val talkOscillator by infiniteTransition.animateFloat(
@@ -126,20 +179,38 @@ fun NexaExpressiveEyes(
         label = "WarningPulse"
     )
 
-    // ─── 3. State-Driven Fluid Spring Physics Transitions ─────────────────────────
+    // Thinking pupil gentle drift (organic look-around feel)
+    val thinkingDrift by infiniteTransition.animateFloat(
+        initialValue = -1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ThinkingDrift"
+    )
+
+    // ─── 4. State-Driven Fluid Spring Physics Transitions ─────────────────────────
     val springSpec = spring<Float>(
         dampingRatio = 0.65f, // Smooth low-overshoot bounce
         stiffness = Spring.StiffnessMediumLow
     )
+    val fastSpringSpec = spring<Float>(
+        dampingRatio = 0.72f,
+        stiffness = Spring.StiffnessMedium
+    )
 
-    // Effective speech bounce energy combining RMS and synthetic syllable bounce
+    // Effective speech bounce combining smoothed RMS + synthetic syllable oscillation
     val effectiveAudioEnergy = if (hudState == LiveVoiceHudState.SPEAKING) {
-        (audioEnergy.coerceIn(0f, 1f) * 0.7f + talkOscillator * 0.3f)
+        (smoothedAudioEnergy * 0.7f + talkOscillator * 0.3f)
     } else 0f
+
+    // Breathing amplitude for LISTENING
+    val breatheAmplitude = if (hudState == LiveVoiceHudState.LISTENING) breathingOscillator * 3f else 0f
 
     // ── Left Eye Geometries ──
     val targetLeftWidth = when (hudState) {
-        LiveVoiceHudState.LISTENING -> 58f
+        LiveVoiceHudState.LISTENING -> 58f + breatheAmplitude * 0.4f
         LiveVoiceHudState.THINKING -> 74f
         LiveVoiceHudState.PROCESSING -> 106f
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
@@ -147,7 +218,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.RECONNECTING -> 90f
     }
     val targetLeftHeight = when (hudState) {
-        LiveVoiceHudState.LISTENING -> 84f
+        LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
         LiveVoiceHudState.THINKING -> 74f
         LiveVoiceHudState.PROCESSING -> 26f
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
@@ -174,7 +245,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.LISTENING -> 0f
         LiveVoiceHudState.THINKING -> -6f
         LiveVoiceHudState.PROCESSING -> 6f
-        LiveVoiceHudState.SPEAKING -> 0f
+        LiveVoiceHudState.SPEAKING -> -(effectiveAudioEnergy * 3f) // Subtle vertical bounce
         LiveVoiceHudState.SLOW_NETWORK -> 2f
         LiveVoiceHudState.RECONNECTING -> 6f
     }
@@ -184,18 +255,18 @@ fun NexaExpressiveEyes(
         else -> 0f
     }
     val targetLeftPupilX = when (hudState) {
-        LiveVoiceHudState.THINKING -> 0.44f // Looking up-right
+        LiveVoiceHudState.THINKING -> 0.44f + (thinkingDrift * 0.06f)
         else -> 0f
     }
     val targetLeftPupilY = when (hudState) {
-        LiveVoiceHudState.THINKING -> -0.44f // Looking up-right
+        LiveVoiceHudState.THINKING -> -0.44f + (thinkingDrift * 0.04f)
         LiveVoiceHudState.SLOW_NETWORK -> -0.15f
         else -> 0f
     }
 
     // ── Right Eye Geometries ──
     val targetRightWidth = when (hudState) {
-        LiveVoiceHudState.LISTENING -> 58f
+        LiveVoiceHudState.LISTENING -> 58f + breatheAmplitude * 0.4f
         LiveVoiceHudState.THINKING -> 68f
         LiveVoiceHudState.PROCESSING -> 106f
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
@@ -203,7 +274,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.RECONNECTING -> 90f
     }
     val targetRightHeight = when (hudState) {
-        LiveVoiceHudState.LISTENING -> 84f
+        LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
         LiveVoiceHudState.THINKING -> 44f // Squinted thinking
         LiveVoiceHudState.PROCESSING -> 26f
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
@@ -230,7 +301,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.LISTENING -> 0f
         LiveVoiceHudState.THINKING -> -4f
         LiveVoiceHudState.PROCESSING -> 6f
-        LiveVoiceHudState.SPEAKING -> 0f
+        LiveVoiceHudState.SPEAKING -> -(effectiveAudioEnergy * 3f) // Subtle vertical bounce
         LiveVoiceHudState.SLOW_NETWORK -> 2f
         LiveVoiceHudState.RECONNECTING -> 6f
     }
@@ -240,11 +311,11 @@ fun NexaExpressiveEyes(
         else -> 0f
     }
     val targetRightPupilX = when (hudState) {
-        LiveVoiceHudState.THINKING -> 0.38f
+        LiveVoiceHudState.THINKING -> 0.38f + (thinkingDrift * 0.05f)
         else -> 0f
     }
     val targetRightPupilY = when (hudState) {
-        LiveVoiceHudState.THINKING -> -0.35f
+        LiveVoiceHudState.THINKING -> -0.35f + (thinkingDrift * 0.04f)
         LiveVoiceHudState.SLOW_NETWORK -> -0.15f
         else -> 0f
     }
@@ -269,36 +340,91 @@ fun NexaExpressiveEyes(
     }
 
     // ── Fluid Spring Animated Values ──
-    val leftWidth by animateFloatAsState(targetLeftWidth, springSpec, label = "LW")
-    val leftHeight by animateFloatAsState(targetLeftHeight, springSpec, label = "LH")
+    // For SPEAKING state: use fast tween so eyes track audio in real-time
+    // For other states: use spring for organic elastic transitions
+    val speakingTween = tween<Float>(60, easing = FastOutSlowInEasing)
+    val isSpeakingState = hudState == LiveVoiceHudState.SPEAKING
+
+    val leftWidth by animateFloatAsState(
+        targetLeftWidth,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "LW"
+    )
+    val leftHeight by animateFloatAsState(
+        targetLeftHeight,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "LH"
+    )
     val leftCornerRadius by animateFloatAsState(targetLeftCornerRadius, springSpec, label = "LCR")
     val leftRotation by animateFloatAsState(targetLeftRotation, springSpec, label = "LR")
-    val leftOffsetY by animateFloatAsState(targetLeftOffsetY, springSpec, label = "LOY")
+    val leftOffsetY by animateFloatAsState(
+        targetLeftOffsetY,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "LOY"
+    )
     val leftPupilRadius by animateFloatAsState(targetLeftPupilRadius, springSpec, label = "LPR")
-    val leftPupilX by animateFloatAsState(targetLeftPupilX, springSpec, label = "LPX")
-    val leftPupilY by animateFloatAsState(targetLeftPupilY, springSpec, label = "LPY")
+    val leftPupilX by animateFloatAsState(
+        targetLeftPupilX,
+        if (hudState == LiveVoiceHudState.THINKING) tween(900) else springSpec,
+        label = "LPX"
+    )
+    val leftPupilY by animateFloatAsState(
+        targetLeftPupilY,
+        if (hudState == LiveVoiceHudState.THINKING) tween(900) else springSpec,
+        label = "LPY"
+    )
 
-    val rightWidth by animateFloatAsState(targetRightWidth, springSpec, label = "RW")
-    val rightHeight by animateFloatAsState(targetRightHeight, springSpec, label = "RH")
+    val rightWidth by animateFloatAsState(
+        targetRightWidth,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "RW"
+    )
+    val rightHeight by animateFloatAsState(
+        targetRightHeight,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "RH"
+    )
     val rightCornerRadius by animateFloatAsState(targetRightCornerRadius, springSpec, label = "RCR")
     val rightRotation by animateFloatAsState(targetRightRotation, springSpec, label = "RR")
-    val rightOffsetY by animateFloatAsState(targetRightOffsetY, springSpec, label = "ROY")
+    val rightOffsetY by animateFloatAsState(
+        targetRightOffsetY,
+        if (isSpeakingState) speakingTween else springSpec,
+        label = "ROY"
+    )
     val rightPupilRadius by animateFloatAsState(targetRightPupilRadius, springSpec, label = "RPR")
-    val rightPupilX by animateFloatAsState(targetRightPupilX, springSpec, label = "RPX")
-    val rightPupilY by animateFloatAsState(targetRightPupilY, springSpec, label = "RPY")
+    val rightPupilX by animateFloatAsState(
+        targetRightPupilX,
+        if (hudState == LiveVoiceHudState.THINKING) tween(900) else springSpec,
+        label = "RPX"
+    )
+    val rightPupilY by animateFloatAsState(
+        targetRightPupilY,
+        if (hudState == LiveVoiceHudState.THINKING) tween(900) else springSpec,
+        label = "RPY"
+    )
 
-    val coreColor by animateColorAsState(targetCoreColor, tween(320, easing = FastOutSlowInEasing), label = "CoreColor")
-    val glowColor by animateColorAsState(targetGlowColor, tween(320, easing = FastOutSlowInEasing), label = "GlowColor")
+    val coreColor by animateColorAsState(
+        targetCoreColor,
+        tween(450, easing = FastOutSlowInEasing),
+        label = "CoreColor"
+    )
+    val glowColor by animateColorAsState(
+        targetGlowColor,
+        tween(450, easing = FastOutSlowInEasing),
+        label = "GlowColor"
+    )
 
+    // Outer audio ripple alpha (only visible during SPEAKING)
     val outerRippleAlpha by animateFloatAsState(
-        if (hudState == LiveVoiceHudState.SPEAKING) 0.35f + (effectiveAudioEnergy * 0.65f) else 0f,
-        springSpec,
+        if (hudState == LiveVoiceHudState.SPEAKING) 0.35f + (smoothedAudioEnergy * 0.65f) else 0f,
+        tween(120),
         label = "RippleAlpha"
     )
 
+    // Reconnecting warning blink effect
     val eyeAlpha = if (hudState == LiveVoiceHudState.RECONNECTING) warningPulse else 1f
 
-    // ─── 4. Drawing Canvas ────────────────────────────────────────────────────────
+    // ─── 5. Drawing Canvas ────────────────────────────────────────────────────────
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -316,18 +442,19 @@ fun NexaExpressiveEyes(
 
             // Eye center spacing
             val eyeSpacing = 72.dp.toPx()
-            val leftEyeCenterX = centerX - eyeSpacing + (eyeSaccadeX.dp.toPx())
-            val rightEyeCenterX = centerX + eyeSpacing + (eyeSaccadeX.dp.toPx())
+            val saccadeOffset = animatedSaccadeX.dp.toPx()
+            val leftEyeCenterX = centerX - eyeSpacing + saccadeOffset
+            val rightEyeCenterX = centerX + eyeSpacing + saccadeOffset
 
             // ── Draw Outer Audio Ripples (when speaking) ──
-            if (outerRippleAlpha > 0.05f) {
+            if (outerRippleAlpha > 0.01f) {
                 drawOuterAudioRipples(
                     leftCenterX = leftEyeCenterX,
                     rightCenterX = rightEyeCenterX,
                     centerY = centerY,
                     color = coreColor,
                     alpha = outerRippleAlpha,
-                    audioEnergy = effectiveAudioEnergy
+                    audioEnergy = smoothedAudioEnergy
                 )
             }
 
@@ -344,7 +471,7 @@ fun NexaExpressiveEyes(
                 pupilNormY = leftPupilY,
                 coreColor = coreColor,
                 glowColor = glowColor,
-                blinkScaleY = blinkScaleY,
+                blinkScaleY = blinkAnimatable.value,
                 isVisor = (hudState == LiveVoiceHudState.PROCESSING || hudState == LiveVoiceHudState.RECONNECTING),
                 scanShimmer = scanShimmer
             )
@@ -362,7 +489,7 @@ fun NexaExpressiveEyes(
                 pupilNormY = rightPupilY,
                 coreColor = coreColor,
                 glowColor = glowColor,
-                blinkScaleY = blinkScaleY,
+                blinkScaleY = blinkAnimatable.value,
                 isVisor = (hudState == LiveVoiceHudState.PROCESSING || hudState == LiveVoiceHudState.RECONNECTING),
                 scanShimmer = scanShimmer
             )
@@ -389,29 +516,33 @@ private fun DrawScope.drawSingleEye(
     isVisor: Boolean,
     scanShimmer: Float
 ) {
+    // Guard: skip drawing if size is negligible (prevents NaN/artifact issues)
+    if (width < 1f || height < 1f) return
+
     rotate(degrees = rotationDegrees, pivot = Offset(centerX, centerY)) {
         scale(scaleX = 1f, scaleY = blinkScaleY, pivot = Offset(centerX, centerY)) {
 
+            val effectiveHeight = height * blinkScaleY
             val left = centerX - (width / 2f)
-            val top = centerY - (height / 2f)
-            val rectSize = Size(width, height)
-            val safeCornerRadius = CornerRadius(cornerRadius.coerceAtMost(height / 2f))
+            val top = centerY - (effectiveHeight / 2f)
+            val rectSize = Size(width, effectiveHeight)
+            val safeCornerRadius = CornerRadius(
+                cornerRadius.coerceAtMost(effectiveHeight / 2f).coerceAtMost(width / 2f)
+            )
 
             // 1. Layer 1: Outer Neon Bloom Glow (1.35x enlarged, soft alpha)
             val glowPaddingX = width * 0.16f
-            val glowPaddingY = height * 0.16f
-            val glowRect = RoundRect(
-                left = left - glowPaddingX,
-                top = top - glowPaddingY,
-                right = left + width + glowPaddingX,
-                bottom = top + height + glowPaddingY,
-                cornerRadius = CornerRadius((cornerRadius + glowPaddingX).coerceAtMost((height + glowPaddingY * 2) / 2f))
+            val glowPaddingY = effectiveHeight * 0.16f
+            val glowCorner = CornerRadius(
+                (cornerRadius + glowPaddingX)
+                    .coerceAtMost((effectiveHeight + glowPaddingY * 2) / 2f)
+                    .coerceAtMost((width + glowPaddingX * 2) / 2f)
             )
             drawRoundRect(
-                color = glowColor.copy(alpha = 0.28f),
-                topLeft = Offset(glowRect.left, glowRect.top),
-                size = Size(glowRect.width, glowRect.height),
-                cornerRadius = glowRect.topLeftCornerRadius
+                color = glowColor.copy(alpha = (glowColor.alpha * 0.7f).coerceIn(0f, 1f)),
+                topLeft = Offset(left - glowPaddingX, top - glowPaddingY),
+                size = Size(width + glowPaddingX * 2, effectiveHeight + glowPaddingY * 2),
+                cornerRadius = glowCorner
             )
 
             // 2. Layer 2: Core Neon Solid Eye Shape
@@ -423,9 +554,9 @@ private fun DrawScope.drawSingleEye(
             )
 
             // 3. Layer 3: Pupil Cutout (Dark true-AMOLED iris inside the glowing eye)
-            if (pupilRadius > 1.5f) {
-                val maxPupilOffsetX = (width / 2f) - pupilRadius - 4f
-                val maxPupilOffsetY = (height / 2f) - pupilRadius - 4f
+            if (pupilRadius > 1.5f && effectiveHeight > pupilRadius * 2) {
+                val maxPupilOffsetX = ((width / 2f) - pupilRadius - 4f).coerceAtLeast(0f)
+                val maxPupilOffsetY = ((effectiveHeight / 2f) - pupilRadius - 4f).coerceAtLeast(0f)
                 val pupilCenterX = centerX + (pupilNormX * maxPupilOffsetX)
                 val pupilCenterY = centerY + (pupilNormY * maxPupilOffsetY)
 
@@ -445,13 +576,15 @@ private fun DrawScope.drawSingleEye(
                 )
             }
 
-            // 4. Layer 4: Visor Internal Scanning Line (Active during Processing)
-            if (isVisor && width > 60f) {
-                val shimmerX = centerX + (scanShimmer * (width / 2f))
+            // 4. Layer 4: Visor Internal Scanning Line (Active during Processing/Reconnecting)
+            // Use dp-based threshold to ensure scanline only appears on wide visor shapes
+            if (isVisor && width > 60.dp.toPx() * 0.5f) {
+                val shimmerX = centerX + (scanShimmer * (width * 0.42f))
+                val scanAlpha = (1f - abs(scanShimmer) * 0.3f).coerceIn(0.4f, 0.8f)
                 drawLine(
-                    color = Color.White.copy(alpha = 0.7f),
+                    color = Color.White.copy(alpha = scanAlpha),
                     start = Offset(shimmerX, top + 3f),
-                    end = Offset(shimmerX, top + height - 3f),
+                    end = Offset(shimmerX, top + effectiveHeight - 3f),
                     strokeWidth = 3.dp.toPx(),
                     cap = StrokeCap.Round
                 )
@@ -471,54 +604,56 @@ private fun DrawScope.drawOuterAudioRipples(
     alpha: Float,
     audioEnergy: Float
 ) {
-    val strokeWidth = (2.5f + audioEnergy * 1.5f).dp.toPx()
-    val arcHeight = (46f + audioEnergy * 24f).dp.toPx()
+    val clampedEnergy = audioEnergy.coerceIn(0f, 1f)
+    val strokeWidth = (2.5f + clampedEnergy * 1.5f).dp.toPx()
+    val arcHeight = (46f + clampedEnergy * 24f).dp.toPx()
 
     // Outer Left Waves
-    val leftOffset1 = leftCenterX - 48.dp.toPx() - (audioEnergy * 8.dp.toPx())
-    val leftOffset2 = leftCenterX - 62.dp.toPx() - (audioEnergy * 14.dp.toPx())
+    val leftOffset1 = leftCenterX - 48.dp.toPx() - (clampedEnergy * 8.dp.toPx())
+    val leftOffset2 = leftCenterX - 62.dp.toPx() - (clampedEnergy * 14.dp.toPx())
+    val arcWidth = 20.dp.toPx()
 
     drawArc(
-        color = color.copy(alpha = alpha * 0.85f),
+        color = color.copy(alpha = (alpha * 0.85f).coerceIn(0f, 1f)),
         startAngle = 120f,
         sweepAngle = 120f,
         useCenter = false,
-        topLeft = Offset(leftOffset1 - 10.dp.toPx(), centerY - (arcHeight / 2f)),
-        size = Size(20.dp.toPx(), arcHeight),
+        topLeft = Offset(leftOffset1 - arcWidth / 2, centerY - (arcHeight / 2f)),
+        size = Size(arcWidth, arcHeight),
         style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
     )
 
     drawArc(
-        color = color.copy(alpha = alpha * 0.45f),
+        color = color.copy(alpha = (alpha * 0.45f).coerceIn(0f, 1f)),
         startAngle = 120f,
         sweepAngle = 120f,
         useCenter = false,
-        topLeft = Offset(leftOffset2 - 10.dp.toPx(), centerY - (arcHeight * 0.8f / 2f)),
-        size = Size(20.dp.toPx(), arcHeight * 0.8f),
+        topLeft = Offset(leftOffset2 - arcWidth / 2, centerY - (arcHeight * 0.8f / 2f)),
+        size = Size(arcWidth, arcHeight * 0.8f),
         style = Stroke(width = strokeWidth * 0.8f, cap = StrokeCap.Round)
     )
 
     // Outer Right Waves
-    val rightOffset1 = rightCenterX + 48.dp.toPx() + (audioEnergy * 8.dp.toPx())
-    val rightOffset2 = rightCenterX + 62.dp.toPx() + (audioEnergy * 14.dp.toPx())
+    val rightOffset1 = rightCenterX + 48.dp.toPx() + (clampedEnergy * 8.dp.toPx())
+    val rightOffset2 = rightCenterX + 62.dp.toPx() + (clampedEnergy * 14.dp.toPx())
 
     drawArc(
-        color = color.copy(alpha = alpha * 0.85f),
+        color = color.copy(alpha = (alpha * 0.85f).coerceIn(0f, 1f)),
         startAngle = -60f,
         sweepAngle = 120f,
         useCenter = false,
-        topLeft = Offset(rightOffset1 - 10.dp.toPx(), centerY - (arcHeight / 2f)),
-        size = Size(20.dp.toPx(), arcHeight),
+        topLeft = Offset(rightOffset1 - arcWidth / 2, centerY - (arcHeight / 2f)),
+        size = Size(arcWidth, arcHeight),
         style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
     )
 
     drawArc(
-        color = color.copy(alpha = alpha * 0.45f),
+        color = color.copy(alpha = (alpha * 0.45f).coerceIn(0f, 1f)),
         startAngle = -60f,
         sweepAngle = 120f,
         useCenter = false,
-        topLeft = Offset(rightOffset2 - 10.dp.toPx(), centerY - (arcHeight * 0.8f / 2f)),
-        size = Size(20.dp.toPx(), arcHeight * 0.8f),
+        topLeft = Offset(rightOffset2 - arcWidth / 2, centerY - (arcHeight * 0.8f / 2f)),
+        size = Size(arcWidth, arcHeight * 0.8f),
         style = Stroke(width = strokeWidth * 0.8f, cap = StrokeCap.Round)
     )
 }
