@@ -93,7 +93,8 @@ enum class LiveVoiceHudState(val label: String, val colorHex: Long) {
     PROCESSING("Memproses..", 0xFFF59E0B),          // Amber Gold
     SPEAKING("Mentransmisikan..", 0xFF38BDF8),       // Electric Blue
     SLOW_NETWORK("Jaringan Lemah..", 0xFFFB923C),   // Orange Coral
-    RECONNECTING("Memulihkan Koneksi..", 0xFFEF4444) // Crimson Red
+    RECONNECTING("Memulihkan Koneksi..", 0xFFEF4444),// Crimson Red
+    DISCONNECTING("Mengakhiri..", 0xFF94A3B8)       // Slate Gray
 }
 
 class FakeCallActivity : ComponentActivity() {
@@ -132,21 +133,24 @@ class FakeCallActivity : ComponentActivity() {
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE" || intent?.action == "com.nexa.mobilebridge.END_CALL") {
-                Log.i(TAG, "📩 End Call signal received — waiting for audio playback to finish cleanly")
+                Log.i(TAG, "📩 End Call signal received — waiting for farewell audio playback to finish cleanly")
+                hudState.value = LiveVoiceHudState.DISCONNECTING
                 lifecycleScope.launch(Dispatchers.Main) {
                     var waitLoops = 0
-                    while (voiceStreamHandler.isPlayingAudio() && waitLoops < 50) {
-                        kotlinx.coroutines.delay(100)
+                    while (voiceStreamHandler.isPlayingAudio() && waitLoops < 60) {
+                        kotlinx.coroutines.delay(50)
                         waitLoops++
                     }
-                    kotlinx.coroutines.delay(400) // Natural silence tail before closing UI
+                    kotlinx.coroutines.delay(300) // Natural silence tail before closing UI
                     voiceStreamHandler.stopStreaming()
                     callState.value = CallState.FINISHED
                 }
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
                 val rawJson = intent.getStringExtra("raw_json") ?: return
                 if (rawJson.contains("CALL_AUDIO_PLAY")) {
-                    hudState.value = LiveVoiceHudState.SPEAKING
+                    if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                        hudState.value = LiveVoiceHudState.SPEAKING
+                    }
                     pendingStateEntryTime = 0L // Reset — no longer pending
                     val pcmRegex = Regex("\"pcm_chunk\"\\s*:\\s*\"([^\"]+)\"")
                     val match = pcmRegex.find(rawJson)
@@ -155,7 +159,12 @@ class FakeCallActivity : ComponentActivity() {
                         voiceStreamHandler.enqueueAudioChunk(pcmChunk)
                     }
                 } else if (rawJson.contains("CALL_STATUS_UPDATE")) {
-                    if (rawJson.contains("\"THINKING\"")) {
+                    if (rawJson.contains("\"DISCONNECTING\"")) {
+                        hudState.value = LiveVoiceHudState.DISCONNECTING
+                        pendingStateEntryTime = 0L
+                    } else if (hudState.value == LiveVoiceHudState.DISCONNECTING) {
+                        // Ignore state resets if call is already disconnecting
+                    } else if (rawJson.contains("\"THINKING\"")) {
                         hudState.value = LiveVoiceHudState.THINKING
                         pendingStateEntryTime = System.currentTimeMillis()
                     } else if (rawJson.contains("\"PROCESSING\"")) {
