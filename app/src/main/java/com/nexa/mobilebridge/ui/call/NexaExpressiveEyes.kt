@@ -216,6 +216,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
         LiveVoiceHudState.SLOW_NETWORK -> 64f
         LiveVoiceHudState.RECONNECTING -> 90f
+        LiveVoiceHudState.DISCONNECTING -> 60f
     }
     val targetLeftHeight = when (hudState) {
         LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
@@ -224,6 +225,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
         LiveVoiceHudState.SLOW_NETWORK -> 44f
         LiveVoiceHudState.RECONNECTING -> 22f
+        LiveVoiceHudState.DISCONNECTING -> 6f // Gentle eye close
     }
     val targetLeftCornerRadius = when (hudState) {
         LiveVoiceHudState.LISTENING -> 29f
@@ -232,6 +234,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 29f
         LiveVoiceHudState.SLOW_NETWORK -> 22f
         LiveVoiceHudState.RECONNECTING -> 11f
+        LiveVoiceHudState.DISCONNECTING -> 3f
     }
     val targetLeftRotation = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
@@ -240,6 +243,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> -10f // Droop puzzled
         LiveVoiceHudState.RECONNECTING -> 0f
+        LiveVoiceHudState.DISCONNECTING -> 0f
     }
     val targetLeftOffsetY = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
@@ -248,6 +252,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> -(effectiveAudioEnergy * 3f) // Subtle vertical bounce
         LiveVoiceHudState.SLOW_NETWORK -> 2f
         LiveVoiceHudState.RECONNECTING -> 6f
+        LiveVoiceHudState.DISCONNECTING -> 4f
     }
     val targetLeftPupilRadius = when (hudState) {
         LiveVoiceHudState.THINKING -> 22f
@@ -272,6 +277,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
         LiveVoiceHudState.SLOW_NETWORK -> 62f
         LiveVoiceHudState.RECONNECTING -> 90f
+        LiveVoiceHudState.DISCONNECTING -> 60f
     }
     val targetRightHeight = when (hudState) {
         LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
@@ -280,6 +286,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
         LiveVoiceHudState.SLOW_NETWORK -> 48f
         LiveVoiceHudState.RECONNECTING -> 22f
+        LiveVoiceHudState.DISCONNECTING -> 6f // Gentle eye close
     }
     val targetRightCornerRadius = when (hudState) {
         LiveVoiceHudState.LISTENING -> 29f
@@ -288,6 +295,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 29f
         LiveVoiceHudState.SLOW_NETWORK -> 24f
         LiveVoiceHudState.RECONNECTING -> 11f
+        LiveVoiceHudState.DISCONNECTING -> 3f
     }
     val targetRightRotation = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
@@ -296,6 +304,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> 8f
         LiveVoiceHudState.RECONNECTING -> 0f
+        LiveVoiceHudState.DISCONNECTING -> 0f
     }
     val targetRightOffsetY = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
@@ -304,6 +313,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> -(effectiveAudioEnergy * 3f) // Subtle vertical bounce
         LiveVoiceHudState.SLOW_NETWORK -> 2f
         LiveVoiceHudState.RECONNECTING -> 6f
+        LiveVoiceHudState.DISCONNECTING -> 4f
     }
     val targetRightPupilRadius = when (hudState) {
         LiveVoiceHudState.THINKING -> 16f
@@ -328,6 +338,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> Color(0xFF38BDF8) // Electric Blue
         LiveVoiceHudState.SLOW_NETWORK -> Color(0xFFFB923C) // Orange Coral
         LiveVoiceHudState.RECONNECTING -> Color(0xFFEF4444) // Crimson Red
+        LiveVoiceHudState.DISCONNECTING -> Color(0xFF94A3B8) // Slate Gray
     }
 
     val targetGlowColor = when (hudState) {
@@ -337,6 +348,7 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.SPEAKING -> Color(0xFF38BDF8).copy(alpha = 0.50f)
         LiveVoiceHudState.SLOW_NETWORK -> Color(0xFFFB923C).copy(alpha = 0.40f)
         LiveVoiceHudState.RECONNECTING -> Color(0xFFEF4444).copy(alpha = 0.55f)
+        LiveVoiceHudState.DISCONNECTING -> Color(0xFF94A3B8).copy(alpha = 0.20f)
     }
 
     // ── Fluid Spring Animated Values ──
