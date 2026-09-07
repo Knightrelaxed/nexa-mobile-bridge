@@ -124,8 +124,12 @@ class NexaBridgeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildServiceNotification()
-        startForeground(NOTIF_SERVICE_ID, notification)
+        try {
+            val notification = buildServiceNotification()
+            startForeground(NOTIF_SERVICE_ID, notification)
+        } catch (e: Exception) {
+            Log.e("NexaBridge", "Failed to start foreground notification: ${e.message}", e)
+        }
 
         // Intercept action from SafeBankingLauncherActivity
         if (intent?.action == "com.nexa.mobilebridge.ACTION_START_USAGE_OBSERVER") {
@@ -571,16 +575,14 @@ class NexaBridgeService : Service() {
     }
 
     /**
-     * Accessibility Self-Healing Watchdog
-     * Memeriksa setiap 25 detik: Jika toggle Accessibility N.E.X.A di Settings aktif (ON),
-     * tetapi instance NexaAccessibilityService masih null (terputus/crashed/status 'Not working'),
-     * lakukan siklus secure-settings untuk memicu binder IPC Android framework tanpa perlu toggle manual di Settings.
+     * Accessibility Health Monitor
+     * Memantau status keterikatan NexaAccessibilityService secara pasif tanpa melakukan
+     * manipulasi siklus cabut-pasang Settings.Secure yang dapat memicu thrashing di Android OS.
      */
     private fun launchAccessibilitySelfHealingWatchdog() {
         serviceScope.launch {
-            val componentName = "com.nexa.mobilebridge/com.nexa.mobilebridge.NexaAccessibilityService"
             while (isActive) {
-                kotlinx.coroutines.delay(25_000)
+                kotlinx.coroutines.delay(60_000)
                 try {
                     val cr = applicationContext.contentResolver
                     val enabledServices = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
@@ -588,24 +590,18 @@ class NexaBridgeService : Service() {
                     val isServiceAlive = NexaAccessibilityService.instance != null
 
                     if (isConfiguredOn && !isServiceAlive) {
-                        Log.w("NexaBridge", "⚠️ Accessibility Watchdog: Setting is ON but service is UNBOUND ('Not working'). Auto-healing...")
-                        
-                        // Siklus secure-settings: cabut sebentar lalu pasang kembali
-                        val filtered = enabledServices.split(":").filter { !it.contains("com.nexa.mobilebridge") }.joinToString(":")
-                        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, filtered)
-                        kotlinx.coroutines.delay(600)
-
-                        val restored = if (filtered.isBlank()) componentName else "$filtered:$componentName"
-                        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, restored)
-                        Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-
-                        Log.i("NexaBridge", "✅ Accessibility Watchdog: Rebound signal sent. Service recovered from 'Not working' state.")
+                        Log.d("NexaBridge", "Accessibility Monitor: Setting is ON, waiting for system binding.")
                     }
                 } catch (e: Exception) {
-                    Log.w("NexaBridge", "Accessibility Watchdog check notice: ${e.message}")
+                    Log.w("NexaBridge", "Accessibility Monitor check notice: ${e.message}")
                 }
             }
         }
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        super.onTimeout(startId, fgsType)
+        Log.w("NexaBridge", "Foreground service onTimeout signal received (type: $fgsType)")
     }
 
     private fun buildServiceNotification(): Notification {

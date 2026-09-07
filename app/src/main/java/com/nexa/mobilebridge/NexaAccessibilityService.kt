@@ -29,6 +29,11 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -43,30 +48,40 @@ class NexaAccessibilityService : AccessibilityService() {
             private set
     }
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
 
-        // ══════════════════════════════════════════════════════════
-        // CRITICAL: Explicitly set FLAG_REQUEST_FILTER_KEY_EVENTS
-        // at runtime to ensure Android delivers hardware key events
-        // ══════════════════════════════════════════════════════════
-        val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
-        info.flags = info.flags or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-        serviceInfo = info
+        try {
+            val info = serviceInfo
+            if (info != null) {
+                info.flags = info.flags or
+                        android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+                        android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                        android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+                serviceInfo = info
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error configuring serviceInfo flags: ${e.message}")
+        }
 
-        Log.i(TAG, " NexaAccessibilityService connected with Key Event Filtering active (flags=${info.flags})")
+        // Ensure companion NexaBridgeService is active in foreground
+        ensureBridgeServiceRunning()
+
+        Log.i(TAG, "NexaAccessibilityService connected with Key Event Filtering active.")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
         try {
-            if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 val pkg = event.packageName?.toString()
                 if (!pkg.isNullOrEmpty()) {
-                    com.nexa.mobilebridge.core.usage.AppUsageTracker.onForegroundAppChanged(this, pkg)
+                    serviceScope.launch(Dispatchers.IO) {
+                        com.nexa.mobilebridge.core.usage.AppUsageTracker.onForegroundAppChanged(applicationContext, pkg)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -80,8 +95,24 @@ class NexaAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
-        Log.i(TAG, "⚠️ NexaAccessibilityService unbind called.")
-        return super.onUnbind(intent)
+        Log.i(TAG, "NexaAccessibilityService unbind called.")
+        return true // Request onRebind when system reconnects
+    }
+
+    override fun onRebind(intent: Intent?) {
+        super.onRebind(intent)
+        instance = this
+        ensureBridgeServiceRunning()
+        Log.i(TAG, "NexaAccessibilityService rebound successfully.")
+    }
+
+    override fun onDestroy() {
+        instance = null
+        try {
+            serviceScope.cancel()
+        } catch (_: Exception) {}
+        super.onDestroy()
+        Log.i(TAG, "NexaAccessibilityService destroyed.")
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -117,7 +148,9 @@ class NexaAccessibilityService : AccessibilityService() {
                                 isVolumeUpHeld = false
                                 isVolumeDownHeld = false
                                 Log.i(TAG, "Volume Chord (Up + Down) terdeteksi. Memeriksa konektivitas...")
-                                handleVolumeChordTriggered()
+                                serviceScope.launch(Dispatchers.IO) {
+                                    handleVolumeChordTriggered()
+                                }
                                 return true
                             }
                         }
@@ -141,7 +174,9 @@ class NexaAccessibilityService : AccessibilityService() {
                                 isVolumeUpHeld = false
                                 isVolumeDownHeld = false
                                 Log.i(TAG, "Volume Chord (Down + Up) terdeteksi. Memeriksa konektivitas...")
-                                handleVolumeChordTriggered()
+                                serviceScope.launch(Dispatchers.IO) {
+                                    handleVolumeChordTriggered()
+                                }
                                 return true
                             }
                         }
