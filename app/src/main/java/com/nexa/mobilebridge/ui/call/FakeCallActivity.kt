@@ -981,11 +981,11 @@ fun FakeCallScreen(
                             )
                         }
                     } else if (isCameraActive) {
-                        // Live Multimodal Video Call Camera Preview
+                        // Live Multimodal Video Call Camera Preview (3:4 Vertical Aspect Ratio)
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(320.dp)
+                                .fillMaxWidth(0.90f)
+                                .aspectRatio(3f / 4f)
                                 .clip(RoundedCornerShape(24.dp))
                                 .border(
                                     2.dp,
@@ -995,6 +995,7 @@ fun FakeCallScreen(
                                 .background(Color(0xFF0D1B2A)),
                             contentAlignment = Alignment.Center
                         ) {
+
                             AndroidView(
                                 factory = { ctx ->
                                     PreviewView(ctx).apply {
