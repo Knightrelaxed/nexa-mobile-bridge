@@ -20,6 +20,15 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.nexa.mobilebridge.ui.call.FakeCallActivity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -49,15 +58,19 @@ class NexaAccessibilityService : AccessibilityService() {
                 android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         serviceInfo = info
 
-        Log.i(TAG, "✅ NexaAccessibilityService connected with Key Event Filtering active (flags=${info.flags})")
+        Log.i(TAG, " NexaAccessibilityService connected with Key Event Filtering active (flags=${info.flags})")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString()
-            if (!pkg.isNullOrEmpty()) {
-                com.nexa.mobilebridge.core.usage.AppUsageTracker.onForegroundAppChanged(this, pkg)
+        try {
+            if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                val pkg = event.packageName?.toString()
+                if (!pkg.isNullOrEmpty()) {
+                    com.nexa.mobilebridge.core.usage.AppUsageTracker.onForegroundAppChanged(this, pkg)
+                }
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "onAccessibilityEvent error: ${e.message}")
         }
     }
 
@@ -67,6 +80,7 @@ class NexaAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        Log.i(TAG, "⚠️ NexaAccessibilityService unbind called.")
         return super.onUnbind(intent)
     }
 
@@ -78,67 +92,128 @@ class NexaAccessibilityService : AccessibilityService() {
     private var lastVolumeUpPressTime: Long = 0L
     private var lastVolumeDownPressTime: Long = 0L
     private var lastChordTriggerTime: Long = 0L
-    private val CHORD_WINDOW_MS: Long = 500L
+    private val CHORD_WINDOW_MS: Long = 750L // Expanded window for natural chord pressing
     private val CHORD_DEBOUNCE_MS: Long = 2000L
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (event == null) return super.onKeyEvent(event)
 
-        val now = System.currentTimeMillis()
+        try {
+            val now = System.currentTimeMillis()
 
-        when (event.keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP -> {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    isVolumeUpHeld = true
-                    lastVolumeUpPressTime = now
-                    val diffDown = now - lastVolumeDownPressTime
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        isVolumeUpHeld = true
+                        lastVolumeUpPressTime = now
+                        val diffDown = now - lastVolumeDownPressTime
 
-                    Log.d(TAG, "Volume Up DOWN: isVolDownHeld=$isVolumeDownHeld, diffDown=${diffDown}ms")
+                        Log.d(TAG, "Volume Up DOWN: isVolDownHeld=$isVolumeDownHeld, diffDown=${diffDown}ms")
 
-                    // Check if Volume Down is currently held or was pressed within CHORD_WINDOW_MS
-                    if (isVolumeDownHeld || (diffDown in 1..CHORD_WINDOW_MS)) {
-                        if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
-                            lastChordTriggerTime = now
-                            isVolumeUpHeld = false
-                            isVolumeDownHeld = false
-                            Log.i(TAG, "📞 Volume Chord (Up + Down) detected! -> Triggering Outgoing Nexa Call")
-                            triggerDoubleVibration()
-                            launchOutgoingNexaCall()
-                            return true
+                        // Check if Volume Down is currently held or was pressed within CHORD_WINDOW_MS
+                        if (isVolumeDownHeld || (diffDown in 1..CHORD_WINDOW_MS)) {
+                            if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
+                                lastChordTriggerTime = now
+                                isVolumeUpHeld = false
+                                isVolumeDownHeld = false
+                                Log.i(TAG, "Volume Chord (Up + Down) terdeteksi. Memeriksa konektivitas...")
+                                handleVolumeChordTriggered()
+                                return true
+                            }
                         }
+                    } else if (event.action == KeyEvent.ACTION_UP) {
+                        isVolumeUpHeld = false
                     }
-                } else if (event.action == KeyEvent.ACTION_UP) {
-                    isVolumeUpHeld = false
+                }
+
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        isVolumeDownHeld = true
+                        lastVolumeDownPressTime = now
+                        val diffUp = now - lastVolumeUpPressTime
+
+                        Log.d(TAG, "Volume Down DOWN: isVolUpHeld=$isVolumeUpHeld, diffUp=${diffUp}ms")
+
+                        // Check if Volume Up is currently held or was pressed within CHORD_WINDOW_MS
+                        if (isVolumeUpHeld || (diffUp in 1..CHORD_WINDOW_MS)) {
+                            if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
+                                lastChordTriggerTime = now
+                                isVolumeUpHeld = false
+                                isVolumeDownHeld = false
+                                Log.i(TAG, "Volume Chord (Down + Up) terdeteksi. Memeriksa konektivitas...")
+                                handleVolumeChordTriggered()
+                                return true
+                            }
+                        }
+                    } else if (event.action == KeyEvent.ACTION_UP) {
+                        isVolumeDownHeld = false
+                    }
                 }
             }
-
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    isVolumeDownHeld = true
-                    lastVolumeDownPressTime = now
-                    val diffUp = now - lastVolumeUpPressTime
-
-                    Log.d(TAG, "Volume Down DOWN: isVolUpHeld=$isVolumeUpHeld, diffUp=${diffUp}ms")
-
-                    // Check if Volume Up is currently held or was pressed within CHORD_WINDOW_MS
-                    if (isVolumeUpHeld || (diffUp in 1..CHORD_WINDOW_MS)) {
-                        if (now - lastChordTriggerTime > CHORD_DEBOUNCE_MS) {
-                            lastChordTriggerTime = now
-                            isVolumeUpHeld = false
-                            isVolumeDownHeld = false
-                            Log.i(TAG, "📞 Volume Chord (Down + Up) detected! -> Triggering Outgoing Nexa Call")
-                            triggerDoubleVibration()
-                            launchOutgoingNexaCall()
-                            return true
-                        }
-                    }
-                } else if (event.action == KeyEvent.ACTION_UP) {
-                    isVolumeDownHeld = false
-                }
-            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onKeyEvent: ${e.message}", e)
         }
 
         return super.onKeyEvent(event)
+    }
+
+    private fun isInternetAvailable(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val activeNetwork = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun handleVolumeChordTriggered() {
+        val hasInternet = isInternetAvailable()
+        val isBridgeConnected = NexaBridgeService.isConnected()
+
+        if (!hasInternet) {
+            Log.w(TAG, "Panggilan keluar dibatalkan: Tidak ada koneksi internet.")
+            triggerErrorVibration()
+            showCallFailureNotification(
+                title = "Panggilan N.E.X.A Gagal",
+                message = "Tidak ada koneksi internet. Sambungkan perangkat ke Wi-Fi atau data seluler untuk melakukan panggilan."
+            )
+            showToast("Panggilan N.E.X.A Gagal: Tidak ada koneksi internet.")
+            ensureBridgeServiceRunning()
+            return
+        }
+
+        if (!isBridgeConnected) {
+            Log.w(TAG, "Panggilan keluar dibatalkan: NexaBridgeService belum terhubung ke server.")
+            triggerErrorVibration()
+            showCallFailureNotification(
+                title = "Panggilan N.E.X.A Gagal",
+                message = "Koneksi ke server N.E.X.A belum terhubung. Sedang mencoba menghubungkan ulang..."
+            )
+            showToast("Panggilan N.E.X.A Gagal: Sedang menghubungkan ulang ke server...")
+            NexaBridgeService.reconnect()
+            ensureBridgeServiceRunning()
+            return
+        }
+
+        // Keduanya valid (internet aktif & bridge terhubung)
+        Log.i(TAG, "Koneksi terverifikasi -> Menjalankan Panggilan N.E.X.A")
+        triggerDoubleVibration()
+        launchOutgoingNexaCall()
+    }
+
+    private fun ensureBridgeServiceRunning() {
+        try {
+            val serviceIntent = Intent(this, NexaBridgeService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal memastikan NexaBridgeService berjalan: ${e.message}")
+        }
     }
 
     private fun triggerDoubleVibration() {
@@ -160,6 +235,80 @@ class NexaAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Vibration feedback error: ${e.message}")
+        }
+    }
+
+    private fun triggerErrorVibration() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                val vibrator = vibratorManager?.defaultVibrator
+                val effect = VibrationEffect.createWaveform(
+                    longArrayOf(0, 120, 100, 120, 100, 120),
+                    intArrayOf(0, 255, 0, 255, 0, 255),
+                    -1
+                )
+                vibrator?.vibrate(effect)
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(longArrayOf(0, 120, 100, 120, 100, 120), -1)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error vibration feedback error: ${e.message}")
+        }
+    }
+
+    private fun showCallFailureNotification(title: String, message: String) {
+        try {
+            val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channelId = "nexa_call_alert_channel"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    channelId,
+                    "N.E.X.A Bridge — Notifikasi Panggilan",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Pemberitahuan status panggilan N.E.X.A"
+                    enableLights(true)
+                    enableVibration(true)
+                }
+                notifManager.createNotificationChannel(channel)
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notif = NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_ERROR)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            notifManager.notify(2001, notif)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show call failure notification: ${e.message}", e)
+        }
+    }
+
+    private fun showToast(text: String) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {}
         }
     }
 

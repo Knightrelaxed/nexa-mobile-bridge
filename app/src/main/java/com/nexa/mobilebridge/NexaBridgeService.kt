@@ -15,6 +15,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -69,6 +70,10 @@ class NexaBridgeService : Service() {
 
         fun isConnected(): Boolean {
             return activeWebSocketClient?.connectionState?.value is com.nexa.mobilebridge.core.util.ConnectionState.Connected
+        }
+
+        fun reconnect() {
+            activeWebSocketClient?.forceReconnect()
         }
 
         fun encodeJson(): kotlinx.serialization.json.Json? = activeJson
@@ -168,6 +173,10 @@ class NexaBridgeService : Service() {
                 // Saat internet kembali setelah hilang, langsung reset orchestrator
                 // dan coba reconnect dari awal — tanpa menunggu delay antar-fase.
                 registerNetworkWatcher(config.serverUrl, config.authToken)
+
+                // 9. Mulai Accessibility Self-Healing Watchdog
+                // Memulihkan layanan jika status di Settings 'Not working' (unbound) secara otomatis
+                launchAccessibilitySelfHealingWatchdog()
             }
         }
 
@@ -187,7 +196,7 @@ class NexaBridgeService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.w("NexaBridge", "⚠️ Aplikasi di-swipe dari Recent Apps! Mencoba menghidupkan kembali service via AlarmManager...")
+        Log.w("NexaBridge", " Aplikasi di-swipe dari Recent Apps! Mencoba menghidupkan kembali service via AlarmManager...")
         
         try {
             val restartServiceIntent = Intent(applicationContext, NexaBridgeService::class.java)
@@ -215,7 +224,7 @@ class NexaBridgeService : Service() {
 
     private fun launchPhaseFailureListener() = serviceScope.launch {
         webSocketClient.phaseFailureEvents.collect { event ->
-            Log.w("NexaBridge", "⚠️ PhaseFailureEvent: Fase ${event.phase}, Final: ${event.isFinal}")
+            Log.w("NexaBridge", " PhaseFailureEvent: Fase ${event.phase}, Final: ${event.isFinal}")
 
             // 1. Bangun konten notifikasi dan pesan suara
             val (notifTitle, notifBody) = buildAlertNotifContent(event)
@@ -249,7 +258,7 @@ class NexaBridgeService : Service() {
             engine.contextReports.collect { report ->
                 val payload = json.encodeToString(ContextReport.serializer(), report)
                 val sent = webSocketClient.send(payload)
-                Log.d("NexaBridge", "📡 ContextReport terkirim (success=$sent): ${report.event}")
+                Log.d("NexaBridge", " ContextReport terkirim (success=$sent): ${report.event}")
             }
         }
     }
@@ -283,14 +292,29 @@ class NexaBridgeService : Service() {
                 triggerInstantReconnect("onLinkPropertiesChanged (IP Route Assigned)")
             }
 
-            private fun triggerInstantReconnect(source: String) {
+            override fun onLost(network: Network) {
+                Log.w("NexaBridge", "Jaringan terputus (onLost). Memeriksa sisa jaringan...")
+                val activeNetwork = cm.activeNetwork
+                val caps = activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                if (!hasInternet) {
+                    Log.w("NexaBridge", "Tidak ada koneksi internet aktif. Memutuskan socket.")
+                    webSocketClient.onNetworkLost()
+                } else {
+                    Log.i("NexaBridge", "Jaringan beralih ke rute alternatif. Memicu reconnect...")
+                    triggerInstantReconnect("onLost (Network Switch)", force = true)
+                }
+            }
+
+            private fun triggerInstantReconnect(source: String, force: Boolean = false) {
+                if (!force && webSocketClient.isConnected() && source != "onAvailable") {
+                    return
+                }
                 networkDebounceJob?.cancel()
                 networkDebounceJob = serviceScope.launch {
                     delay(800L) // 800ms debounce cepat untuk stabilisasi rute
-                    if (!webSocketClient.isConnected()) {
-                        Log.i("NexaBridge", "🌐 Sinyal internet masuk [$source]! Memicu reconnect instan dari Fase 1...")
-                        webSocketClient.forceReconnect(serverUrl, authToken)
-                    }
+                    Log.i("NexaBridge", "Sinyal internet masuk [$source]! Memicu reconnect instan dari Fase 1...")
+                    webSocketClient.forceReconnect(serverUrl, authToken)
                 }
             }
         }
@@ -304,9 +328,9 @@ class NexaBridgeService : Service() {
                     .build()
                 cm.registerNetworkCallback(request, networkCallback!!)
             }
-            Log.i("NexaBridge", "✅ Modern NetworkWatcher (Default + Reactive Multi-Trigger) terdaftar.")
+            Log.i("NexaBridge", " Modern NetworkWatcher (Default + Reactive Multi-Trigger) terdaftar.")
         } catch (e: Exception) {
-            Log.e("NexaBridge", "❌ Gagal mendaftarkan NetworkWatcher: ${e.message}")
+            Log.e("NexaBridge", " Gagal mendaftarkan NetworkWatcher: ${e.message}")
         }
     }
 
@@ -443,7 +467,7 @@ class NexaBridgeService : Service() {
         if (alertTtsReady && alertTts != null) {
             // TIDAK ada perubahan volume — gunakan volume media yang sedang aktif saat ini
             alertTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nexa_alert_${System.currentTimeMillis()}")
-            Log.d("NexaBridge", "🎙️ Alert TTS: $text")
+            Log.d("NexaBridge", " Alert TTS: $text")
         } else {
             Log.w("NexaBridge", "Alert TTS belum siap — notifikasi tetap ditampilkan.")
         }
@@ -546,6 +570,44 @@ class NexaBridgeService : Service() {
         }
     }
 
+    /**
+     * Accessibility Self-Healing Watchdog
+     * Memeriksa setiap 25 detik: Jika toggle Accessibility N.E.X.A di Settings aktif (ON),
+     * tetapi instance NexaAccessibilityService masih null (terputus/crashed/status 'Not working'),
+     * lakukan siklus secure-settings untuk memicu binder IPC Android framework tanpa perlu toggle manual di Settings.
+     */
+    private fun launchAccessibilitySelfHealingWatchdog() {
+        serviceScope.launch {
+            val componentName = "com.nexa.mobilebridge/com.nexa.mobilebridge.NexaAccessibilityService"
+            while (isActive) {
+                kotlinx.coroutines.delay(25_000)
+                try {
+                    val cr = applicationContext.contentResolver
+                    val enabledServices = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                    val isConfiguredOn = enabledServices.contains("com.nexa.mobilebridge")
+                    val isServiceAlive = NexaAccessibilityService.instance != null
+
+                    if (isConfiguredOn && !isServiceAlive) {
+                        Log.w("NexaBridge", "⚠️ Accessibility Watchdog: Setting is ON but service is UNBOUND ('Not working'). Auto-healing...")
+                        
+                        // Siklus secure-settings: cabut sebentar lalu pasang kembali
+                        val filtered = enabledServices.split(":").filter { !it.contains("com.nexa.mobilebridge") }.joinToString(":")
+                        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, filtered)
+                        kotlinx.coroutines.delay(600)
+
+                        val restored = if (filtered.isBlank()) componentName else "$filtered:$componentName"
+                        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, restored)
+                        Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+
+                        Log.i("NexaBridge", "✅ Accessibility Watchdog: Rebound signal sent. Service recovered from 'Not working' state.")
+                    }
+                } catch (e: Exception) {
+                    Log.w("NexaBridge", "Accessibility Watchdog check notice: ${e.message}")
+                }
+            }
+        }
+    }
+
     private fun buildServiceNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_SERVICE_ID)
             .setContentTitle("N.E.X.A Mobile Bridge")
@@ -577,7 +639,7 @@ class NexaBridgeService : Service() {
             setReferenceCounted(false)
             acquire()
         }
-        Log.i("NexaBridge", "📶 WifiLock acquired (mode: $mode)")
+        Log.i("NexaBridge", " WifiLock acquired (mode: $mode)")
     }
 
     override fun onDestroy() {

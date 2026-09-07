@@ -120,7 +120,7 @@ class VoiceStreamHandler(private val context: Context) {
                     try {
                         echoCanceler = AcousticEchoCanceler.create(hardwareSessionId)?.apply {
                             enabled = true
-                            Log.i(TAG, "🛡️ Hardware AEC Active (Session: $hardwareSessionId)")
+                            Log.i(TAG, " Hardware AEC Active (Session: $hardwareSessionId)")
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Hardware AEC unavailable: ${e.message}")
@@ -130,7 +130,7 @@ class VoiceStreamHandler(private val context: Context) {
                     try {
                         noiseSuppressor = NoiseSuppressor.create(hardwareSessionId)?.apply {
                             enabled = true
-                            Log.i(TAG, "🛡️ Hardware NoiseSuppressor Active")
+                            Log.i(TAG, " Hardware NoiseSuppressor Active")
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Hardware NS unavailable: ${e.message}")
@@ -146,11 +146,12 @@ class VoiceStreamHandler(private val context: Context) {
             }
 
             audioRecord?.startRecording()
-            Log.i(TAG, "🎙️ AudioRecord active (16kHz PCM, AEC Coupled)")
+            Log.i(TAG, " AudioRecord active (16kHz PCM, AEC Coupled)")
 
             // 1. Microphone Loop (Turn-Aware Uplink Gating)
             recordingJob = scope.launch(Dispatchers.IO) {
-                val audioBuffer = ByteArray(1024)
+                // 3200 bytes = 1600 samples = 100ms PCM window @ 16kHz 16-bit Mono (Standard Google Gemini Live chunk)
+                val audioBuffer = ByteArray(3200)
                 while (isActive && isStreaming) {
                     val readBytes = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
                     if (readBytes > 0) {
@@ -164,15 +165,19 @@ class VoiceStreamHandler(private val context: Context) {
                         // When assistant is actively speaking, mute mic uplink to prevent
                         // speaker audio from leaking into Google VAD and causing stuttering.
                         val now = System.currentTimeMillis()
-                        val isPlaying = isAssistantSpeaking || (now - lastAudioReceivedTime < 350)
+                        val isPlaying = isAssistantSpeaking || (now - lastAudioReceivedTime < 300)
 
                         if (isPlaying) {
                             continue // Suppress speaker feedback loop
                         }
 
-                        // Listening Mode: 100% full sensitivity transmission (No threshold cutoff)
-                        val base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP)
+                        // Boost mic gain 1.6x so Gemini Live VAD clearly hears user without shouting
+                        val boostedChunk = boostPcmGain(chunk, 1.6f)
+                        val base64Chunk = Base64.encodeToString(boostedChunk, Base64.NO_WRAP)
                         onAudioChunk(base64Chunk)
+                    } else if (readBytes < 0) {
+                        Log.w(TAG, "AudioRecord read returned error code: $readBytes")
+                        kotlinx.coroutines.delay(40)
                     }
                 }
             }
@@ -242,7 +247,7 @@ class VoiceStreamHandler(private val context: Context) {
             audioTrack = builder.build()
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
-            Log.i(TAG, "🔊 AudioTrack ready (24kHz PCM, Paired Session: $sharedSessionId)")
+            Log.i(TAG, " AudioTrack ready (24kHz PCM, Paired Session: $sharedSessionId)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AudioTrack: ${e.message}")
         }
@@ -260,7 +265,7 @@ class VoiceStreamHandler(private val context: Context) {
                 }
                 if (speaker != null) {
                     audioManager.setCommunicationDevice(speaker)
-                    Log.i(TAG, "🔊 Audio Output -> LOUDSPEAKER")
+                    Log.i(TAG, " Audio Output -> LOUDSPEAKER")
                 }
             } else {
                 val earpiece = audioManager.availableCommunicationDevices.firstOrNull {
@@ -268,7 +273,7 @@ class VoiceStreamHandler(private val context: Context) {
                 }
                 if (earpiece != null) {
                     audioManager.setCommunicationDevice(earpiece)
-                    Log.i(TAG, "👂 Audio Output -> EARPIECE")
+                    Log.i(TAG, " Audio Output -> EARPIECE")
                 } else {
                     audioManager.clearCommunicationDevice()
                 }
@@ -308,8 +313,11 @@ class VoiceStreamHandler(private val context: Context) {
     }
 
     fun flushOutputBuffer() {
-        Log.i(TAG, "⚡ Output buffer flush request received")
+        Log.i(TAG, " Output buffer flush request received")
         playbackQueue.clear()
+        isAssistantSpeaking = false
+        lastAudioReceivedTime = 0L
+        currentAudioEnergy = 0f
         try {
             audioTrack?.pause()
             audioTrack?.flush()
@@ -353,7 +361,7 @@ class VoiceStreamHandler(private val context: Context) {
         }
         audioManager.mode = AudioManager.MODE_NORMAL
 
-        Log.i(TAG, "🛑 Voice stream stopped & audio hardware released.")
+        Log.i(TAG, " Voice stream stopped & audio hardware released.")
     }
 
     private fun calculatePcmRms(bytes: ByteArray): Float {

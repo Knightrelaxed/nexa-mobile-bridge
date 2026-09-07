@@ -5,7 +5,10 @@ import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.content.BroadcastReceiver
+import android.graphics.drawable.Icon
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -15,6 +18,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -115,12 +119,17 @@ class FakeCallActivity : ComponentActivity() {
 
         @Volatile
         var isCallActive: Boolean = false
+
+        const val ACTION_PIP_TOGGLE_SPEAKER = "com.nexa.mobilebridge.PIP_ACTION_TOGGLE_SPEAKER"
+        const val ACTION_PIP_END_CALL = "com.nexa.mobilebridge.PIP_ACTION_END_CALL"
     }
 
-    // Mutable state hoisted to Activity level so coroutines can update it
+    // Mutable state hoisted to Activity level so coroutines and PiP mode can observe it
     private val callState = mutableStateOf(CallState.RINGING)
     private val hudState = mutableStateOf(LiveVoiceHudState.LISTENING)
     private val recordingElapsedMs = mutableLongStateOf(0L)
+    private val isInPipMode = mutableStateOf(false)
+    private val isLoudspeaker = mutableStateOf(false)
 
     // Tracks when hudState entered THINKING or PROCESSING (used by watchdog to detect true slow network)
     @Volatile
@@ -129,11 +138,24 @@ class FakeCallActivity : ComponentActivity() {
     // Track how many times user has rejected (sent to server for importance evaluation)
     private var rejectionCount = 0
 
-    // BroadcastReceiver for server audio events (Live Audio Play, Interrupted, Reply Complete)
+    // BroadcastReceiver for server audio events and PiP RemoteAction controls
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE" || intent?.action == "com.nexa.mobilebridge.END_CALL") {
-                Log.i(TAG, "📩 End Call signal received — waiting for farewell audio playback to finish cleanly")
+            if (intent?.action == ACTION_PIP_TOGGLE_SPEAKER) {
+                val newSpeakerState = !isLoudspeaker.value
+                isLoudspeaker.value = newSpeakerState
+                voiceStreamHandler.setLoudspeaker(newSpeakerState)
+                Log.i(TAG, "PiP RemoteAction: Speaker toggled -> $newSpeakerState")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        setPictureInPictureParams(buildPipParams())
+                    } catch (e: Exception) {}
+                }
+            } else if (intent?.action == ACTION_PIP_END_CALL) {
+                Log.i(TAG, "PiP RemoteAction: End Call triggered")
+                handleReject()
+            } else if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE" || intent?.action == "com.nexa.mobilebridge.END_CALL") {
+                Log.i(TAG, "End Call signal received — waiting for farewell audio playback to finish cleanly")
                 hudState.value = LiveVoiceHudState.DISCONNECTING
                 lifecycleScope.launch(Dispatchers.Main) {
                     var waitLoops = 0
@@ -182,6 +204,8 @@ class FakeCallActivity : ComponentActivity() {
                     }
                 } else if (rawJson.contains("CALL_AUDIO_INTERRUPTED")) {
                     voiceStreamHandler.flushOutputBuffer()
+                    hudState.value = LiveVoiceHudState.LISTENING
+                    pendingStateEntryTime = 0L
                 }
             }
         }
@@ -220,11 +244,13 @@ class FakeCallActivity : ComponentActivity() {
         val isOutgoingCall = intent.getBooleanExtra("IS_OUTGOING_CALL", false) || (intent.action == "com.nexa.mobilebridge.ACTION_CALL_NEXA")
         val playRingtone = if (isOutgoingCall) false else intent.getBooleanExtra("play_ringtone", true)
 
-        // Register receiver for server live audio & reply events
+        // Register receiver for server live audio & reply events as well as PiP RemoteActions
         val filter = IntentFilter().apply {
             addAction("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
             addAction("com.nexa.mobilebridge.CALL_LIVE_EVENT")
             addAction("com.nexa.mobilebridge.END_CALL")
+            addAction(ACTION_PIP_TOGGLE_SPEAKER)
+            addAction(ACTION_PIP_END_CALL)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(callReplyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -233,13 +259,25 @@ class FakeCallActivity : ComponentActivity() {
             registerReceiver(callReplyReceiver, filter)
         }
 
-        // VoIP Background Navigation: Back button minimizes to background without killing call
+        // VoIP Background Navigation: Back button enters Picture-in-Picture (WhatsApp style)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val state = callState.value
                 if (state == CallState.ACCEPTED_SPEAKING || state == CallState.RECORDING || state == CallState.WAITING_REPLY) {
-                    Log.i(TAG, "📱 Back pressed during active call — moving task to background (VoIP style)")
-                    moveTaskToBack(true)
+                    Log.i(TAG, "Back pressed during active call — entering Picture-in-Picture (WhatsApp style)")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            val entered = enterPictureInPictureMode(buildPipParams())
+                            if (!entered) {
+                                moveTaskToBack(true)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to enter PiP: ${e.message}")
+                            moveTaskToBack(true)
+                        }
+                    } else {
+                        moveTaskToBack(true)
+                    }
                 } else if (state == CallState.RINGING) {
                     handleReject()
                 } else {
@@ -254,11 +292,13 @@ class FakeCallActivity : ComponentActivity() {
             val state by callState
             val currentHudState by hudState
             val elapsedMs by recordingElapsedMs
+            val inPip by isInPipMode
+            val loudspeakerActive by isLoudspeaker
 
             // Start call flow immediately on UI render
             LaunchedEffect(Unit) {
                 if (isOutgoingCall) {
-                    Log.i(TAG, "🚀 Outgoing call to N.E.X.A initiated — connecting live session immediately")
+                    Log.i(TAG, "Outgoing call to N.E.X.A initiated — connecting live session immediately")
                     handleAccept()
                 } else if (playRingtone) {
                     audioPlayerHandler.playRingtone(
@@ -284,22 +324,26 @@ class FakeCallActivity : ComponentActivity() {
                 }
             }
 
-            val isLoudspeaker = remember { mutableStateOf(false) }
-
             FakeCallScreen(
                 callerName = callerName,
                 callMessage = callMessage,
                 callState = state,
                 hudState = currentHudState,
+                isInPipMode = inPip,
                 isSpeaking = voiceStreamHandler.isPlayingAudio(),
                 audioEnergy = voiceStreamHandler.currentAudioEnergy,
-                isLoudspeaker = isLoudspeaker.value,
+                isLoudspeaker = loudspeakerActive,
                 recordingElapsedMs = elapsedMs,
                 onAnswer = { handleAccept() },
                 onReject = { handleReject() },
                 onToggleLoudspeaker = { enabled ->
                     isLoudspeaker.value = enabled
                     voiceStreamHandler.setLoudspeaker(enabled)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            setPictureInPictureParams(buildPipParams())
+                        } catch (e: Exception) {}
+                    }
                 }
             )
         }
@@ -313,6 +357,13 @@ class FakeCallActivity : ComponentActivity() {
 
         // Show VoIP Ongoing Notification in status bar
         showOngoingCallNotification()
+
+        // Pre-configure Picture-in-Picture params with auto-enter enabled (Android 12+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                setPictureInPictureParams(buildPipParams())
+            } catch (e: Exception) {}
+        }
 
         // Notify server: call accepted (launches Google Gemini Live session)
         sendCallEvent(NexaActions.CALL_ACCEPTED)
@@ -340,6 +391,8 @@ class FakeCallActivity : ComponentActivity() {
 
         // Real-time HUD State Watchdog
         lifecycleScope.launch(Dispatchers.Default) {
+            var disconnectedStartTime = 0L
+
             while (isActive && isCallActive) {
                 val isWsConnected = NexaBridgeService.isConnected()
                 val isSpeaking = voiceStreamHandler.isPlayingAudio()
@@ -350,24 +403,43 @@ class FakeCallActivity : ComponentActivity() {
                     val currentHud = hudState.value
 
                     if (!isWsConnected) {
+                        if (disconnectedStartTime == 0L) {
+                            disconnectedStartTime = now
+                        }
                         // WebSocket disconnected — highest priority override
                         hudState.value = LiveVoiceHudState.RECONNECTING
-                    } else if (currentHud == LiveVoiceHudState.RECONNECTING) {
-                        // WebSocket just reconnected — fall back to listening
-                        hudState.value = LiveVoiceHudState.LISTENING
-                        pendingStateEntryTime = 0L
-                    } else if (isSpeaking) {
-                        // AudioTrack actively playing Nexa's voice
-                        hudState.value = LiveVoiceHudState.SPEAKING
-                        pendingStateEntryTime = 0L
-                    } else if (currentHud == LiveVoiceHudState.SPEAKING && !isSpeaking) {
-                        // Nexa just finished speaking — mic returns to listening
-                        hudState.value = LiveVoiceHudState.LISTENING
-                        pendingStateEntryTime = 0L
-                    } else if ((currentHud == LiveVoiceHudState.THINKING || currentHud == LiveVoiceHudState.PROCESSING)
-                        && entryTime > 0L && now - entryTime > 7000) {
-                        // Server said THINKING/PROCESSING but no audio arrived within 7 seconds
-                        hudState.value = LiveVoiceHudState.SLOW_NETWORK
+
+                        // Trigger auto-reconnect attempt after 3s of disconnection
+                        if (now - disconnectedStartTime > 3000L && (now - disconnectedStartTime) % 5000L < 300L) {
+                            NexaBridgeService.reconnect()
+                        }
+
+                        // Auto-terminate call cleanly if disconnected for more than 20 seconds
+                        if (now - disconnectedStartTime > 20000L && currentHud != LiveVoiceHudState.DISCONNECTING) {
+                            Log.w(TAG, "Koneksi terputus lebih dari 20 detik — mengakhiri sesi panggilan otomatis.")
+                            hudState.value = LiveVoiceHudState.DISCONNECTING
+                            voiceStreamHandler.stopStreaming()
+                            callState.value = CallState.FINISHED
+                        }
+                    } else {
+                        disconnectedStartTime = 0L
+                        if (currentHud == LiveVoiceHudState.RECONNECTING) {
+                            // WebSocket just reconnected — fall back to listening
+                            hudState.value = LiveVoiceHudState.LISTENING
+                            pendingStateEntryTime = 0L
+                        } else if (isSpeaking) {
+                            // AudioTrack actively playing Nexa's voice
+                            hudState.value = LiveVoiceHudState.SPEAKING
+                            pendingStateEntryTime = 0L
+                        } else if (currentHud == LiveVoiceHudState.SPEAKING && !isSpeaking) {
+                            // Nexa just finished speaking — mic returns to listening
+                            hudState.value = LiveVoiceHudState.LISTENING
+                            pendingStateEntryTime = 0L
+                        } else if ((currentHud == LiveVoiceHudState.THINKING || currentHud == LiveVoiceHudState.PROCESSING)
+                            && entryTime > 0L && now - entryTime > 7000) {
+                            // Server said THINKING/PROCESSING but no audio arrived within 7 seconds
+                            hudState.value = LiveVoiceHudState.SLOW_NETWORK
+                        }
                     }
                     // All other states (LISTENING, THINKING, PROCESSING) are driven
                     // exclusively by server CALL_STATUS_UPDATE — watchdog does NOT override them
@@ -561,17 +633,99 @@ class FakeCallActivity : ComponentActivity() {
             handleReject()
             return
         }
-        Log.w(TAG, "⚠️ onNewIntent received while call in state: ${callState.value} — bringing to front.")
+        Log.w(TAG, "onNewIntent received while call in state: ${callState.value} — bringing to front.")
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        Log.i(TAG, "📱 Orientation/Config change handled smoothly without activity recreation")
+        Log.i(TAG, "Orientation/Config change handled smoothly without activity recreation")
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode.value = isInPictureInPictureMode
+        Log.i(TAG, "PiP mode changed: isInPip=$isInPictureInPictureMode")
+        if (!isInPictureInPictureMode) {
+            // Returned to fullscreen — refresh PiP params
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                (callState.value == CallState.ACCEPTED_SPEAKING || callState.value == CallState.RECORDING || callState.value == CallState.WAITING_REPLY)
+            ) {
+                try {
+                    setPictureInPictureParams(buildPipParams())
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
+    private fun buildPipParams(): PictureInPictureParams {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            throw IllegalStateException("PiP requires Android O+")
+        }
+
+        val builder = PictureInPictureParams.Builder()
+            // Rasio 4:3 sangat proporsional untuk sepasang mata cybernetic OLED
+            .setAspectRatio(Rational(4, 3))
+
+        // Android 12+ (API 31+): Seamless auto-enter on gesture navigation
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(true)
+        }
+
+        val actions = mutableListOf<RemoteAction>()
+
+        // 1. Action: Loudspeaker Toggle
+        val speakerIconRes = if (isLoudspeaker.value) {
+            android.R.drawable.stat_sys_speakerphone
+        } else {
+            android.R.drawable.ic_lock_silent_mode_off
+        }
+        val speakerTitle = if (isLoudspeaker.value) "Speaker ON" else "Earpiece"
+        val speakerIntent = Intent(ACTION_PIP_TOGGLE_SPEAKER).setPackage(packageName)
+        val speakerPendingIntent = PendingIntent.getBroadcast(
+            this,
+            101,
+            speakerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        )
+        actions.add(
+            RemoteAction(
+                Icon.createWithResource(this, speakerIconRes),
+                speakerTitle,
+                speakerTitle,
+                speakerPendingIntent
+            )
+        )
+
+        // 2. Action: End Call (Tutup Telepon)
+        val endCallIntent = Intent(ACTION_PIP_END_CALL).setPackage(packageName)
+        val endCallPendingIntent = PendingIntent.getBroadcast(
+            this,
+            102,
+            endCallIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        )
+        actions.add(
+            RemoteAction(
+                Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                "Tutup Telepon",
+                "Tutup Telepon",
+                endCallPendingIntent
+            )
+        )
+
+        builder.setActions(actions)
+        return builder.build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isCallActive = false
+        if (callState.value != CallState.FINISHED && callState.value != CallState.RINGING) {
+            sendCallEvent("CALL_FINISHED")
+        }
         cancelOngoingCallNotification()
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
@@ -586,6 +740,7 @@ fun FakeCallScreen(
     callMessage: String,
     callState: CallState,
     hudState: LiveVoiceHudState = LiveVoiceHudState.LISTENING,
+    isInPipMode: Boolean = false,
     isSpeaking: Boolean = false,
     audioEnergy: Float = 0f,
     isLoudspeaker: Boolean = false,
@@ -594,6 +749,28 @@ fun FakeCallScreen(
     onReject: () -> Unit,
     onToggleLoudspeaker: (Boolean) -> Unit = {}
 ) {
+    if (isInPipMode) {
+        // Pure Minimalist Cybernetic PiP Mode (WhatsApp Style)
+        // 100% ONLY Expressive Eyes in deep OLED black canvas.
+        // Tap on window reveals native OS controls (Speaker, End Call, Maximize).
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF040B16)),
+            contentAlignment = Alignment.Center
+        ) {
+            NexaExpressiveEyes(
+                hudState = hudState,
+                isSpeaking = isSpeaking,
+                audioEnergy = audioEnergy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .scale(0.65f)
+            )
+        }
+        return
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
     val pulseScale1 by infiniteTransition.animateFloat(

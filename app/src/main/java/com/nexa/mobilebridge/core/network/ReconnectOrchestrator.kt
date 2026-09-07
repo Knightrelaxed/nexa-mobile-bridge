@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.network
+﻿package com.nexa.mobilebridge.core.network
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -97,7 +97,7 @@ class ReconnectOrchestrator(
         currentPhase = 1
         attemptInPhase = 0
         isStopped = false
-        Log.i(TAG, "✅ Koneksi berhasil. Fase & percobaan direset ke awal.")
+        Log.i(TAG, " Koneksi berhasil. Fase & percobaan direset ke awal.")
     }
 
     /** Dipanggil ketika user secara eksplisit menghentikan service. Membatalkan semua jadwal. */
@@ -107,7 +107,7 @@ class ReconnectOrchestrator(
         reconnectJob = null
         currentPhase = 1
         attemptInPhase = 0
-        Log.i(TAG, "🛑 Reconnect dihentikan oleh user.")
+        Log.i(TAG, " Reconnect dihentikan oleh user.")
     }
 
     /**
@@ -120,7 +120,7 @@ class ReconnectOrchestrator(
         attemptInPhase = 0
         reconnectJob?.cancel()
         reconnectJob = null
-        Log.i(TAG, "🔄 Orchestrator direset untuk sesi koneksi baru.")
+        Log.i(TAG, " Orchestrator direset untuk sesi koneksi baru.")
     }
 
     /** Dipanggil ketika koneksi WebSocket gagal (dari onFailure). */
@@ -151,7 +151,7 @@ class ReconnectOrchestrator(
 
                 Log.i(
                     TAG,
-                    "🔄 Fase $currentPhase | Percobaan $attemptInPhase/$MAX_ATTEMPTS | " +
+                    " Fase $currentPhase | Percobaan $attemptInPhase/$MAX_ATTEMPTS | " +
                     "Tunggu ${backoffMs / 1000}s | Error: ${error.javaClass.simpleName}"
                 )
                 delay(backoffMs)
@@ -173,7 +173,7 @@ class ReconnectOrchestrator(
                     }
                     2 -> {
                         // Fase 2 habis → NOTIFIKASI → tunggu 30 menit → mulai Fase 3
-                        Log.w(TAG, "⚠️ Fase 2 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 30 menit...")
+                        Log.w(TAG, " Fase 2 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 30 menit...")
                         _phaseFailureEvents.emit(
                             PhaseFailureEvent(2, errorType, techMsg, false, "30 menit")
                         )
@@ -183,7 +183,7 @@ class ReconnectOrchestrator(
                     }
                     3 -> {
                         // Fase 3 habis → NOTIFIKASI → tunggu 2 jam → mulai Fase 4
-                        Log.w(TAG, "⚠️ Fase 3 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 2 jam...")
+                        Log.w(TAG, " Fase 3 habis (${MAX_ATTEMPTS}x). Memberitahu user. Tunggu 2 jam...")
                         _phaseFailureEvents.emit(
                             PhaseFailureEvent(3, errorType, techMsg, false, "2 jam")
                         )
@@ -193,7 +193,7 @@ class ReconnectOrchestrator(
                     }
                     4 -> {
                         // Fase 4 habis → NOTIFIKASI FINAL → BERHENTI TOTAL
-                        Log.e(TAG, "❌ Fase 4 habis (${MAX_ATTEMPTS}x). Semua percobaan gagal. Berhenti total.")
+                        Log.e(TAG, " Fase 4 habis (${MAX_ATTEMPTS}x). Semua percobaan gagal. Berhenti total.")
                         _phaseFailureEvents.emit(
                             PhaseFailureEvent(4, errorType, techMsg, true, "")
                         )

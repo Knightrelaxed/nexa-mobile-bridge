@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.sensor
+﻿package com.nexa.mobilebridge.core.sensor
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -49,16 +49,16 @@ class GeofenceManager(private val context: Context) {
     fun loadAndRegisterAll() {
         val zones = getAllGeofences()
         if (zones.isEmpty()) {
-            Log.i(TAG, "ℹ️ Belum ada geofence tersimpan. Menunggu perintah penandaan lokasi.")
+            Log.i(TAG, "ℹ Belum ada geofence tersimpan. Menunggu perintah penandaan lokasi.")
             return
         }
 
         if (!hasLocationPermissions()) {
-            Log.w(TAG, "⚠️ Izin lokasi belum diberikan. Tidak bisa mendaftarkan ${zones.size} geofence.")
+            Log.w(TAG, " Izin lokasi belum diberikan. Tidak bisa mendaftarkan ${zones.size} geofence.")
             return
         }
 
-        Log.i(TAG, "🟢 Mendaftarkan ${zones.size} zona Geofence aktif ke Google Play Services...")
+        Log.i(TAG, " Mendaftarkan ${zones.size} zona Geofence aktif ke Google Play Services...")
         registerWithPlayServices(zones)
     }
 
@@ -73,7 +73,7 @@ class GeofenceManager(private val context: Context) {
 
         if (hasLocationPermissions()) {
             registerWithPlayServices(current)
-            Log.i(TAG, "✅ Geofence [${zone.id}] (${zone.name}) berhasil disimpan & didaftarkan.")
+            Log.i(TAG, " Geofence [${zone.id}] (${zone.name}) berhasil disimpan & didaftarkan.")
             return true
         }
         return false
@@ -111,7 +111,7 @@ class GeofenceManager(private val context: Context) {
 
         saveGeofences(current)
         geofencingClient.removeGeofences(listOf(id.uppercase())).run {
-            addOnSuccessListener { Log.i(TAG, "🗑️ Geofence [$id] berhasil dihapus dari Play Services.") }
+            addOnSuccessListener { Log.i(TAG, " Geofence [$id] berhasil dihapus dari Play Services.") }
             addOnFailureListener { e -> Log.e(TAG, "Gagal menghapus [$id] dari Play Services: ${e.message}") }
         }
         return true
@@ -123,7 +123,7 @@ class GeofenceManager(private val context: Context) {
     fun clearAllGeofences(): Boolean {
         saveGeofences(emptyList())
         geofencingClient.removeGeofences(geofencePendingIntent).run {
-            addOnSuccessListener { Log.i(TAG, "🧹 Semua Geofence berhasil dibersihkan.") }
+            addOnSuccessListener { Log.i(TAG, " Semua Geofence berhasil dibersihkan.") }
             addOnFailureListener { e -> Log.e(TAG, "Gagal membersihkan geofence: ${e.message}") }
         }
         return true
@@ -134,7 +134,7 @@ class GeofenceManager(private val context: Context) {
      */
     fun stopGeofencing() {
         geofencingClient.removeGeofences(geofencePendingIntent).run {
-            addOnSuccessListener { Log.i(TAG, "🛑 Geofence monitoring dihentikan.") }
+            addOnSuccessListener { Log.i(TAG, " Geofence monitoring dihentikan.") }
             addOnFailureListener { e -> Log.e(TAG, "Gagal menghentikan geofence monitoring: ${e.message}") }
         }
     }
@@ -176,10 +176,10 @@ class GeofenceManager(private val context: Context) {
 
         geofencingClient.addGeofences(request, geofencePendingIntent).run {
             addOnSuccessListener {
-                Log.d(TAG, "🎯 ${geofenceList.size} Geofence berhasil aktif di background.")
+                Log.d(TAG, " ${geofenceList.size} Geofence berhasil aktif di background.")
             }
             addOnFailureListener { e ->
-                Log.e(TAG, "❌ Gagal mengaktifkan Geofence: ${e.message}")
+                Log.e(TAG, " Gagal mengaktifkan Geofence: ${e.message}")
             }
         }
     }

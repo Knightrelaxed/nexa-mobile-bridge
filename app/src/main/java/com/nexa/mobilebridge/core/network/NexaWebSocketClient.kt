@@ -62,13 +62,27 @@ class NexaWebSocketClient @Inject constructor(
     }
 
     fun forceReconnect(url: String = currentUrl, token: String = currentToken) {
-        if (_connectionState.value is ConnectionState.Connected) return
-
-        currentUrl = url
-        currentToken = token
+        if (url.isNotBlank()) currentUrl = url
+        if (token.isNotBlank()) currentToken = token
+        Log.i(TAG, "forceReconnect dipanggil — mereset orchestrator dan memulai koneksi baru.")
         // Reset orchestrator membatalkan jeda tidur fase dan mengembalikan ke Fase 1 Percobaan 0
         orchestrator.reset()
         initiateConnection()
+    }
+
+    /**
+     * Dipanggil saat jaringan terputus (NetworkCallback.onLost).
+     * Membatalkan socket lama yang menggantung dan mengupdate state secara instan.
+     */
+    fun onNetworkLost() {
+        Log.w(TAG, "onNetworkLost: Membatalkan socket aktif karena jaringan terputus.")
+        try {
+            webSocket?.cancel()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error cancelling webSocket on network lost: ${e.message}")
+        }
+        webSocket = null
+        _connectionState.value = ConnectionState.Disconnected("Jaringan terputus")
     }
 
     fun connect(url: String, token: String) {
@@ -104,7 +118,7 @@ class NexaWebSocketClient @Inject constructor(
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
-                Log.i(TAG, "✅ WebSocket Terbuka")
+                Log.i(TAG, " WebSocket Terbuka")
                 orchestrator.onConnectionSuccess()
                 _connectionState.value = ConnectionState.Connected
             }
@@ -133,7 +147,7 @@ class NexaWebSocketClient @Inject constructor(
                             command.timestamp, level, command.signature, hmacSecret
                         )
                         if (!isValid) {
-                            Log.e(TAG, "❌ HMAC signature tidak valid: ${command.command_id}")
+                            Log.e(TAG, " HMAC signature tidak valid: ${command.command_id}")
                             return
                         }
                     }
@@ -149,6 +163,9 @@ class NexaWebSocketClient @Inject constructor(
                 if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
                 Log.i(TAG, "WebSocket Ditutup ($code): $reason")
                 _connectionState.value = ConnectionState.Disconnected(reason)
+                if (!orchestrator.isStopped) {
+                    orchestrator.onConnectionFailed(Exception("WebSocket ditutup oleh server ($code: $reason)"))
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -156,7 +173,7 @@ class NexaWebSocketClient @Inject constructor(
                     Log.d(TAG, "Mengabaikan onFailure dari socket usang: ${t.message}")
                     return
                 }
-                Log.e(TAG, "❌ WebSocket Gagal: ${t.javaClass.simpleName} — ${t.message}")
+                Log.e(TAG, " WebSocket Gagal: ${t.javaClass.simpleName} — ${t.message}")
                 _connectionState.value = ConnectionState.Disconnected(t.message)
                 // Delegasikan ke orchestrator untuk menentukan kapan dan apakah harus reconnect
                 orchestrator.onConnectionFailed(t)
@@ -195,6 +212,6 @@ class NexaWebSocketClient @Inject constructor(
      */
     fun resetOrchestrator() {
         orchestrator.reset()
-        Log.i(TAG, "🔄 Orchestrator direset oleh NetworkWatcher.")
+        Log.i(TAG, " Orchestrator direset oleh NetworkWatcher.")
     }
 }

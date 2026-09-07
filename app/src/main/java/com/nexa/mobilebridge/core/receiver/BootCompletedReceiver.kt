@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.receiver
+﻿package com.nexa.mobilebridge.core.receiver
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -14,7 +14,7 @@ import com.nexa.mobilebridge.NexaBridgeService
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == "android.intent.action.QUICKBOOT_POWERON") {
-            Log.i("NexaBridge", "🚀 Boot Completed terdeteksi! Menghidupkan NexaBridgeService otomatis...")
+            Log.i("NexaBridge", " Boot Completed terdeteksi! Menghidupkan NexaBridgeService otomatis...")
             
             val serviceIntent = Intent(context, NexaBridgeService::class.java)
             

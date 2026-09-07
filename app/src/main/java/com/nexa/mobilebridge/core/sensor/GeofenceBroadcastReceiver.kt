@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.sensor
+﻿package com.nexa.mobilebridge.core.sensor
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -28,7 +28,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 val geofenceId = geofence.requestId
                 val transitionString = if (geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER) "ENTER" else "EXIT"
                 
-                Log.i(TAG, "📍 Geofence Transition: $transitionString for $geofenceId")
+                Log.i(TAG, " Geofence Transition: $transitionString for $geofenceId")
                 
                 // Forward the event to the NexaBridgeService
                 val serviceIntent = Intent(context, NexaBridgeService::class.java).apply {

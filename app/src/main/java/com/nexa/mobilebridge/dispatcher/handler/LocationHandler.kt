@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.dispatcher.handler
+﻿package com.nexa.mobilebridge.dispatcher.handler
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -116,7 +116,7 @@ class LocationHandler(private val context: Context) {
             }
 
             if (bestLocation != null) {
-                Log.i(TAG, "✅ Location fix resolved: ${bestLocation.latitude}, ${bestLocation.longitude} (accuracy: ${bestLocation.accuracy}m)")
+                Log.i(TAG, " Location fix resolved: ${bestLocation.latitude}, ${bestLocation.longitude} (accuracy: ${bestLocation.accuracy}m)")
 
                 var addressText: String? = null
                 try {
@@ -141,7 +141,7 @@ class LocationHandler(private val context: Context) {
                     }
                 )
             } else {
-                Log.e(TAG, "❌ All location providers failed")
+                Log.e(TAG, " All location providers failed")
                 CommandResult.failure(command.command_id, "Tidak dapat membaca koordinat lokasi saat ini (Timeout GPS).")
             }
         } catch (e: Exception) {

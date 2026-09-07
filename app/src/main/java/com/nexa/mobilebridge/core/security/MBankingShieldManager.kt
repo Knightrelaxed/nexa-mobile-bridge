@@ -45,9 +45,10 @@ object MBankingShieldManager {
             // Kosongkan SELURUH daftar accessibility service
             Settings.Secure.putString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
             
-            // Matikan flag master accessibility — ini KRITIS karena DexGuard juga mengecek
-            // AccessibilityManager.isEnabled() yang membaca flag ini
-            Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+            // NOTE: DILARANG set ACCESSIBILITY_ENABLED = 0 di Samsung One UI!
+            // Menyetel master flag ke 0 merusak binder IPC Android framework dan
+            // menyebabkan status 'Not working' permanen saat direstorasi.
+            // Cukup kosongkan daftar service; DexGuard sudah membaca daftar kosong.
             
             Log.i(TAG, "Shield Active: ALL Accessibility Services Disabled.")
             return true

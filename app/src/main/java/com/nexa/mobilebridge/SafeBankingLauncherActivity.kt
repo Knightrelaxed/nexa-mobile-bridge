@@ -53,11 +53,12 @@ class SafeBankingLauncherActivity : ComponentActivity() {
             }
 
             if (!isTrulyDead) {
-                Log.w("Nexa-SafeBanking", "Peringatan: Sistem Android gagal mencabut semua service tepat waktu.")
+                Log.w("Nexa-SafeBanking", "Peringatan: Sistem Android belum mencabut semua service tepat waktu.")
             }
 
-            // Ekstra jeda 500ms untuk memastikan M-Banking tidak membaca sisa-sisa cache
-            delay(500)
+            // Jeda aman solid (600ms) sesuai arahan Tuan Faqih: Menjamin DexGuard/Promon tidak membaca sisa-sisa cache
+            Log.i("Nexa-SafeBanking", "Holding 600ms safety buffer before launching banking app...")
+            delay(600)
 
             // 3. LAUNCH TARGET (Buka M-Banking)
             try {

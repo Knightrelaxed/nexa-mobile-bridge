@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.usage
+﻿package com.nexa.mobilebridge.core.usage
 
 import android.app.usage.UsageStatsManager
 import android.content.Context
@@ -55,7 +55,7 @@ object AppUsageTracker {
         sessionStartTimeMs = System.currentTimeMillis()
         lastReportedSessionMinute = 0
 
-        Log.d(TAG, "📱 App switched to: $newPackageName")
+        Log.d(TAG, " App switched to: $newPackageName")
         emitUsageTelemetry(context, newPackageName, sessionMinutes = 0)
     }
 
@@ -85,7 +85,7 @@ object AppUsageTracker {
         val totalSessionMinutes = totalSessionMs / (60 * 1000)
 
         if (totalSessionMinutes >= 1) {
-            Log.i(TAG, "🏁 Session finalized for $currentPkg: ${totalSessionMinutes}m")
+            Log.i(TAG, " Session finalized for $currentPkg: ${totalSessionMinutes}m")
             emitUsageTelemetry(context, currentPkg, totalSessionMinutes)
         }
     }
@@ -147,7 +147,7 @@ object AppUsageTracker {
             put("timestamp", System.currentTimeMillis().toString())
         }.toString()
 
-        Log.i(TAG, "📊 Emitting Usage Telemetry: $appLabel | Session=${sessionMinutes}m | Daily=${dailyTotalMinutes}m")
+        Log.i(TAG, " Emitting Usage Telemetry: $appLabel | Session=${sessionMinutes}m | Daily=${dailyTotalMinutes}m")
         NexaBridgeService.sendEvent(payload)
     }
 }

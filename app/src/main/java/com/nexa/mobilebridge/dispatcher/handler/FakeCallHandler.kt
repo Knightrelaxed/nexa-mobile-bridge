@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.dispatcher.handler
+﻿package com.nexa.mobilebridge.dispatcher.handler
 
 import android.content.Context
 import android.content.Intent
@@ -20,7 +20,7 @@ class FakeCallHandler @Inject constructor(
     fun execute(command: NexaCommand): CommandResult {
         // CONCURRENCY GUARD: If a call is already active on screen, ignore incoming trigger
         if (com.nexa.mobilebridge.ui.call.FakeCallActivity.isCallActive) {
-            Log.w(TAG, "⚠️ Simulated incoming call ignored: an active call is already in progress.")
+            Log.w(TAG, " Simulated incoming call ignored: an active call is already in progress.")
             return CommandResult.success(command.command_id, "Call already active, ignored duplicate trigger.")
         }
 
@@ -39,7 +39,7 @@ class FakeCallHandler @Inject constructor(
                     "NexaBridge:IncomingCallWakeLock"
                 )
                 wakeLock?.acquire(10000L) // 10s bright wake lock
-                Log.i(TAG, "💡 Screen WakeLock acquired for incoming call")
+                Log.i(TAG, " Screen WakeLock acquired for incoming call")
             } catch (e: Exception) {
                 Log.w(TAG, "WakeLock acquisition skipped: ${e.message}")
             }
@@ -59,7 +59,7 @@ class FakeCallHandler @Inject constructor(
             }
 
             context.startActivity(intent)
-            Log.i(TAG, "📞 FakeCallActivity launched over lockscreen for caller: $callerName")
+            Log.i(TAG, " FakeCallActivity launched over lockscreen for caller: $callerName")
             CommandResult.success(command.command_id, "Simulated incoming call displayed successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch FakeCallActivity", e)

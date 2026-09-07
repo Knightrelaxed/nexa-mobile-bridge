@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.context
+﻿package com.nexa.mobilebridge.core.context
 
 import android.util.Log
 import com.nexa.mobilebridge.core.sensor.LightState
@@ -26,7 +26,7 @@ class ContextEngine(private val scope: CoroutineScope) {
 
     fun processSensorEvent(event: SensorObservedEvent) {
         val eventName = event.eventName
-        Log.d(TAG, "Menganalisis sensor event ➔ $eventName: ${event.summary}")
+        Log.d(TAG, "Menganalisis sensor event  $eventName: ${event.summary}")
 
         when (eventName) {
             "LIGHT_CHANGED" -> {
@@ -145,7 +145,7 @@ class ContextEngine(private val scope: CoroutineScope) {
             details = detailsJson
         )
 
-        Log.i(TAG, "⚡ CONTEXT EMITTED: [$event] — $summary")
+        Log.i(TAG, " CONTEXT EMITTED: [$event] — $summary")
         scope.launch {
             _contextReports.emit(report)
         }

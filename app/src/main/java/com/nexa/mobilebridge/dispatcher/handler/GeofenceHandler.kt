@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.dispatcher.handler
+﻿package com.nexa.mobilebridge.dispatcher.handler
 
 import android.content.Context
 import com.nexa.mobilebridge.core.sensor.GeofenceManager
@@ -62,7 +62,7 @@ class GeofenceHandler(private val context: Context, private val geofenceManager:
             CommandResult(
                 command_id = command.command_id,
                 status = ResultStatus.SUCCESS,
-                message = "📍 Lokasi saat ini berhasil ditandai sebagai Geofence [$id] (${zone.name}) pada (${zone.latitude}, ${zone.longitude})",
+                message = " Lokasi saat ini berhasil ditandai sebagai Geofence [$id] (${zone.name}) pada (${zone.latitude}, ${zone.longitude})",
                 data = buildJsonObject {
                     put("id", zone.id)
                     put("name", zone.name)

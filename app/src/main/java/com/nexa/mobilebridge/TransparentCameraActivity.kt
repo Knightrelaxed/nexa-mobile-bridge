@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge
+﻿package com.nexa.mobilebridge
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -180,7 +180,7 @@ class TransparentCameraActivity : ComponentActivity() {
                             val processed = processAndRotateBitmap(bitmap, rotation, useFrontCamera)
 
                             if (isCaptured.compareAndSet(false, true)) {
-                                Log.i(TAG, "✅ Photo captured! Size: ${processed.width}x${processed.height}")
+                                Log.i(TAG, " Photo captured! Size: ${processed.width}x${processed.height}")
                                 val base64 = bitmapToBase64(processed)
                                 sendResult(base64, null)
                             }
@@ -199,12 +199,12 @@ class TransparentCameraActivity : ComponentActivity() {
                 // ══════════════════════════════════════════════════════
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
-                Log.i(TAG, "✅ Camera bound successfully: Preview + ImageAnalysis")
+                Log.i(TAG, " Camera bound successfully: Preview + ImageAnalysis")
 
                 // Safety timeout: 6s (allow extra time for Samsung HAL initialization)
                 Handler(Looper.getMainLooper()).postDelayed({
                     if (isCaptured.compareAndSet(false, true)) {
-                        Log.e(TAG, "❌ Timeout: No frames received in 6 seconds")
+                        Log.e(TAG, " Timeout: No frames received in 6 seconds")
                         sendResult(null, "Timeout kamera: Tidak ada frame yang diterima dari sensor.")
                     }
                 }, 6000L)

@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.dispatcher.handler
+﻿package com.nexa.mobilebridge.dispatcher.handler
 
 import android.Manifest
 import android.content.Context
@@ -21,10 +21,10 @@ import java.io.ByteArrayOutputStream
  * Records mono 16-bit PCM at 16kHz — the universal standard for STT APIs
  * (Whisper, Google STT, Azure, etc.) so this handler can be reused for:
  *
- * - 📞 Call Interaction: 10s user voice reply after accepting SIMULATE_INCOMING_CALL
- * - 🎙️ Voice Command: Short utterance capture for real-time voice control
- * - 📝 Voice Memo: Any-duration field notes recording
- * - 🔊 Ambient Capture: Background noise/context sampling
+ * -  Call Interaction: 10s user voice reply after accepting SIMULATE_INCOMING_CALL
+ * -  Voice Command: Short utterance capture for real-time voice control
+ * -  Voice Memo: Any-duration field notes recording
+ * -  Ambient Capture: Background noise/context sampling
  *
  * Usage:
  * ```kotlin
@@ -101,7 +101,7 @@ class VoiceRecorderHandler(private val context: Context) {
 
         return@withContext try {
             audioRecord.startRecording()
-            Log.i(TAG, "🎙️ Recording started — ${durationMs}ms")
+            Log.i(TAG, " Recording started — ${durationMs}ms")
 
             // Hard timeout = durationMs + 1s to guard against edge cases
             withTimeoutOrNull(durationMs + 1000L) {
@@ -117,7 +117,7 @@ class VoiceRecorderHandler(private val context: Context) {
 
             audioRecord.stop()
             val bytes = out.toByteArray()
-            Log.i(TAG, "🎙️ Recording complete — ${bytes.size} bytes (${durationMs}ms)")
+            Log.i(TAG, " Recording complete — ${bytes.size} bytes (${durationMs}ms)")
 
             Base64.encodeToString(bytes, Base64.NO_WRAP)
 

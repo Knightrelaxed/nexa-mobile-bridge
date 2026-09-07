@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.dispatcher.handler
+﻿package com.nexa.mobilebridge.dispatcher.handler
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -52,7 +52,7 @@ class AudioPlayerHandler @Inject constructor(
             }
             activeMediaPlayer = mediaPlayer
 
-            Log.i(TAG, "🔔 Emergency Alarm Ringtone started playing at 100% volume via MediaPlayer.")
+            Log.i(TAG, " Emergency Alarm Ringtone started playing at 100% volume via MediaPlayer.")
             CommandResult.success(
                 command.command_id,
                 "Emergency Alarm Ringtone started playing at 100% volume."
@@ -93,7 +93,7 @@ class AudioPlayerHandler @Inject constructor(
             }
             activeMediaPlayer = mediaPlayer
 
-            Log.i(TAG, "🎵 Playing media URL: $url")
+            Log.i(TAG, " Playing media URL: $url")
             CommandResult.success(command.command_id, "Media playback started: $url")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to play media", e)
@@ -104,7 +104,7 @@ class AudioPlayerHandler @Inject constructor(
     @Synchronized
     fun stopMedia(command: NexaCommand): CommandResult {
         stopAll()
-        Log.i(TAG, "🛑 Audio playback stopped.")
+        Log.i(TAG, " Audio playback stopped.")
         return CommandResult.success(command.command_id, "Audio playback stopped successfully.")
     }
 
@@ -151,7 +151,7 @@ class AudioPlayerHandler @Inject constructor(
             }
             activeMediaPlayer = mediaPlayer
 
-            Log.i(TAG, "🔊 Playing server audio reply (${audioBytes.size} bytes)")
+            Log.i(TAG, " Playing server audio reply (${audioBytes.size} bytes)")
             CommandResult.success(command.command_id, "Server audio reply playing.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to play audio stream", e)
@@ -167,7 +167,7 @@ class AudioPlayerHandler @Inject constructor(
         val intent = android.content.Intent("com.nexa.mobilebridge.CALL_REPLY_COMPLETE")
         intent.setPackage(context.packageName)
         context.sendBroadcast(intent)
-        Log.i(TAG, "📡 CALL_REPLY_COMPLETE broadcast sent")
+        Log.i(TAG, " CALL_REPLY_COMPLETE broadcast sent")
     }
 
     @Synchronized

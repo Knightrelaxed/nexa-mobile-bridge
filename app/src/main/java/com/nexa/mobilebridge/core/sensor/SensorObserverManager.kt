@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.core.sensor
+﻿package com.nexa.mobilebridge.core.sensor
 
 import android.content.Context
 import android.hardware.Sensor
@@ -85,7 +85,7 @@ class SensorObserverManager(
 
     private val pickupTriggerListener = object : TriggerEventListener() {
         override fun onTrigger(event: TriggerEvent?) {
-            Log.i(TAG, "📱 PHONE_PICKUP Gesture Detected!")
+            Log.i(TAG, " PHONE_PICKUP Gesture Detected!")
             emitEvent(
                 eventName = "PHONE_PICKUP",
                 summary = "HP baru saja diangkat pengguna",
@@ -98,7 +98,7 @@ class SensorObserverManager(
 
     private val sigMotionTriggerListener = object : TriggerEventListener() {
         override fun onTrigger(event: TriggerEvent?) {
-            Log.i(TAG, "🚶 SIGNIFICANT_MOTION Detected!")
+            Log.i(TAG, " SIGNIFICANT_MOTION Detected!")
             emitEvent(
                 eventName = "MOTION_DETECTED",
                 summary = "Terdeteksi pergerakan signifikan",
@@ -115,7 +115,7 @@ class SensorObserverManager(
     fun startObserving() {
         if (isListening) return
         isListening = true
-        Log.i(TAG, "🟢 Memulai SensorObserverManager...")
+        Log.i(TAG, " Memulai SensorObserverManager...")
 
         // 1. Register Light Sensor
         lightSensor?.let {
@@ -137,7 +137,7 @@ class SensorObserverManager(
     fun stopObserving() {
         if (!isListening) return
         isListening = false
-        Log.i(TAG, "🛑 Menghentikan SensorObserverManager...")
+        Log.i(TAG, " Menghentikan SensorObserverManager...")
 
         // Batalkan job debounce yang mungkin masih menunggu
         lightDebounceJob?.cancel()
@@ -235,7 +235,7 @@ class SensorObserverManager(
                 LightState.BRIGHT -> "Cahaya terang ($lux lux)"
             }
 
-            Log.i(TAG, "💡 Light State Confirmed ➔ $stateName ($lux lux) [setelah debounce ${LIGHT_DEBOUNCE_MS}ms]")
+            Log.i(TAG, " Light State Confirmed  $stateName ($lux lux) [setelah debounce ${LIGHT_DEBOUNCE_MS}ms]")
             emitEvent(
                 eventName = "LIGHT_CHANGED",
                 summary = desc,
@@ -275,7 +275,7 @@ class SensorObserverManager(
             // Sesi baru: catat baseline langkah saat ini tanpa emit event
             lastRecordedStepCount = totalSteps
             lastMilestoneStepCount = (totalSteps / 2500) * 2500
-            Log.d(TAG, "👣 Step Counter baseline: $totalSteps")
+            Log.d(TAG, " Step Counter baseline: $totalSteps")
             return
         }
 
@@ -284,7 +284,7 @@ class SensorObserverManager(
         // Kirim event hanya jika melewati milestone 2.500 langkah
         if (totalSteps >= lastMilestoneStepCount + 2500) {
             lastMilestoneStepCount = (totalSteps / 2500) * 2500
-            Log.i(TAG, "👣 Step Milestone Reached: $lastMilestoneStepCount steps")
+            Log.i(TAG, " Step Milestone Reached: $lastMilestoneStepCount steps")
 
             emitEvent(
                 eventName = "STEP_MILESTONE",

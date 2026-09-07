@@ -79,6 +79,7 @@
             android:name=".ui.call.FakeCallActivity"
             android:theme="@style/Theme.NexaMobileBridge"
             android:screenOrientation="portrait"
+            android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
             android:excludeFromRecents="true"
             android:taskAffinity="com.nexa.mobilebridge.call"
