@@ -40,13 +40,20 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.camera.view.PreviewView
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material.icons.filled.FlipCameraAndroid
+import com.nexa.mobilebridge.dispatcher.handler.CameraStreamHandler
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -109,6 +116,7 @@ class FakeCallActivity : ComponentActivity() {
     private lateinit var audioPlayerHandler: AudioPlayerHandler
     private lateinit var voiceRecorderHandler: VoiceRecorderHandler
     private lateinit var voiceStreamHandler: com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler
+    private lateinit var cameraStreamHandler: CameraStreamHandler
 
     private var commandId: String = ""
     private var callerName: String = "N.E.X.A Assistant"
@@ -130,6 +138,10 @@ class FakeCallActivity : ComponentActivity() {
     private val recordingElapsedMs = mutableLongStateOf(0L)
     private val isInPipMode = mutableStateOf(false)
     private val isLoudspeaker = mutableStateOf(false)
+    private val isCameraActive = mutableStateOf(false)
+    private val isBackCamera = mutableStateOf(true)
+    private var currentSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null
+
 
     // Tracks when hudState entered THINKING or PROCESSING (used by watchdog to detect true slow network)
     @Volatile
@@ -225,6 +237,19 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
+    // Runtime permission launcher for CAMERA (Live Video Call)
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Log.i(TAG, "CAMERA permission granted — starting camera stream")
+            startCameraStream()
+        } else {
+            Log.w(TAG, "CAMERA permission denied by user")
+            isCameraActive.value = false
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         isCallActive = true
@@ -237,6 +262,7 @@ class FakeCallActivity : ComponentActivity() {
         audioPlayerHandler = AudioPlayerHandler(applicationContext)
         voiceRecorderHandler = VoiceRecorderHandler(applicationContext)
         voiceStreamHandler = com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler(applicationContext)
+        cameraStreamHandler = CameraStreamHandler(applicationContext)
 
         commandId = intent.getStringExtra("command_id") ?: "call_${System.currentTimeMillis()}"
         callerName = intent.getStringExtra("caller_name") ?: "N.E.X.A Voice Bridge"
@@ -294,6 +320,8 @@ class FakeCallActivity : ComponentActivity() {
             val elapsedMs by recordingElapsedMs
             val inPip by isInPipMode
             val loudspeakerActive by isLoudspeaker
+            val cameraActive by isCameraActive
+            val backCamera by isBackCamera
 
             // Start call flow immediately on UI render
             LaunchedEffect(Unit) {
@@ -317,6 +345,7 @@ class FakeCallActivity : ComponentActivity() {
                 if (state == CallState.FINISHED) {
                     cancelOngoingCallNotification()
                     delay(300L)
+                    stopCameraStream()
                     voiceStreamHandler.stopStreaming()
                     finishAndRemoveTask()
                     @Suppress("DEPRECATION")
@@ -334,6 +363,8 @@ class FakeCallActivity : ComponentActivity() {
                 audioEnergy = voiceStreamHandler.currentAudioEnergy,
                 isLoudspeaker = loudspeakerActive,
                 recordingElapsedMs = elapsedMs,
+                isCameraActive = cameraActive,
+                isBackCamera = backCamera,
                 onAnswer = { handleAccept() },
                 onReject = { handleReject() },
                 onToggleLoudspeaker = { enabled ->
@@ -344,10 +375,27 @@ class FakeCallActivity : ComponentActivity() {
                             setPictureInPictureParams(buildPipParams())
                         } catch (e: Exception) {}
                     }
+                },
+                onToggleCamera = { toggleCamera() },
+                onSwitchCamera = { switchCameraLens() },
+                onPreviewSurfaceReady = { provider ->
+                    currentSurfaceProvider = provider
+                    cameraStreamHandler.setPreviewSurfaceProvider(provider)
+                    if (isCameraActive.value) {
+                        cameraStreamHandler.startCamera(
+                            lifecycleOwner = this@FakeCallActivity,
+                            useBackCamera = isBackCamera.value,
+                            previewSurface = provider
+                        ) { frameBase64 ->
+                            sendVideoFrame(frameBase64)
+                        }
+                    }
                 }
+
             )
         }
     }
+
 
     // ─── Accept Handler (Live Voice Streaming Mode) ──────────────────────────
     private fun handleAccept() {
@@ -454,6 +502,7 @@ class FakeCallActivity : ComponentActivity() {
         if (callState.value == CallState.RINGING) {
             callState.value = CallState.REJECTED_SPEAKING
             audioPlayerHandler.stopAll()
+            stopCameraStream()
             voiceStreamHandler.stopStreaming()
             rejectionCount++
 
@@ -473,13 +522,72 @@ class FakeCallActivity : ComponentActivity() {
             }
         } else {
             // Ending active ongoing live voice call
-            Log.i(TAG, "🛑 User hung up active live call — closing session")
+            Log.i(TAG, "User hung up active live call — closing session")
             audioPlayerHandler.stopAll()
+            stopCameraStream()
             voiceStreamHandler.stopStreaming()
             sendCallEvent("CALL_FINISHED")
             callState.value = CallState.FINISHED
         }
     }
+
+    // ─── Camera Control Methods (Live Video Streaming) ───────────────────────
+    private fun toggleCamera() {
+        if (isCameraActive.value) {
+            stopCameraStream()
+        } else {
+            val hasCameraPermission = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasCameraPermission) {
+                startCameraStream()
+            } else {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+
+    private fun startCameraStream() {
+        isCameraActive.value = true
+        cameraStreamHandler.startCamera(
+            lifecycleOwner = this,
+            useBackCamera = isBackCamera.value,
+            previewSurface = currentSurfaceProvider
+        ) { frameBase64 ->
+            sendVideoFrame(frameBase64)
+        }
+    }
+
+    private fun switchCameraLens() {
+        if (!isCameraActive.value) return
+        isBackCamera.value = !isBackCamera.value
+        cameraStreamHandler.switchCamera(
+            lifecycleOwner = this,
+            useBackCamera = isBackCamera.value,
+            previewSurface = currentSurfaceProvider
+        ) { frameBase64 ->
+            sendVideoFrame(frameBase64)
+        }
+    }
+
+    private fun stopCameraStream() {
+        isCameraActive.value = false
+        try {
+            cameraStreamHandler.stopCamera()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping camera: ${e.message}")
+        }
+    }
+
+    private fun sendVideoFrame(frameBase64: String) {
+        val payload = buildJsonObject {
+            put("type", "CALL_VIDEO_FRAME")
+            put("command_id", commandId)
+            put("image_chunk", frameBase64)
+        }.toString()
+        NexaBridgeService.sendEvent(payload)
+    }
+
 
     // ─── Voice Recording Phase ────────────────────────────────────────────────
     private fun beginRecordingPhase() {
@@ -727,6 +835,7 @@ class FakeCallActivity : ComponentActivity() {
             sendCallEvent("CALL_FINISHED")
         }
         cancelOngoingCallNotification()
+        try { cameraStreamHandler.stopCamera() } catch (e: Exception) {}
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()
@@ -745,9 +854,14 @@ fun FakeCallScreen(
     audioEnergy: Float = 0f,
     isLoudspeaker: Boolean = false,
     recordingElapsedMs: Long,
+    isCameraActive: Boolean = false,
+    isBackCamera: Boolean = true,
     onAnswer: () -> Unit,
     onReject: () -> Unit,
-    onToggleLoudspeaker: (Boolean) -> Unit = {}
+    onToggleLoudspeaker: (Boolean) -> Unit = {},
+    onToggleCamera: () -> Unit = {},
+    onSwitchCamera: () -> Unit = {},
+    onPreviewSurfaceReady: (androidx.camera.core.Preview.SurfaceProvider) -> Unit = {}
 ) {
     if (isInPipMode) {
         // Pure Minimalist Cybernetic PiP Mode (WhatsApp Style)
@@ -805,7 +919,7 @@ fun FakeCallScreen(
                 // ── Header ──────────────────────────────────────────────
                 CallHeader(callState = callState, hudState = hudState, callerName = callerName)
 
-                // ── Center: Avatar / Expressive Eyes + Message UI ────────
+                // ── Center: Avatar / Expressive Eyes / Camera Preview ────
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
@@ -866,8 +980,64 @@ fun FakeCallScreen(
                                 lineHeight = 24.sp
                             )
                         }
+                    } else if (isCameraActive) {
+                        // Live Multimodal Video Call Camera Preview
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(320.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .border(
+                                    2.dp,
+                                    Brush.linearGradient(listOf(Color(0xFF64FFDA), Color(0xFF00E5FF))),
+                                    RoundedCornerShape(24.dp)
+                                )
+                                .background(Color(0xFF0D1B2A)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    PreviewView(ctx).apply {
+                                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                                        scaleType = PreviewView.ScaleType.FILL_CENTER
+                                        onPreviewSurfaceReady(this.surfaceProvider)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+
+                            // Overlay Pill badge at Top-Start
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF040B16).copy(alpha = 0.8f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF64FFDA))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isBackCamera) "KAMERA BELAKANG (1 FPS)" else "KAMERA DEPAN (1 FPS)",
+                                        color = Color(0xFF64FFDA),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
                     } else {
-                        // 🤖 Active Live Call Session: Cybernetic Expressive OLED Eyes!
+                        // Active Live Call Session: Cybernetic Expressive OLED Eyes
                         NexaExpressiveEyes(
                             hudState = hudState,
                             isSpeaking = isSpeaking,
@@ -908,20 +1078,20 @@ fun FakeCallScreen(
                             )
                         }
                     } else if (callState != CallState.FINISHED) {
-                        // Ongoing call active: Show Loudspeaker Toggle (Left) & End Call (Right) - Icon Only
+                        // Ongoing call active: Loudspeaker + Camera + Lens Switch + End Call
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 48.dp),
+                                .padding(horizontal = 24.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val haptic = LocalHapticFeedback.current
 
-                            // ── Left: Loudspeaker Toggle (Icon Only) ──
+                            // ── 1. Loudspeaker Toggle ──
                             Box(
                                 modifier = Modifier
-                                    .size(64.dp)
+                                    .size(58.dp)
                                     .clip(CircleShape)
                                     .background(
                                         if (isLoudspeaker)
@@ -943,14 +1113,67 @@ fun FakeCallScreen(
                                 SpeakerIcon(
                                     isLoudspeaker = isLoudspeaker,
                                     tint = if (isLoudspeaker) Color(0xFF002B36) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
 
-                            // ── Right: End Call (Icon Only) ──
+                            // ── 2. Camera Stream Toggle ──
                             Box(
                                 modifier = Modifier
-                                    .size(68.dp)
+                                    .size(58.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isCameraActive)
+                                            Brush.radialGradient(listOf(Color(0xFF64FFDA), Color(0xFF00BFA5)))
+                                        else
+                                            Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
+                                    )
+                                    .border(
+                                        2.dp,
+                                        if (isCameraActive) Color(0xFF64FFDA) else Color(0xFF475569),
+                                        CircleShape
+                                    )
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onToggleCamera()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                    contentDescription = if (isCameraActive) "Matikan Kamera" else "Aktifkan Kamera",
+                                    tint = if (isCameraActive) Color(0xFF040B16) else Color(0xFF94A3B8),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+
+                            // ── 3. Switch Lens (Visible when camera active) ──
+                            if (isCameraActive) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(58.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.radialGradient(listOf(Color(0xFF334155), Color(0xFF1E293B))))
+                                        .border(2.dp, Color(0xFF64748B), CircleShape)
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSwitchCamera()
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FlipCameraAndroid,
+                                        contentDescription = "Ganti Lensa Kamera",
+                                        tint = Color(0xFFE2E8F0),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+
+                            // ── 4. End Call ──
+                            Box(
+                                modifier = Modifier
+                                    .size(62.dp)
                                     .clip(CircleShape)
                                     .background(
                                         Brush.radialGradient(
@@ -968,7 +1191,7 @@ fun FakeCallScreen(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Tutup Panggilan",
                                     tint = Color.White,
-                                    modifier = Modifier.size(34.dp)
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
                         }
