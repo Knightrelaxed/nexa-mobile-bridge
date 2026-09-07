@@ -40,11 +40,11 @@ class CameraStreamHandler(private val context: Context) {
         /** Minimum ms between frames sent to Gemini (~1 FPS = 1000ms) */
         private const val FRAME_THROTTLE_MS = 1000L
 
-        /** JPEG compression quality — 65 balances fidelity and payload size */
-        private const val JPEG_QUALITY = 65
+        /** JPEG compression quality — 50 balances low latency, small payload (~16KB) and visual clarity */
+        private const val JPEG_QUALITY = 50
 
-        /** Max long dimension of bitmap before resize. Keep under 800px for fast encode. */
-        private const val MAX_DIM = 800
+        /** Max long dimension of bitmap before resize. 480px is optimal for Gemini Live multimodality. */
+        private const val MAX_DIM = 480
     }
 
     private var cameraExecutor: ExecutorService? = null
@@ -204,7 +204,7 @@ class CameraStreamHandler(private val context: Context) {
 
     /**
      * Rotate (and optionally mirror front camera) bitmap to correct upright orientation.
-     * Also scales down to [MAX_DIM] if larger to keep payload small.
+     * Also scales down to [MAX_DIM] in a single Matrix transformation to eliminate extra allocations.
      */
     private fun rotateBitmap(source: Bitmap, rotationDegrees: Int, isFrontCamera: Boolean): Bitmap {
         val matrix = Matrix()
@@ -216,21 +216,14 @@ class CameraStreamHandler(private val context: Context) {
             matrix.postScale(-1f, 1f)
         }
 
-        var result = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
-
-        // Scale down if needed
-        if (result.width > MAX_DIM || result.height > MAX_DIM) {
-            val ratio = result.width.toFloat() / result.height.toFloat()
-            val (newW, newH) = if (ratio > 1) {
-                Pair(MAX_DIM, (MAX_DIM / ratio).toInt())
-            } else {
-                Pair((MAX_DIM * ratio).toInt(), MAX_DIM)
-            }
-            val scaled = Bitmap.createScaledBitmap(result, newW, newH, true)
-            result.recycle()
-            result = scaled
+        // Single-pass downscaling to keep frame payload ~15KB
+        val maxSide = maxOf(source.width, source.height)
+        if (maxSide > MAX_DIM) {
+            val scale = MAX_DIM.toFloat() / maxSide.toFloat()
+            matrix.postScale(scale, scale)
         }
-        return result
+
+        return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     }
 
     private fun bitmapToJpegBase64(bitmap: Bitmap): String {

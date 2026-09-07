@@ -580,6 +580,10 @@ class FakeCallActivity : ComponentActivity() {
     }
 
     private fun sendVideoFrame(frameBase64: String) {
+        if (!isCameraActive.value) return
+        // Do not transmit video frames while assistant is speaking or playing audio
+        if (voiceStreamHandler.isPlayingAudio()) return
+
         val payload = buildJsonObject {
             put("type", "CALL_VIDEO_FRAME")
             put("command_id", commandId)
