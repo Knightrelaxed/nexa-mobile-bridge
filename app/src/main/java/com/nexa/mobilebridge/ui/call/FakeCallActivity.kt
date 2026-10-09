@@ -47,7 +47,11 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Headset
+import com.nexa.mobilebridge.dispatcher.handler.AudioOutputRoute
 import com.nexa.mobilebridge.dispatcher.handler.CameraStreamHandler
+import com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -138,6 +142,7 @@ class FakeCallActivity : ComponentActivity() {
     private val recordingElapsedMs = mutableLongStateOf(0L)
     private val isInPipMode = mutableStateOf(false)
     private val isLoudspeaker = mutableStateOf(false)
+    private val audioRoute = mutableStateOf(AudioOutputRoute.EARPIECE)
     private val isCameraActive = mutableStateOf(false)
     private val isBackCamera = mutableStateOf(true)
     private var currentSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null
@@ -154,10 +159,11 @@ class FakeCallActivity : ComponentActivity() {
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ACTION_PIP_TOGGLE_SPEAKER) {
-                val newSpeakerState = !isLoudspeaker.value
-                isLoudspeaker.value = newSpeakerState
-                voiceStreamHandler.setLoudspeaker(newSpeakerState)
-                Log.i(TAG, "PiP RemoteAction: Speaker toggled -> $newSpeakerState")
+                voiceStreamHandler.toggleAudioRoute()
+                val current = voiceStreamHandler.currentRoute
+                audioRoute.value = current
+                isLoudspeaker.value = (current == AudioOutputRoute.SPEAKER)
+                Log.i(TAG, "PiP RemoteAction: Audio route toggled -> $current")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     try {
                         setPictureInPictureParams(buildPipParams())
@@ -223,13 +229,36 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
-    // Runtime permission launcher for RECORD_AUDIO
+    // Runtime permission launcher for RECORD_AUDIO & BLUETOOTH_CONNECT
+    private val callPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
+        val btGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false
+        } else true
+        Log.i(TAG, "Permissions check: RECORD_AUDIO=$audioGranted, BLUETOOTH_CONNECT=$btGranted")
+        if (audioGranted) {
+            Log.i(TAG, "RECORD_AUDIO permission granted — starting live stream")
+            startContinuousLiveVoice()
+        } else {
+            Log.w(TAG, "RECORD_AUDIO permission denied — closing call")
+            sendCallEvent(NexaActions.CALL_REJECTED)
+            callState.value = CallState.FINISHED
+        }
+    }
+
+    // Runtime permission launcher for RECORD_AUDIO (single permission fallback)
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            Log.i(TAG, "RECORD_AUDIO permission granted — starting live stream")
-            startContinuousLiveVoice()
+            Log.i(TAG, "RECORD_AUDIO permission granted")
+            if (callState.value == CallState.RECORDING) {
+                startVoiceRecording()
+            } else {
+                startContinuousLiveVoice()
+            }
         } else {
             Log.w(TAG, "RECORD_AUDIO permission denied — closing call")
             sendCallEvent(NexaActions.CALL_REJECTED)
@@ -261,7 +290,19 @@ class FakeCallActivity : ComponentActivity() {
         ttsHandler = TtsHandler(applicationContext)
         audioPlayerHandler = AudioPlayerHandler(applicationContext)
         voiceRecorderHandler = VoiceRecorderHandler(applicationContext)
-        voiceStreamHandler = com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler(applicationContext)
+        voiceStreamHandler = VoiceStreamHandler(applicationContext)
+        voiceStreamHandler.onAudioRouteChanged = { route ->
+            lifecycleScope.launch(Dispatchers.Main) {
+                audioRoute.value = route
+                isLoudspeaker.value = (route == AudioOutputRoute.SPEAKER)
+                Log.i(TAG, "Observed audio route change: $route")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPipMode.value) {
+                    try {
+                        setPictureInPictureParams(buildPipParams())
+                    } catch (_: Exception) {}
+                }
+            }
+        }
         cameraStreamHandler = CameraStreamHandler(applicationContext)
 
         commandId = intent.getStringExtra("command_id") ?: "call_${System.currentTimeMillis()}"
@@ -320,6 +361,7 @@ class FakeCallActivity : ComponentActivity() {
             val elapsedMs by recordingElapsedMs
             val inPip by isInPipMode
             val loudspeakerActive by isLoudspeaker
+            val currentAudioRoute by audioRoute
             val cameraActive by isCameraActive
             val backCamera by isBackCamera
 
@@ -362,14 +404,28 @@ class FakeCallActivity : ComponentActivity() {
                 isSpeaking = voiceStreamHandler.isPlayingAudio(),
                 audioEnergy = voiceStreamHandler.currentAudioEnergy,
                 isLoudspeaker = loudspeakerActive,
+                audioRoute = currentAudioRoute,
                 recordingElapsedMs = elapsedMs,
                 isCameraActive = cameraActive,
                 isBackCamera = backCamera,
                 onAnswer = { handleAccept() },
                 onReject = { handleReject() },
                 onToggleLoudspeaker = { enabled ->
-                    isLoudspeaker.value = enabled
                     voiceStreamHandler.setLoudspeaker(enabled)
+                    val current = voiceStreamHandler.currentRoute
+                    audioRoute.value = current
+                    isLoudspeaker.value = (current == AudioOutputRoute.SPEAKER)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            setPictureInPictureParams(buildPipParams())
+                        } catch (e: Exception) {}
+                    }
+                },
+                onToggleAudioRoute = {
+                    voiceStreamHandler.toggleAudioRoute()
+                    val current = voiceStreamHandler.currentRoute
+                    audioRoute.value = current
+                    isLoudspeaker.value = (current == AudioOutputRoute.SPEAKER)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         try {
                             setPictureInPictureParams(buildPipParams())
@@ -391,7 +447,6 @@ class FakeCallActivity : ComponentActivity() {
                         }
                     }
                 }
-
             )
         }
     }
@@ -416,14 +471,25 @@ class FakeCallActivity : ComponentActivity() {
         // Notify server: call accepted (launches Google Gemini Live session)
         sendCallEvent(NexaActions.CALL_ACCEPTED)
 
-        val hasPermission = ContextCompat.checkSelfPermission(
+        val audioGranted = ContextCompat.checkSelfPermission(
             this, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
 
-        if (hasPermission) {
+        val btGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        if (audioGranted && btGranted) {
             startContinuousLiveVoice()
         } else {
-            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            val toRequest = mutableListOf<String>()
+            if (!audioGranted) toRequest.add(Manifest.permission.RECORD_AUDIO)
+            if (!btGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                toRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            callPermissionsLauncher.launch(toRequest.toTypedArray())
         }
     }
 
@@ -788,13 +854,18 @@ class FakeCallActivity : ComponentActivity() {
 
         val actions = mutableListOf<RemoteAction>()
 
-        // 1. Action: Loudspeaker Toggle
-        val speakerIconRes = if (isLoudspeaker.value) {
+        // 1. Action: Audio Route Toggle
+        val speakerIconRes = if (audioRoute.value == AudioOutputRoute.SPEAKER) {
             android.R.drawable.stat_sys_speakerphone
         } else {
             android.R.drawable.ic_lock_silent_mode_off
         }
-        val speakerTitle = if (isLoudspeaker.value) "Speaker ON" else "Earpiece"
+        val speakerTitle = when (audioRoute.value) {
+            AudioOutputRoute.BLUETOOTH -> "Bluetooth TWS"
+            AudioOutputRoute.WIRED_HEADSET -> "Headset Kabel"
+            AudioOutputRoute.SPEAKER -> "Speaker ON"
+            AudioOutputRoute.EARPIECE -> "Earpiece"
+        }
         val speakerIntent = Intent(ACTION_PIP_TOGGLE_SPEAKER).setPackage(packageName)
         val speakerPendingIntent = PendingIntent.getBroadcast(
             this,
@@ -857,12 +928,14 @@ fun FakeCallScreen(
     isSpeaking: Boolean = false,
     audioEnergy: Float = 0f,
     isLoudspeaker: Boolean = false,
+    audioRoute: AudioOutputRoute = AudioOutputRoute.EARPIECE,
     recordingElapsedMs: Long,
     isCameraActive: Boolean = false,
     isBackCamera: Boolean = true,
     onAnswer: () -> Unit,
     onReject: () -> Unit,
     onToggleLoudspeaker: (Boolean) -> Unit = {},
+    onToggleAudioRoute: () -> Unit = {},
     onToggleCamera: () -> Unit = {},
     onSwitchCamera: () -> Unit = {},
     onPreviewSurfaceReady: (androidx.camera.core.Preview.SurfaceProvider) -> Unit = {}
@@ -1093,33 +1166,68 @@ fun FakeCallScreen(
                         ) {
                             val haptic = LocalHapticFeedback.current
 
-                            // ── 1. Loudspeaker Toggle ──
+                            // ── 1. Smart Audio Route Toggle (Bluetooth / Wired / Speaker / Earpiece) ──
+                            val isSpeaker = audioRoute == AudioOutputRoute.SPEAKER
+                            val isBt = audioRoute == AudioOutputRoute.BLUETOOTH
+                            val isWired = audioRoute == AudioOutputRoute.WIRED_HEADSET
+
+                            val routeBgBrush = when {
+                                isSpeaker -> Brush.radialGradient(listOf(Color(0xFF00E5FF), Color(0xFF0097A7)))
+                                isBt -> Brush.radialGradient(listOf(Color(0xFF64FFDA), Color(0xFF00897B)))
+                                isWired -> Brush.radialGradient(listOf(Color(0xFF81C784), Color(0xFF2E7D32)))
+                                else -> Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
+                            }
+                            val routeBorderColor = when {
+                                isSpeaker -> Color(0xFF84FFFF)
+                                isBt -> Color(0xFF64FFDA)
+                                isWired -> Color(0xFFA5D6A7)
+                                else -> Color(0xFF475569)
+                            }
+
                             Box(
                                 modifier = Modifier
                                     .size(58.dp)
                                     .clip(CircleShape)
-                                    .background(
-                                        if (isLoudspeaker)
-                                            Brush.radialGradient(listOf(Color(0xFF00E5FF), Color(0xFF0097A7)))
-                                        else
-                                            Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
-                                    )
-                                    .border(
-                                        2.dp,
-                                        if (isLoudspeaker) Color(0xFF84FFFF) else Color(0xFF475569),
-                                        CircleShape
-                                    )
+                                    .background(routeBgBrush)
+                                    .border(2.dp, routeBorderColor, CircleShape)
                                     .clickable {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onToggleLoudspeaker(!isLoudspeaker)
+                                        onToggleAudioRoute()
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
-                                SpeakerIcon(
-                                    isLoudspeaker = isLoudspeaker,
-                                    tint = if (isLoudspeaker) Color(0xFF002B36) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                when (audioRoute) {
+                                    AudioOutputRoute.BLUETOOTH -> {
+                                        Icon(
+                                            imageVector = Icons.Default.Bluetooth,
+                                            contentDescription = "Bluetooth TWS",
+                                            tint = Color(0xFF040B16),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                    AudioOutputRoute.WIRED_HEADSET -> {
+                                        Icon(
+                                            imageVector = Icons.Default.Headset,
+                                            contentDescription = "Headset Kabel",
+                                            tint = Color(0xFF040B16),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                    AudioOutputRoute.SPEAKER -> {
+                                        SpeakerIcon(
+                                            isLoudspeaker = true,
+                                            tint = Color(0xFF002B36),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                    AudioOutputRoute.EARPIECE -> {
+                                        SpeakerIcon(
+                                            isLoudspeaker = false,
+                                            tint = Color(0xFF94A3B8),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
                             }
 
                             // ── 2. Camera Stream Toggle ──

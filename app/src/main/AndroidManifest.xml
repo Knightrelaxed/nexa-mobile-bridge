@@ -35,6 +35,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" /> <!-- For voice input during call interaction -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" /> <!-- For recording in foreground -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" /> <!-- For dynamic VoIP communication routing -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" /> <!-- Android 12+ for Bluetooth TWS/SCO headset communication -->
 
     <application
         android:name=".NexaBridgeApp"
