@@ -71,6 +71,9 @@ class VoiceStreamHandler(private val context: Context) {
 
     private val playbackQueue = LinkedBlockingQueue<ByteArray>()
 
+    @Volatile
+    private var totalFramesWritten: Long = 0L
+
     // Turn tracking
     @Volatile
     var isAssistantSpeaking = false
@@ -191,16 +194,14 @@ class VoiceStreamHandler(private val context: Context) {
                         }
 
                         // Turn-Aware Echo Suppression:
-                        // Only suppress mic uplink during LOUDSPEAKER playback to prevent
-                        // speaker audio from leaking into the microphone.
+                        // Only suppress mic uplink during LOUDSPEAKER playback when assistant is actually rendering sound.
+                        // Fill chunk with silence to maintain continuous 16kHz audio clock without leaking loudspeaker echo.
                         // On Headset (Bluetooth / Wired) or Earpiece, audio does not leak into the mic,
-                        // so true full-duplex is preserved without dropping user words!
-                        val now = System.currentTimeMillis()
-                        val isLoudspeakerPlaying = (currentRoute == AudioOutputRoute.SPEAKER) &&
-                                (isAssistantSpeaking || (now - lastAudioReceivedTime < 250))
+                        // so true full-duplex is preserved without zeroing user words!
+                        val isLoudspeakerPlaying = (currentRoute == AudioOutputRoute.SPEAKER) && isReallyPlaying()
 
                         if (isLoudspeakerPlaying) {
-                            continue // Suppress loudspeaker feedback loop
+                            chunk.fill(0) // Zero timeline jump: send silence frame instead of dropping packet
                         }
 
                         // Pure 1:1 unclipped 16kHz audio transmission to Google Gemini Live
@@ -222,10 +223,13 @@ class VoiceStreamHandler(private val context: Context) {
                             isAssistantSpeaking = true
                             lastAudioReceivedTime = System.currentTimeMillis()
                             currentAudioEnergy = calculatePcmRms(chunk)
-                            audioTrack?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
+                            val bytesWritten = audioTrack?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING) ?: 0
+                            if (bytesWritten > 0) {
+                                totalFramesWritten += (bytesWritten / 2)
+                            }
                         } else {
-                            // When queue drains, clear speaking flag and energy after 300ms tail
-                            if (System.currentTimeMillis() - lastAudioReceivedTime > 300) {
+                            // When queue drains, verify if hardware DAC has really finished playing buffered frames
+                            if (!isReallyPlaying()) {
                                 isAssistantSpeaking = false
                                 currentAudioEnergy = 0f
                             }
@@ -242,8 +246,15 @@ class VoiceStreamHandler(private val context: Context) {
         }
     }
 
+    fun isReallyPlaying(): Boolean {
+        val track = audioTrack ?: return false
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) return false
+        val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+        return (totalFramesWritten > head) || playbackQueue.isNotEmpty()
+    }
+
     fun isPlayingAudio(): Boolean {
-        return isAssistantSpeaking || playbackQueue.isNotEmpty() || (System.currentTimeMillis() - lastAudioReceivedTime < 500)
+        return isAssistantSpeaking || isReallyPlaying()
     }
 
     private fun initAudioTrack(sharedSessionId: Int) {
@@ -276,6 +287,7 @@ class VoiceStreamHandler(private val context: Context) {
             }
 
             audioTrack = builder.build()
+            totalFramesWritten = 0L
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
             Log.i(TAG, " AudioTrack ready (24kHz PCM, Paired Session: $sharedSessionId)")
@@ -549,6 +561,7 @@ class VoiceStreamHandler(private val context: Context) {
         try {
             audioTrack?.pause()
             audioTrack?.flush()
+            totalFramesWritten = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
             audioTrack?.play()
         } catch (e: Exception) {
             Log.w(TAG, "Error flushing AudioTrack: ${e.message}")
@@ -558,6 +571,7 @@ class VoiceStreamHandler(private val context: Context) {
     fun stopStreaming() {
         isStreaming = false
         isAssistantSpeaking = false
+        totalFramesWritten = 0L
         recordingJob?.cancel()
         playbackJob?.cancel()
         playbackQueue.clear()
