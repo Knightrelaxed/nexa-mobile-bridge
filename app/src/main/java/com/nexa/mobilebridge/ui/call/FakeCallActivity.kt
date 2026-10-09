@@ -412,6 +412,7 @@ class FakeCallActivity : ComponentActivity() {
                 isBackCamera = backCamera,
                 onAnswer = { handleAccept() },
                 onReject = { handleReject() },
+                onEyeTapped = { target, tapCount -> handleTactileEyeTap(target, tapCount) },
                 onToggleLoudspeaker = { enabled ->
                     voiceStreamHandler.setLoudspeaker(enabled)
                     val current = voiceStreamHandler.currentRoute
@@ -842,6 +843,24 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
+    private fun handleTactileEyeTap(target: String, tapCount: Int) {
+        val payload = buildJsonObject {
+            put("type", "CALL_TACTILE_EVENT")
+            put("command_id", commandId)
+            put("target", target)
+            put("tap_count", tapCount)
+            put("hud_state", hudState.value.name)
+            put("timestamp", System.currentTimeMillis())
+        }.toString()
+        NexaBridgeService.sendEvent(payload)
+        Log.i(TAG, "Eye tactile tap: target=$target, tapCount=$tapCount")
+
+        if (tapCount >= 2 && voiceStreamHandler.isPlayingAudio()) {
+            voiceStreamHandler.flushOutputBuffer()
+            hudState.value = LiveVoiceHudState.LISTENING
+        }
+    }
+
     private fun buildPipParams(): PictureInPictureParams {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             throw IllegalStateException("PiP requires Android O+")
@@ -942,7 +961,8 @@ fun FakeCallScreen(
     onToggleAudioRoute: () -> Unit = {},
     onToggleCamera: () -> Unit = {},
     onSwitchCamera: () -> Unit = {},
-    onPreviewSurfaceReady: (androidx.camera.core.Preview.SurfaceProvider) -> Unit = {}
+    onPreviewSurfaceReady: (androidx.camera.core.Preview.SurfaceProvider) -> Unit = {},
+    onEyeTapped: (target: String, tapCount: Int) -> Unit = { _, _ -> }
 ) {
     if (isInPipMode) {
         // Pure Minimalist Cybernetic PiP Mode (WhatsApp Style)
@@ -958,6 +978,7 @@ fun FakeCallScreen(
                 hudState = hudState,
                 isSpeaking = isSpeaking,
                 audioEnergy = audioEnergy,
+                onEyeTapped = onEyeTapped,
                 modifier = Modifier
                     .fillMaxWidth()
                     .scale(0.65f)
@@ -1124,6 +1145,7 @@ fun FakeCallScreen(
                             hudState = hudState,
                             isSpeaking = isSpeaking,
                             audioEnergy = audioEnergy,
+                            onEyeTapped = onEyeTapped,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 16.dp)

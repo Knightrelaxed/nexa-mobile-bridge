@@ -13,6 +13,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -37,9 +39,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.random.Random
 
@@ -61,12 +67,17 @@ fun NexaExpressiveEyes(
     hudState: LiveVoiceHudState,
     isSpeaking: Boolean,
     audioEnergy: Float = 0f,
+    onEyeTapped: (target: String, tapCount: Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     // ─── 1. Autonomous Decoupled Blink Physics Engine ─────────────────────────────
     // Uses Animatable for precise frame-aligned blink animation instead of
     // System.currentTimeMillis() busy-loop which wastes CPU and is imprecise.
     val blinkAnimatable = remember { Animatable(1f) }
+    val leftTapBlink = remember { Animatable(1f) }
+    val rightTapBlink = remember { Animatable(1f) }
+    val coroutineScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
     var eyeSaccadeX by remember { mutableFloatStateOf(0f) }
 
     // Smooth the saccade micro-shift so eyes glide rather than snap
@@ -440,7 +451,44 @@ fun NexaExpressiveEyes(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(240.dp),
+            .height(240.dp)
+            .pointerInput(hudState) {
+                detectTapGestures(
+                    onDoubleTap = { offset ->
+                        val isLeft = offset.x < size.width / 2f
+                        val target = if (isLeft) "LEFT" else "RIGHT"
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        coroutineScope.launch {
+                            launch {
+                                leftTapBlink.animateTo(0.05f, tween(50, easing = FastOutSlowInEasing))
+                                leftTapBlink.animateTo(1.15f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
+                                leftTapBlink.animateTo(1f, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessHigh))
+                            }
+                            launch {
+                                rightTapBlink.animateTo(0.05f, tween(50, easing = FastOutSlowInEasing))
+                                rightTapBlink.animateTo(1.15f, spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium))
+                                rightTapBlink.animateTo(1f, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessHigh))
+                            }
+                        }
+                        onEyeTapped(target, 2)
+                    },
+                    onTap = { offset ->
+                        val isLeft = offset.x < size.width / 2f
+                        val target = if (isLeft) "LEFT" else "RIGHT"
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        coroutineScope.launch {
+                            if (isLeft) {
+                                leftTapBlink.animateTo(0.05f, tween(60, easing = FastOutSlowInEasing))
+                                leftTapBlink.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
+                            } else {
+                                rightTapBlink.animateTo(0.05f, tween(60, easing = FastOutSlowInEasing))
+                                rightTapBlink.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow))
+                            }
+                        }
+                        onEyeTapped(target, 1)
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
         Canvas(
@@ -483,7 +531,7 @@ fun NexaExpressiveEyes(
                 pupilNormY = leftPupilY,
                 coreColor = coreColor,
                 glowColor = glowColor,
-                blinkScaleY = blinkAnimatable.value,
+                blinkScaleY = blinkAnimatable.value * leftTapBlink.value,
                 isVisor = (hudState == LiveVoiceHudState.PROCESSING || hudState == LiveVoiceHudState.RECONNECTING),
                 scanShimmer = scanShimmer
             )
@@ -501,7 +549,7 @@ fun NexaExpressiveEyes(
                 pupilNormY = rightPupilY,
                 coreColor = coreColor,
                 glowColor = glowColor,
-                blinkScaleY = blinkAnimatable.value,
+                blinkScaleY = blinkAnimatable.value * rightTapBlink.value,
                 isVisor = (hudState == LiveVoiceHudState.PROCESSING || hudState == LiveVoiceHudState.RECONNECTING),
                 scanShimmer = scanShimmer
             )
