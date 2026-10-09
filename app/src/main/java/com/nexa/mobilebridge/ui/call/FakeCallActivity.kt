@@ -216,26 +216,8 @@ class FakeCallActivity : ComponentActivity() {
                         hudState.value = LiveVoiceHudState.SPEAKING
                         pendingStateEntryTime = 0L
                     } else if (rawJson.contains("\"LISTENING\"")) {
-                        val currentHud = hudState.value
-                        if (currentHud == LiveVoiceHudState.PROCESSING) {
-                            val elapsed = System.currentTimeMillis() - pendingStateEntryTime
-                            if (elapsed < 1500L) {
-                                val remaining = 1500L - elapsed
-                                lifecycleScope.launch(Dispatchers.Main) {
-                                    kotlinx.coroutines.delay(remaining)
-                                    if (hudState.value == LiveVoiceHudState.PROCESSING) {
-                                        hudState.value = LiveVoiceHudState.LISTENING
-                                        pendingStateEntryTime = 0L
-                                    }
-                                }
-                            } else {
-                                hudState.value = LiveVoiceHudState.LISTENING
-                                pendingStateEntryTime = 0L
-                            }
-                        } else {
-                            hudState.value = LiveVoiceHudState.LISTENING
-                            pendingStateEntryTime = 0L
-                        }
+                        hudState.value = LiveVoiceHudState.LISTENING
+                        pendingStateEntryTime = 0L
                     } else if (rawJson.contains("\"RECONNECTING\"")) {
                         hudState.value = LiveVoiceHudState.RECONNECTING
                         pendingStateEntryTime = 0L
