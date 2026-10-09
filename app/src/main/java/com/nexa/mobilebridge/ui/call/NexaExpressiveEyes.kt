@@ -211,7 +211,7 @@ fun NexaExpressiveEyes(
     // ── Left Eye Geometries ──
     val targetLeftWidth = when (hudState) {
         LiveVoiceHudState.LISTENING -> 58f + breatheAmplitude * 0.4f
-        LiveVoiceHudState.THINKING -> 74f
+        LiveVoiceHudState.THINKING -> 58f + (breathingOscillator * 2f)
         LiveVoiceHudState.PROCESSING -> 106f
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
         LiveVoiceHudState.SLOW_NETWORK -> 64f
@@ -220,7 +220,7 @@ fun NexaExpressiveEyes(
     }
     val targetLeftHeight = when (hudState) {
         LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
-        LiveVoiceHudState.THINKING -> 74f
+        LiveVoiceHudState.THINKING -> 82f + (breathingOscillator * 3f)
         LiveVoiceHudState.PROCESSING -> 26f
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
         LiveVoiceHudState.SLOW_NETWORK -> 44f
@@ -229,7 +229,7 @@ fun NexaExpressiveEyes(
     }
     val targetLeftCornerRadius = when (hudState) {
         LiveVoiceHudState.LISTENING -> 29f
-        LiveVoiceHudState.THINKING -> 37f // Round
+        LiveVoiceHudState.THINKING -> 29f // Elegant symmetrical stadium capsule
         LiveVoiceHudState.PROCESSING -> 13f // Visor
         LiveVoiceHudState.SPEAKING -> 29f
         LiveVoiceHudState.SLOW_NETWORK -> 22f
@@ -238,7 +238,7 @@ fun NexaExpressiveEyes(
     }
     val targetLeftRotation = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
-        LiveVoiceHudState.THINKING -> -6f // Thinking tilt
+        LiveVoiceHudState.THINKING -> 0f
         LiveVoiceHudState.PROCESSING -> 0f
         LiveVoiceHudState.SPEAKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> -10f // Droop puzzled
@@ -247,7 +247,7 @@ fun NexaExpressiveEyes(
     }
     val targetLeftOffsetY = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
-        LiveVoiceHudState.THINKING -> -6f
+        LiveVoiceHudState.THINKING -> -4f
         LiveVoiceHudState.PROCESSING -> 6f
         LiveVoiceHudState.SPEAKING -> -(effectiveAudioEnergy * 3f) // Subtle vertical bounce
         LiveVoiceHudState.SLOW_NETWORK -> 2f
@@ -255,16 +255,16 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.DISCONNECTING -> 4f
     }
     val targetLeftPupilRadius = when (hudState) {
-        LiveVoiceHudState.THINKING -> 22f
+        LiveVoiceHudState.THINKING -> 0f // Pure solid OLED glowing capsule
         LiveVoiceHudState.SLOW_NETWORK -> 11f
         else -> 0f
     }
     val targetLeftPupilX = when (hudState) {
-        LiveVoiceHudState.THINKING -> 0.44f + (thinkingDrift * 0.06f)
+        LiveVoiceHudState.THINKING -> 0f
         else -> 0f
     }
     val targetLeftPupilY = when (hudState) {
-        LiveVoiceHudState.THINKING -> -0.44f + (thinkingDrift * 0.04f)
+        LiveVoiceHudState.THINKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> -0.15f
         else -> 0f
     }
@@ -272,7 +272,7 @@ fun NexaExpressiveEyes(
     // ── Right Eye Geometries ──
     val targetRightWidth = when (hudState) {
         LiveVoiceHudState.LISTENING -> 58f + breatheAmplitude * 0.4f
-        LiveVoiceHudState.THINKING -> 68f
+        LiveVoiceHudState.THINKING -> 58f + (breathingOscillator * 2f)
         LiveVoiceHudState.PROCESSING -> 106f
         LiveVoiceHudState.SPEAKING -> 58f - (effectiveAudioEnergy * 4f)
         LiveVoiceHudState.SLOW_NETWORK -> 62f
@@ -281,7 +281,7 @@ fun NexaExpressiveEyes(
     }
     val targetRightHeight = when (hudState) {
         LiveVoiceHudState.LISTENING -> 84f + breatheAmplitude
-        LiveVoiceHudState.THINKING -> 44f // Squinted thinking
+        LiveVoiceHudState.THINKING -> 82f + (breathingOscillator * 3f)
         LiveVoiceHudState.PROCESSING -> 26f
         LiveVoiceHudState.SPEAKING -> 76f + (effectiveAudioEnergy * 32f)
         LiveVoiceHudState.SLOW_NETWORK -> 48f
@@ -290,7 +290,7 @@ fun NexaExpressiveEyes(
     }
     val targetRightCornerRadius = when (hudState) {
         LiveVoiceHudState.LISTENING -> 29f
-        LiveVoiceHudState.THINKING -> 22f
+        LiveVoiceHudState.THINKING -> 29f // Elegant symmetrical stadium capsule
         LiveVoiceHudState.PROCESSING -> 13f
         LiveVoiceHudState.SPEAKING -> 29f
         LiveVoiceHudState.SLOW_NETWORK -> 24f
@@ -299,7 +299,7 @@ fun NexaExpressiveEyes(
     }
     val targetRightRotation = when (hudState) {
         LiveVoiceHudState.LISTENING -> 0f
-        LiveVoiceHudState.THINKING -> 5f
+        LiveVoiceHudState.THINKING -> 0f
         LiveVoiceHudState.PROCESSING -> 0f
         LiveVoiceHudState.SPEAKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> 8f
@@ -316,16 +316,16 @@ fun NexaExpressiveEyes(
         LiveVoiceHudState.DISCONNECTING -> 4f
     }
     val targetRightPupilRadius = when (hudState) {
-        LiveVoiceHudState.THINKING -> 16f
+        LiveVoiceHudState.THINKING -> 0f // Pure solid OLED glowing capsule
         LiveVoiceHudState.SLOW_NETWORK -> 11f
         else -> 0f
     }
     val targetRightPupilX = when (hudState) {
-        LiveVoiceHudState.THINKING -> 0.38f + (thinkingDrift * 0.05f)
+        LiveVoiceHudState.THINKING -> 0f
         else -> 0f
     }
     val targetRightPupilY = when (hudState) {
-        LiveVoiceHudState.THINKING -> -0.35f + (thinkingDrift * 0.04f)
+        LiveVoiceHudState.THINKING -> 0f
         LiveVoiceHudState.SLOW_NETWORK -> -0.15f
         else -> 0f
     }
