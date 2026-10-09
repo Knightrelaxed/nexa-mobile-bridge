@@ -204,12 +204,10 @@ class FakeCallActivity : ComponentActivity() {
                         pendingStateEntryTime = 0L
                     } else if (hudState.value == LiveVoiceHudState.DISCONNECTING) {
                         // Ignore state resets if call is already disconnecting
-                    } else if (rawJson.contains("\"THINKING\"")) {
-                        hudState.value = LiveVoiceHudState.THINKING
-                        pendingStateEntryTime = System.currentTimeMillis()
-                    } else if (rawJson.contains("\"PROCESSING\"")) {
-                        hudState.value = LiveVoiceHudState.PROCESSING
-                        pendingStateEntryTime = System.currentTimeMillis()
+                    } else if (rawJson.contains("\"THINKING\"") || rawJson.contains("\"PROCESSING\"")) {
+                        // Gemini Live thinks while speaking in parallel — retain clean symmetrical LISTENING eyes
+                        hudState.value = LiveVoiceHudState.LISTENING
+                        pendingStateEntryTime = 0L
                     } else if (rawJson.contains("\"SPEAKING\"")) {
                         hudState.value = LiveVoiceHudState.SPEAKING
                         pendingStateEntryTime = 0L
