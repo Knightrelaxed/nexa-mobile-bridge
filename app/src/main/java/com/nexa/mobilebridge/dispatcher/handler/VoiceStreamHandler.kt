@@ -93,6 +93,7 @@ class VoiceStreamHandler(private val context: Context) {
 
     private var userExplicitSpeaker: Boolean = false
     private var audioDeviceCallback: AudioDeviceCallback? = null
+    private var communicationDeviceListener: AudioManager.OnCommunicationDeviceChangedListener? = null
 
     /**
      * Start full-duplex audio stream with hardware DSP session pairing.
@@ -131,6 +132,18 @@ class VoiceStreamHandler(private val context: Context) {
             initAudioTrack(hardwareSessionId)
             registerAudioDeviceListener()
             applySmartAudioRoute()
+
+            // Re-evaluate audio route after 400ms and 1200ms in case Bluetooth SCO connection finishes after call init
+            scope.launch(Dispatchers.Main) {
+                kotlinx.coroutines.delay(400)
+                if (isStreaming && !userExplicitSpeaker) {
+                    applySmartAudioRoute()
+                }
+                kotlinx.coroutines.delay(800)
+                if (isStreaming && !userExplicitSpeaker) {
+                    applySmartAudioRoute()
+                }
+            }
 
             // Bind hardware effects to unified session
             if (hardwareSessionId != 0) {
@@ -275,9 +288,12 @@ class VoiceStreamHandler(private val context: Context) {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
             device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
-            device.type == AudioDeviceInfo.TYPE_HEARING_AID
+            device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+            device.type == AudioDeviceInfo.TYPE_HEARING_AID ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
         } else {
-            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
         }
     }
 
@@ -293,30 +309,46 @@ class VoiceStreamHandler(private val context: Context) {
 
     private fun registerAudioDeviceListener() {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        if (audioDeviceCallback != null) return
-
-        val callback = object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                val hasNewHeadset = addedDevices?.any { isHeadsetDevice(it) } == true
-                Log.i(TAG, "[AUDIO_ROUTE] Audio devices plugged in. Headset attached: $hasNewHeadset")
-                if (hasNewHeadset) {
-                    userExplicitSpeaker = false
+        if (audioDeviceCallback == null) {
+            val callback = object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    val hasNewHeadset = addedDevices?.any { isHeadsetDevice(it) } == true
+                    Log.i(TAG, "[AUDIO_ROUTE] Audio devices plugged in. Headset attached: $hasNewHeadset")
+                    if (hasNewHeadset) {
+                        userExplicitSpeaker = false
+                    }
+                    applySmartAudioRoute()
                 }
-                applySmartAudioRoute()
-            }
 
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                val hadHeadset = removedDevices?.any { isHeadsetDevice(it) } == true
-                Log.i(TAG, "[AUDIO_ROUTE] Audio devices removed. Headset detached: $hadHeadset")
-                applySmartAudioRoute()
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                    val hadHeadset = removedDevices?.any { isHeadsetDevice(it) } == true
+                    Log.i(TAG, "[AUDIO_ROUTE] Audio devices removed. Headset detached: $hadHeadset")
+                    applySmartAudioRoute()
+                }
+            }
+            audioDeviceCallback = callback
+            try {
+                audioManager.registerAudioDeviceCallback(callback, null)
+                Log.i(TAG, "[AUDIO_ROUTE] AudioDeviceCallback registered successfully")
+            } catch (e: Exception) {
+                Log.w(TAG, "[AUDIO_ROUTE] Failed to register AudioDeviceCallback: ${e.message}")
             }
         }
-        audioDeviceCallback = callback
-        try {
-            audioManager.registerAudioDeviceCallback(callback, null)
-            Log.i(TAG, "[AUDIO_ROUTE] AudioDeviceCallback registered successfully")
-        } catch (e: Exception) {
-            Log.w(TAG, "[AUDIO_ROUTE] Failed to register AudioDeviceCallback: ${e.message}")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && communicationDeviceListener == null) {
+            val commListener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+                Log.i(TAG, "[AUDIO_ROUTE] Communication device changed by system: ${device?.productName} (type=${device?.type})")
+                if (!userExplicitSpeaker) {
+                    applySmartAudioRoute()
+                }
+            }
+            communicationDeviceListener = commListener
+            try {
+                audioManager.addOnCommunicationDeviceChangedListener(context.mainExecutor, commListener)
+                Log.i(TAG, "[AUDIO_ROUTE] OnCommunicationDeviceChangedListener registered")
+            } catch (e: Exception) {
+                Log.w(TAG, "[AUDIO_ROUTE] Could not register OnCommunicationDeviceChangedListener: ${e.message}")
+            }
         }
     }
 
@@ -344,7 +376,7 @@ class VoiceStreamHandler(private val context: Context) {
                         Log.i(TAG, "[AUDIO_ROUTE] Cleared communication device -> Default Speaker")
                     }
                 } else {
-                    // Priority 1: Bluetooth Headset (SCO / BLE / Hearing Aid)
+                    // Priority 1: Bluetooth Headset (SCO / BLE / Hearing Aid / A2DP)
                     val btDevice = available.firstOrNull { isBluetoothDevice(it) }
                     if (btDevice != null) {
                         val ok = audioManager.setCommunicationDevice(btDevice)
@@ -358,17 +390,11 @@ class VoiceStreamHandler(private val context: Context) {
                             currentRoute = AudioOutputRoute.WIRED_HEADSET
                             Log.i(TAG, "[AUDIO_ROUTE] Auto-routed -> WIRED_HEADSET (${wiredDevice.productName}, type=${wiredDevice.type}, success=$ok)")
                         } else {
-                            // Priority 3: Built-in Earpiece fallback
-                            val earpiece = available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-                            if (earpiece != null) {
-                                val ok = audioManager.setCommunicationDevice(earpiece)
-                                currentRoute = AudioOutputRoute.EARPIECE
-                                Log.i(TAG, "[AUDIO_ROUTE] Auto-routed -> EARPIECE (Internal, success=$ok)")
-                            } else {
-                                audioManager.clearCommunicationDevice()
-                                currentRoute = AudioOutputRoute.SPEAKER
-                                Log.i(TAG, "[AUDIO_ROUTE] Earpiece unavailable, routed -> DEFAULT")
-                            }
+                            // Priority 3: Clear communication device so Android auto-routes to Earpiece
+                            // without locking it down, allowing connected Bluetooth TWS to negotiate freely
+                            audioManager.clearCommunicationDevice()
+                            currentRoute = AudioOutputRoute.EARPIECE
+                            Log.i(TAG, "[AUDIO_ROUTE] Natural Earpiece active (no headset detected)")
                         }
                     }
                 }
@@ -514,6 +540,12 @@ class VoiceStreamHandler(private val context: Context) {
         audioDeviceCallback = null
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            communicationDeviceListener?.let {
+                try {
+                    audioManager.removeOnCommunicationDeviceChangedListener(it)
+                } catch (_: Exception) {}
+            }
+            communicationDeviceListener = null
             try { audioManager.clearCommunicationDevice() } catch (_: Exception) {}
         } else {
             try {
