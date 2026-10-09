@@ -105,7 +105,7 @@ enum class CallState {
 enum class LiveVoiceHudState(val label: String, val colorHex: Long) {
     LISTENING("Mendengarkan..", 0xFF64FFDA),        // Cyan Glow
     THINKING("Berpikir..", 0xFF10B981),             // Emerald Green
-    PROCESSING("Memproses..", 0xFFF59E0B),          // Amber Gold
+    PROCESSING("Mengerjakan..", 0xFFF59E0B),        // Amber Gold
     SPEAKING("Mentransmisikan..", 0xFF38BDF8),       // Electric Blue
     SLOW_NETWORK("Jaringan Lemah..", 0xFFFB923C),   // Orange Coral
     RECONNECTING("Memulihkan Koneksi..", 0xFFEF4444),// Crimson Red
@@ -204,10 +204,14 @@ class FakeCallActivity : ComponentActivity() {
                         pendingStateEntryTime = 0L
                     } else if (hudState.value == LiveVoiceHudState.DISCONNECTING) {
                         // Ignore state resets if call is already disconnecting
-                    } else if (rawJson.contains("\"THINKING\"") || rawJson.contains("\"PROCESSING\"")) {
+                    } else if (rawJson.contains("\"THINKING\"")) {
                         // Gemini Live thinks while speaking in parallel — retain clean symmetrical LISTENING eyes
                         hudState.value = LiveVoiceHudState.LISTENING
                         pendingStateEntryTime = 0L
+                    } else if (rawJson.contains("\"PROCESSING\"")) {
+                        // Backend tool / task execution — activate Amber Gold Mengerjakan visor eyes
+                        hudState.value = LiveVoiceHudState.PROCESSING
+                        pendingStateEntryTime = System.currentTimeMillis()
                     } else if (rawJson.contains("\"SPEAKING\"")) {
                         hudState.value = LiveVoiceHudState.SPEAKING
                         pendingStateEntryTime = 0L
