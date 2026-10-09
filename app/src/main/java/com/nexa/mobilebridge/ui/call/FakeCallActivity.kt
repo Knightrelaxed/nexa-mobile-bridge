@@ -551,9 +551,11 @@ class FakeCallActivity : ComponentActivity() {
                             // Nexa just finished speaking — mic returns to listening
                             hudState.value = LiveVoiceHudState.LISTENING
                             pendingStateEntryTime = 0L
-                        } else if ((currentHud == LiveVoiceHudState.THINKING || currentHud == LiveVoiceHudState.PROCESSING)
-                            && entryTime > 0L && now - entryTime > 7000) {
-                            // Server said THINKING/PROCESSING but no audio arrived within 7 seconds
+                        } else if (currentHud == LiveVoiceHudState.THINKING && entryTime > 0L && now - entryTime > 7000) {
+                            // Neural generation delayed > 7s
+                            hudState.value = LiveVoiceHudState.SLOW_NETWORK
+                        } else if (currentHud == LiveVoiceHudState.PROCESSING && entryTime > 0L && now - entryTime > 15000) {
+                            // Backend tool execution took > 15s (network or heavy API delay)
                             hudState.value = LiveVoiceHudState.SLOW_NETWORK
                         }
                     }
