@@ -171,6 +171,7 @@ class VoiceStreamHandler(private val context: Context) {
                         }
                     } catch (_: Exception) {}
                 }
+                updateHardwareEffectsForRoute(currentRoute)
             }
 
             audioRecord?.startRecording()
@@ -202,9 +203,8 @@ class VoiceStreamHandler(private val context: Context) {
                             continue // Suppress loudspeaker feedback loop
                         }
 
-                        // Boost mic gain 1.6x so Gemini Live VAD clearly hears user without shouting
-                        val boostedChunk = boostPcmGain(chunk, 1.6f)
-                        val base64Chunk = Base64.encodeToString(boostedChunk, Base64.NO_WRAP)
+                        // Pure 1:1 unclipped 16kHz audio transmission to Google Gemini Live
+                        val base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP)
                         onAudioChunk(base64Chunk)
                     } else if (readBytes < 0) {
                         Log.w(TAG, "AudioRecord read returned error code: $readBytes")
@@ -350,6 +350,7 @@ class VoiceStreamHandler(private val context: Context) {
                 if (currentRoute != newRoute) {
                     currentRoute = newRoute
                     isLoudspeakerActive = (currentRoute == AudioOutputRoute.SPEAKER)
+                    updateHardwareEffectsForRoute(currentRoute)
                     onAudioRouteChanged?.invoke(currentRoute)
                 }
             }
@@ -488,7 +489,32 @@ class VoiceStreamHandler(private val context: Context) {
         }
 
         isLoudspeakerActive = (currentRoute == AudioOutputRoute.SPEAKER)
+        updateHardwareEffectsForRoute(currentRoute)
         onAudioRouteChanged?.invoke(currentRoute)
+
+        // Ensure voice call stream volume is audibly set without requiring digital PCM clipping
+        try {
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+            if (currentVol < (maxVol * 0.75f).toInt()) {
+                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (maxVol * 0.85f).toInt(), 0)
+                Log.i(TAG, "[AUDIO] Voice call volume optimized: ${(maxVol * 0.85f).toInt()}/$maxVol")
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun updateHardwareEffectsForRoute(route: AudioOutputRoute) {
+        val isBt = (route == AudioOutputRoute.BLUETOOTH)
+        try {
+            // When Bluetooth headset is connected, the headset hardware already performs AEC/NS.
+            // Enabling phone DSP AEC/NS in series causes destructive phase cancellation, making voice muffled and robotic!
+            echoCanceler?.enabled = !isBt
+            noiseSuppressor?.enabled = !isBt
+            autoGainControl?.enabled = !isBt
+            Log.i(TAG, "[DSP] Hardware AEC/NS/AGC set to: ${!isBt} (Route: $route)")
+        } catch (e: Exception) {
+            Log.w(TAG, "[DSP] Failed to toggle hardware effects: ${e.message}")
+        }
     }
 
     fun setLoudspeaker(isLoudspeaker: Boolean) {
@@ -503,29 +529,12 @@ class VoiceStreamHandler(private val context: Context) {
         }
     }
 
-    private fun boostPcmGain(rawBytes: ByteArray, multiplier: Float = 2.2f): ByteArray {
-        val boosted = ByteArray(rawBytes.size)
-        for (i in 0 until rawBytes.size - 1 step 2) {
-            val low = rawBytes[i].toInt() and 0xFF
-            val high = rawBytes[i + 1].toInt()
-            val sample = (high shl 8) or low
-
-            var boostedSample = (sample * multiplier).toInt()
-            boostedSample = boostedSample.coerceIn(-32768, 32767)
-
-            boosted[i] = (boostedSample and 0xFF).toByte()
-            boosted[i + 1] = ((boostedSample shr 8) and 0xFF).toByte()
-        }
-        return boosted
-    }
-
     fun enqueueAudioChunk(pcmBase64: String) {
         try {
             val rawBytes = Base64.decode(pcmBase64, Base64.NO_WRAP)
-            val amplifiedBytes = boostPcmGain(rawBytes, 2.2f)
             lastAudioReceivedTime = System.currentTimeMillis()
             isAssistantSpeaking = true
-            playbackQueue.offer(amplifiedBytes)
+            playbackQueue.offer(rawBytes)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to decode incoming PCM audio chunk: ${e.message}")
         }
