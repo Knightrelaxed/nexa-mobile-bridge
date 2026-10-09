@@ -855,9 +855,11 @@ class FakeCallActivity : ComponentActivity() {
         NexaBridgeService.sendEvent(payload)
         Log.i(TAG, "Eye tactile tap: target=$target, tapCount=$tapCount")
 
-        if (tapCount >= 2 && voiceStreamHandler.isPlayingAudio()) {
+        if (tapCount >= 2) {
             voiceStreamHandler.flushOutputBuffer()
-            hudState.value = LiveVoiceHudState.LISTENING
+            if (hudState.value == LiveVoiceHudState.SPEAKING) {
+                hudState.value = LiveVoiceHudState.LISTENING
+            }
         }
     }
 

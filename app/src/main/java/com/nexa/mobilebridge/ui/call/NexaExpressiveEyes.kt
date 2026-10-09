@@ -452,7 +452,7 @@ fun NexaExpressiveEyes(
         modifier = modifier
             .fillMaxWidth()
             .height(240.dp)
-            .pointerInput(hudState) {
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = { offset ->
                         val isLeft = offset.x < size.width / 2f
