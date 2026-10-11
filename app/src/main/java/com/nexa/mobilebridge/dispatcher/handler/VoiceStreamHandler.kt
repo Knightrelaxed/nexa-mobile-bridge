@@ -38,13 +38,10 @@ enum class AudioOutputRoute(val label: String) {
  * Tuned for Google Gemini Multimodal Live API Real-Time Voice Calls.
  *
  * Architecture:
- * 1. Turn-Aware Uplink Gating: When assistant is actively speaking or playing audio chunks,
- *    uplink mic stream to Google is paused, completely preventing acoustic echo feedback and false barge-in.
- * 2. Instant Zero-Threshold Listening Mode: The moment assistant finishes speaking, mic opens
- *    with 100% full sensitivity (0 RMS threshold) so every word from user is immediately captured.
- * 3. Anti-Jitter Jitter Buffer: Continuous non-blocking playback with zero stutter.
- * 4. Hardware Session Pairing: AEC and NS bound directly to hardware audio session.
- * 5. Dynamic Hardware Routing: Automatic smart switching between Bluetooth (TWS), Wired Headset, Earpiece, and Loudspeaker.
+ * 1. Continuous Full-Duplex Uplink: Pure 1:1 unclipped 16kHz audio transmission without digital zero-gating.
+ * 2. Hardware Session Pairing: AEC coupled to AudioTrack hardware session to cancel speaker feedback natively.
+ * 3. Anti-Jitter Playback: Continuous non-blocking playback queue with zero stutter.
+ * 4. Dynamic Hardware Routing: Automatic smart switching between Bluetooth (TWS), Wired Headset, Earpiece, and Loudspeaker.
  */
 class VoiceStreamHandler(private val context: Context) {
 
@@ -146,41 +143,27 @@ class VoiceStreamHandler(private val context: Context) {
             }
 
             // Bind hardware effects to unified session
+            // Only AcousticEchoCanceler (AEC) is activated. Manual NoiseSuppressor (NS) and AutomaticGainControl (AGC)
+            // are intentionally disabled: mobile hardware NS clips weak consonant onsets ('s', 'k', 't', 'p', 'h')
+            // and hardware AGC pumps ambient noise into cloud ASR, destabilizing Gemini Multimodal Live recognition.
             if (hardwareSessionId != 0) {
                 if (AcousticEchoCanceler.isAvailable()) {
                     try {
                         echoCanceler = AcousticEchoCanceler.create(hardwareSessionId)?.apply {
                             enabled = true
-                            Log.i(TAG, " Hardware AEC Active (Session: $hardwareSessionId)")
+                            Log.i(TAG, "Hardware AEC Active (Session: $hardwareSessionId)")
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Hardware AEC unavailable: ${e.message}")
                     }
                 }
-                if (NoiseSuppressor.isAvailable()) {
-                    try {
-                        noiseSuppressor = NoiseSuppressor.create(hardwareSessionId)?.apply {
-                            enabled = true
-                            Log.i(TAG, " Hardware NoiseSuppressor Active")
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Hardware NS unavailable: ${e.message}")
-                    }
-                }
-                if (AutomaticGainControl.isAvailable()) {
-                    try {
-                        autoGainControl = AutomaticGainControl.create(hardwareSessionId)?.apply {
-                            enabled = true
-                        }
-                    } catch (_: Exception) {}
-                }
                 updateHardwareEffectsForRoute(currentRoute)
             }
 
             audioRecord?.startRecording()
-            Log.i(TAG, " AudioRecord active (16kHz PCM, AEC Coupled)")
+            Log.i(TAG, "AudioRecord active (16kHz PCM, AEC Coupled)")
 
-            // 1. Microphone Loop (Turn-Aware Uplink Gating)
+            // 1. Microphone Loop (Continuous Full-Duplex PCM Stream)
             recordingJob = scope.launch(Dispatchers.IO) {
                 // 3200 bytes = 1600 samples = 100ms PCM window @ 16kHz 16-bit Mono (Standard Google Gemini Live chunk)
                 val audioBuffer = ByteArray(3200)
@@ -193,18 +176,9 @@ class VoiceStreamHandler(private val context: Context) {
                             audioBuffer.copyOf(readBytes)
                         }
 
-                        // Turn-Aware Echo Suppression:
-                        // Only suppress mic uplink during LOUDSPEAKER playback when assistant is actually rendering sound.
-                        // Fill chunk with silence to maintain continuous 16kHz audio clock without leaking loudspeaker echo.
-                        // On Headset (Bluetooth / Wired) or Earpiece, audio does not leak into the mic,
-                        // so true full-duplex is preserved without zeroing user words!
-                        val isLoudspeakerPlaying = (currentRoute == AudioOutputRoute.SPEAKER) && isReallyPlaying()
-
-                        if (isLoudspeakerPlaying) {
-                            chunk.fill(0) // Zero timeline jump: send silence frame instead of dropping packet
-                        }
-
-                        // Pure 1:1 unclipped 16kHz audio transmission to Google Gemini Live
+                        // Pure 1:1 unclipped 16kHz audio transmission to Google Gemini Live.
+                        // Hardware AEC natively cancels loudspeaker feedback without digital zero-gating,
+                        // eliminating artificial audio dropouts and enabling smooth barge-in.
                         val base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP)
                         onAudioChunk(base64Chunk)
                     } else if (readBytes < 0) {
@@ -290,7 +264,7 @@ class VoiceStreamHandler(private val context: Context) {
             totalFramesWritten = 0L
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
-            Log.i(TAG, " AudioTrack ready (24kHz PCM, Paired Session: $sharedSessionId)")
+            Log.i(TAG, "AudioTrack ready (24kHz PCM, Paired Session: $sharedSessionId)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AudioTrack: ${e.message}")
         }
@@ -518,12 +492,10 @@ class VoiceStreamHandler(private val context: Context) {
     private fun updateHardwareEffectsForRoute(route: AudioOutputRoute) {
         val isBt = (route == AudioOutputRoute.BLUETOOTH)
         try {
-            // When Bluetooth headset is connected, the headset hardware already performs AEC/NS.
-            // Enabling phone DSP AEC/NS in series causes destructive phase cancellation, making voice muffled and robotic!
+            // When Bluetooth headset is connected, headset hardware already performs AEC.
+            // Phone AEC is disabled for Bluetooth to prevent phase cancellation artifacts.
             echoCanceler?.enabled = !isBt
-            noiseSuppressor?.enabled = !isBt
-            autoGainControl?.enabled = !isBt
-            Log.i(TAG, "[DSP] Hardware AEC/NS/AGC set to: ${!isBt} (Route: $route)")
+            Log.i(TAG, "[DSP] Hardware AEC set to: ${!isBt} (Route: $route)")
         } catch (e: Exception) {
             Log.w(TAG, "[DSP] Failed to toggle hardware effects: ${e.message}")
         }
@@ -553,7 +525,7 @@ class VoiceStreamHandler(private val context: Context) {
     }
 
     fun flushOutputBuffer() {
-        Log.i(TAG, " Output buffer flush request received")
+        Log.i(TAG, "Output buffer flush request received")
         playbackQueue.clear()
         isAssistantSpeaking = false
         lastAudioReceivedTime = 0L
