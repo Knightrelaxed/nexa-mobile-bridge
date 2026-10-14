@@ -4,8 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -108,6 +110,62 @@ class NexaBridgeService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkDebounceJob: Job? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var isScreenReceiverRegistered = false
+
+    private val screenStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            when (action) {
+                Intent.ACTION_SCREEN_ON -> {
+                    Log.i("NexaBridge", "📱 [EVENT] Layar Menyala (SCREEN_ON)")
+                    val payload = """{"type":"SCREEN_ON","timestamp":${System.currentTimeMillis()}}"""
+                    webSocketClient.send(payload)
+                }
+                Intent.ACTION_SCREEN_OFF -> {
+                    Log.i("NexaBridge", "📱 [EVENT] Layar Padam/Tidur (SCREEN_OFF)")
+                    val payload = """{"type":"SCREEN_OFF","timestamp":${System.currentTimeMillis()}}"""
+                    webSocketClient.send(payload)
+                }
+            }
+        }
+    }
+
+    private fun registerScreenStateReceiver() {
+        if (isScreenReceiverRegistered) return
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            registerReceiver(screenStateReceiver, filter)
+            isScreenReceiverRegistered = true
+            Log.i("NexaBridge", " ScreenStateReceiver registered successfully")
+        } catch (e: Exception) {
+            Log.e("NexaBridge", "Failed to register ScreenStateReceiver: ${e.message}")
+        }
+    }
+
+    private fun unregisterScreenStateReceiver() {
+        if (isScreenReceiverRegistered) {
+            try {
+                unregisterReceiver(screenStateReceiver)
+                isScreenReceiverRegistered = false
+                Log.i("NexaBridge", " ScreenStateReceiver unregistered")
+            } catch (e: Exception) {
+                Log.w("NexaBridge", "Error unregistering ScreenStateReceiver: ${e.message}")
+            }
+        }
+    }
+
+    private fun isScreenInteractive(): Boolean {
+        return try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            powerManager?.isInteractive ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -118,6 +176,7 @@ class NexaBridgeService : Service() {
         acquireWakeLock()
         acquireWifiLock()
         initAlertTts()
+        registerScreenStateReceiver()
         // Expose WebSocket client to companion object for cross-component access
         activeWebSocketClient = webSocketClient
         activeJson = json
@@ -510,7 +569,7 @@ class NexaBridgeService : Service() {
                     network_type     = "UNKNOWN",
                     network_strength = 0,
                     motion_state     = "IDLE",
-                    screen_on        = true
+                    screen_on        = isScreenInteractive()
                 )
 
                 val payload = json.encodeToString(TelemetryReport.serializer(), telemetry)
@@ -650,6 +709,7 @@ class NexaBridgeService : Service() {
         geofenceManager?.stopGeofencing()
         geofenceManager = null
         contextEngine = null
+        unregisterScreenStateReceiver()
         // Unregister network watcher agar tidak ada memory leak
         networkCallback?.let {
             try {
