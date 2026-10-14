@@ -23,6 +23,8 @@ object NexaActions {
     // Telemetry Queries
     const val GET_NETWORK_INFO   = "GET_NETWORK_INFO"
     const val GET_MOTION_STATE   = "GET_MOTION_STATE"
+    const val GET_SCREEN_STATUS  = "GET_SCREEN_STATUS"
+    const val GET_LIGHT_STATUS   = "GET_LIGHT_STATUS"
     const val GO_BACK            = "GO_BACK"
     const val SHOW_RECENTS       = "SHOW_RECENTS"
 

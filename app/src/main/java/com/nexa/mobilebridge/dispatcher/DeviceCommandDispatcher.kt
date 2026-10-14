@@ -47,6 +47,7 @@ class DeviceCommandDispatcher @Inject constructor(
     private val audioPlayerHandler = com.nexa.mobilebridge.dispatcher.handler.AudioPlayerHandler(context)
     private val fakeCallHandler = com.nexa.mobilebridge.dispatcher.handler.FakeCallHandler(context, audioPlayerHandler)
     private val geofenceHandler = com.nexa.mobilebridge.dispatcher.handler.GeofenceHandler(context, com.nexa.mobilebridge.core.sensor.GeofenceManager(context))
+    private val lightSensorHandler = com.nexa.mobilebridge.dispatcher.handler.LightSensorHandler(context)
 
     suspend fun dispatch(command: NexaCommand): CommandResult = withContext(Dispatchers.Default) {
         try {
@@ -55,6 +56,8 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.SET_VOLUME         -> volumeHandler.execute(command)
                 NexaActions.FORCE_DND          -> volumeHandler.executeDnd(command)
                 NexaActions.GET_BATTERY_STATUS -> batteryHandler.execute(command)
+                NexaActions.GET_SCREEN_STATUS  -> screenHandler.executeGetScreenStatus(command)
+                NexaActions.GET_LIGHT_STATUS   -> lightSensorHandler.executeGetLightStatus(command)
                 NexaActions.GO_HOME_SCREEN     -> screenHandler.execute(command)
                 NexaActions.GO_BACK            -> screenHandler.executeBack(command)
                 NexaActions.SHOW_RECENTS       -> screenHandler.executeRecents(command)

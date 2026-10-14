@@ -114,19 +114,10 @@ class NexaBridgeService : Service() {
 
     private val screenStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            // Sesuai instruksi Tuan Faqih: Status layar tidur/bangun tidak dikirim terus-menerus ke WebSocket,
+            // melainkan cukup dikirim jika diminta secara on-demand oleh Nexa Server (GET_SCREEN_STATUS).
             val action = intent?.action ?: return
-            when (action) {
-                Intent.ACTION_SCREEN_ON -> {
-                    Log.i("NexaBridge", "📱 [EVENT] Layar Menyala (SCREEN_ON)")
-                    val payload = """{"type":"SCREEN_ON","timestamp":${System.currentTimeMillis()}}"""
-                    webSocketClient.send(payload)
-                }
-                Intent.ACTION_SCREEN_OFF -> {
-                    Log.i("NexaBridge", "📱 [EVENT] Layar Padam/Tidur (SCREEN_OFF)")
-                    val payload = """{"type":"SCREEN_OFF","timestamp":${System.currentTimeMillis()}}"""
-                    webSocketClient.send(payload)
-                }
-            }
+            Log.d("NexaBridge", "📱 Screen broadcast received: $action (on-demand only, not pushed to WS)")
         }
     }
 
@@ -319,6 +310,13 @@ class NexaBridgeService : Service() {
         // Collect synthesized ContextReports and send over WebSocket
         launch {
             engine.contextReports.collect { report ->
+                // Sesuai instruksi Tuan Faqih: Sensor cahaya dan HP diangkat TIDAK dikirim streaming ke WebSocket.
+                if (report.event == "PHONE_PICKUP" || report.event == "PHONE_PICKUP_MORNING" ||
+                    report.event == "LIGHT_CHANGED" || report.event == "ROOM_DARK_NIGHT" ||
+                    report.event == "WALKING_AT_NIGHT") {
+                    Log.d("NexaBridge", " ContextReport [${report.event}] disaring (hemat daya, tidak dikirim ke WS).")
+                    return@collect
+                }
                 val payload = json.encodeToString(ContextReport.serializer(), report)
                 val sent = webSocketClient.send(payload)
                 Log.d("NexaBridge", " ContextReport terkirim (success=$sent): ${report.event}")
@@ -557,31 +555,47 @@ class NexaBridgeService : Service() {
             action = "GET_BATTERY_STATUS"
         )
 
+        var lastBatteryLevel = -1
+        var lastChargingState: Boolean? = null
+        var lastReportTimeMs = 0L
+
         while (true) {
             try {
                 val batResult = batteryHandler.execute(stubCommand)
                 val level    = (batResult.data?.get("battery_level") as? JsonPrimitive)?.intOrNull ?: 0
                 val charging = (batResult.data?.get("charging") as? JsonPrimitive)?.booleanOrNull ?: false
+                val now = System.currentTimeMillis()
 
-                val telemetry = TelemetryReport(
-                    battery_level    = level,
-                    battery_charging = charging,
-                    network_type     = "UNKNOWN",
-                    network_strength = 0,
-                    motion_state     = "IDLE",
-                    screen_on        = isScreenInteractive()
-                )
+                // Hemat daya & kuota: Hanya kirim ke WS jika level baterai berubah,
+                // status charging berubah, atau sudah 3 menit berlalu (heartbeat santai)
+                val isBatteryChanged = (level != lastBatteryLevel) || (charging != lastChargingState)
+                val isHeartbeatDue = (now - lastReportTimeMs) >= 180_000L // 3 menit
 
-                val payload = json.encodeToString(TelemetryReport.serializer(), telemetry)
-                webSocketClient.send(payload)
-                Log.d("NexaBridge", "Telemetri terkirim: ${level}%, charging=$charging")
+                if (isBatteryChanged || isHeartbeatDue) {
+                    lastBatteryLevel = level
+                    lastChargingState = charging
+                    lastReportTimeMs = now
+
+                    val telemetry = TelemetryReport(
+                        battery_level    = level,
+                        battery_charging = charging,
+                        network_type     = "UNKNOWN",
+                        network_strength = 0,
+                        motion_state     = "IDLE",
+                        screen_on        = isScreenInteractive()
+                    )
+
+                    val payload = json.encodeToString(TelemetryReport.serializer(), telemetry)
+                    webSocketClient.send(payload)
+                    Log.d("NexaBridge", "Telemetri terkirim (diff/heartbeat): ${level}%, charging=$charging")
+                }
 
                 // Periksa sesi aplikasi aktif secara periodik
                 com.nexa.mobilebridge.core.usage.AppUsageTracker.checkActiveSessionTick(this@NexaBridgeService)
             } catch (e: Exception) {
                 Log.e("NexaBridge", "Error telemetri: ${e.message}")
             }
-            delay(30_000L)
+            delay(30_000L) // Cek lokal tiap 30 detik tanpa spamming ke network
         }
     }
 

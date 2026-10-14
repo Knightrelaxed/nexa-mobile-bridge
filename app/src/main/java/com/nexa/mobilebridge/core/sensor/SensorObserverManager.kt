@@ -1,4 +1,4 @@
-﻿package com.nexa.mobilebridge.core.sensor
+package com.nexa.mobilebridge.core.sensor
 
 import android.content.Context
 import android.hardware.Sensor
@@ -117,11 +117,15 @@ class SensorObserverManager(
         isListening = true
         Log.i(TAG, " Memulai SensorObserverManager...")
 
-        // 1. Register Light Sensor
+        // 1. Light Sensor (NONAKTIF STREAMING BACKGROUND)
+        // Sesuai instruksi Tuan Faqih: Sensor cahaya tidak dikirim terus-menerus via WebSocket.
+        // Pembacaan kini dilakukan secara on-demand via LightSensorHandler saat diminta oleh server.
+        /*
         lightSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
             Log.d(TAG, "Light Sensor terdaftar.")
         } ?: Log.w(TAG, "Light Sensor tidak tersedia di perangkat ini.")
+        */
 
         // 2. Register Step Counter
         stepCounterSensor?.let {
@@ -130,7 +134,8 @@ class SensorObserverManager(
         } ?: Log.w(TAG, "Step Counter Sensor tidak tersedia di perangkat ini.")
 
         // 3. Register One-Shot Triggers
-        registerPickupTrigger()
+        // NONAKTIF SEMENTARA: Sesuai instruksi Tuan Faqih, sensor HP diangkat dinonaktifkan untuk hemat baterai.
+        // registerPickupTrigger()
         registerSigMotionTrigger()
     }
 
@@ -153,9 +158,12 @@ class SensorObserverManager(
     }
 
     private fun registerPickupTrigger() {
+        // NONAKTIF SEMENTARA: Sesuai instruksi Tuan Faqih (jangan dihapus, cukup nonaktifkan)
+        /*
         if (pickupSensor != null && isListening) {
             sensorManager.requestTriggerSensor(pickupTriggerListener, pickupSensor)
         }
+        */
     }
 
     private fun registerSigMotionTrigger() {
