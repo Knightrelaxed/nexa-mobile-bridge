@@ -287,6 +287,36 @@ class FakeCallActivity : ComponentActivity() {
                 }
             }
         }
+
+        override fun onCallReplyComplete(replyText: String?) {
+            runOnUiThread {
+                if (hudState.value == LiveVoiceHudState.DISCONNECTING) {
+                    callScope.launch {
+                        var waitLoops = 0
+                        while (voiceStreamHandler.isPlayingAudio() && waitLoops < 60) {
+                            kotlinx.coroutines.delay(50)
+                            waitLoops++
+                        }
+                        kotlinx.coroutines.delay(300)
+                        voiceStreamHandler.stopStreaming()
+                        callState.value = CallState.FINISHED
+                    }
+                } else if (hudState.value == LiveVoiceHudState.SPEAKING) {
+                    hudState.value = LiveVoiceHudState.LISTENING
+                    pendingStateEntryTime = 0L
+                }
+            }
+        }
+
+        override fun onCallError(error: String?) {
+            Log.e(TAG, "Live call error received: $error")
+            runOnUiThread {
+                if (!error.isNullOrBlank()) {
+                    assistantMessage.value = error
+                }
+                hudState.value = LiveVoiceHudState.RECONNECTING
+            }
+        }
     }
 
     // BroadcastReceiver for server audio events and PiP RemoteAction controls
@@ -1223,23 +1253,29 @@ class FakeCallActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         isCallActive = false
-        if (callState.value == CallState.FINISHED) {
-            cancelOngoingCallNotification()
-            NexaBridgeService.enableCallMicrophone(false)
-            try { ScreenCaptureService.stop(this) } catch (e: Exception) {}
-            ScreenCaptureService.onEndCallRequested = null
-            ScreenCaptureService.onToggleMicMuteRequested = null
-            ScreenCaptureService.onInterruptRequested = null
-            ScreenCaptureService.onReturnToCallRequested = null
-            try { cameraStreamHandler.stopCamera() } catch (e: Exception) {}
-            try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
-            try { callScope.cancel() } catch (_: Exception) {}
-            if (NexaBridgeService.activeWebSocketClient?.liveCallListener === liveCallEventListener) {
-                NexaBridgeService.activeWebSocketClient?.liveCallListener = null
-            }
-            try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
-            audioPlayerHandler.stopAll()
+
+        // Always notify server if activity was destroyed while call was still active
+        if (callState.value != CallState.FINISHED) {
+            try { sendCallEvent("CALL_FINISHED") } catch (_: Exception) {}
+            callState.value = CallState.FINISHED
         }
+
+        // Always clean up resources to prevent receiver, microphone, camera, and overlay leaks
+        cancelOngoingCallNotification()
+        NexaBridgeService.enableCallMicrophone(false)
+        try { ScreenCaptureService.stop(this) } catch (e: Exception) {}
+        ScreenCaptureService.onEndCallRequested = null
+        ScreenCaptureService.onToggleMicMuteRequested = null
+        ScreenCaptureService.onInterruptRequested = null
+        ScreenCaptureService.onReturnToCallRequested = null
+        try { cameraStreamHandler.stopCamera() } catch (e: Exception) {}
+        try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
+        try { callScope.cancel() } catch (_: Exception) {}
+        if (NexaBridgeService.activeWebSocketClient?.liveCallListener === liveCallEventListener) {
+            NexaBridgeService.activeWebSocketClient?.liveCallListener = null
+        }
+        try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
+        audioPlayerHandler.stopAll()
     }
 }
 

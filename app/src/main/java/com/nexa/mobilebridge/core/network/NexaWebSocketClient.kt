@@ -30,6 +30,8 @@ interface LiveCallEventListener {
     fun onAudioInterrupted()
     fun onLiveReady()
     fun onStatusUpdate(status: String?, text: String?, userTranscript: String?)
+    fun onCallReplyComplete(replyText: String?)
+    fun onCallError(error: String?)
 }
 
 @Singleton
@@ -186,11 +188,29 @@ class NexaWebSocketClient @Inject constructor(
                             Log.e(TAG, "Failed to parse CALL_STATUS_UPDATE: ${e.message}")
                         }
                         return
+                    } else if (text.contains("CALL_REPLY_COMPLETE")) {
+                        try {
+                            val jsonObject = org.json.JSONObject(text)
+                            val replyText = if (jsonObject.has("reply_text")) jsonObject.optString("reply_text") else null
+                            currentListener.onCallReplyComplete(replyText)
+                        } catch (e: Exception) {
+                            currentListener.onCallReplyComplete(null)
+                        }
+                        return
+                    } else if (text.contains("CALL_ERROR")) {
+                        try {
+                            val jsonObject = org.json.JSONObject(text)
+                            val err = if (jsonObject.has("error")) jsonObject.optString("error") else if (jsonObject.has("message")) jsonObject.optString("message") else null
+                            currentListener.onCallError(err)
+                        } catch (e: Exception) {
+                            currentListener.onCallError(null)
+                        }
+                        return
                     }
                 }
 
                 // Fallback broadcast path if no direct listener registered
-                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY") || text.contains("CALL_STATUS_UPDATE")) {
+                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY") || text.contains("CALL_STATUS_UPDATE") || text.contains("CALL_REPLY_COMPLETE") || text.contains("CALL_ERROR")) {
                     val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
                         putExtra("raw_json", text)
                         setPackage(context.packageName)
