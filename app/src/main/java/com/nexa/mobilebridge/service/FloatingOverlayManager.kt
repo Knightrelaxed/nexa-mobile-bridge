@@ -12,8 +12,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.animation.ValueAnimator
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import androidx.compose.ui.graphics.drawscope.Stroke
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -110,6 +115,7 @@ class FloatingOverlayManager(private val context: Context) {
     private var isCurrentlyCollapsed = true
     private val isCollapsedState = mutableStateOf(true)
     private var collapseRunnable: Runnable? = null
+    private var snapAnimator: ValueAnimator? = null
 
     private var bubbleX = 0
     private var bubbleY = 0
@@ -124,8 +130,13 @@ class FloatingOverlayManager(private val context: Context) {
         if (dockContainer != null) return
 
         val density = context.resources.displayMetrics.density
-        bubbleX = (16 * density).toInt()
-        bubbleY = (36 * density).toInt()
+        val displayMetrics = context.resources.displayMetrics
+        val sizePx = (56 * density).toInt()
+        val margin = (16 * density).toInt()
+
+        // Default initial position: Bottom-Right edge above navigation bar
+        bubbleX = displayMetrics.widthPixels - sizePx - margin
+        bubbleY = displayMetrics.heightPixels - sizePx - (100 * density).toInt()
 
         val owner = FloatingLifecycleOwner()
         owner.handleStart()
@@ -138,6 +149,8 @@ class FloatingOverlayManager(private val context: Context) {
     }
 
     fun dismiss() {
+        snapAnimator?.cancel()
+        snapAnimator = null
         collapseRunnable?.let { mainHandler.removeCallbacks(it) }
         collapseRunnable = null
         mainHandler.removeCallbacksAndMessages(null)
@@ -232,6 +245,7 @@ class FloatingOverlayManager(private val context: Context) {
                 if (isCurrentlyCollapsed) {
                     when (ev.action) {
                         MotionEvent.ACTION_DOWN -> {
+                            snapAnimator?.cancel()
                             initialTouchRawX = ev.rawX
                             initialTouchRawY = ev.rawY
                             initialParamX = bubbleX
@@ -249,10 +263,11 @@ class FloatingOverlayManager(private val context: Context) {
                                 val sizePx = (56 * density).toInt()
                                 val displayMetrics = context.resources.displayMetrics
                                 val maxBubbleX = displayMetrics.widthPixels - sizePx
-                                val maxBubbleY = displayMetrics.heightPixels - sizePx
+                                val minBubbleY = (36 * density).toInt()
+                                val maxBubbleY = displayMetrics.heightPixels - sizePx - (36 * density).toInt()
 
-                                bubbleX = (initialParamX - dx.toInt()).coerceIn(0, maxBubbleX)
-                                bubbleY = (initialParamY - dy.toInt()).coerceIn(0, maxBubbleY)
+                                bubbleX = (initialParamX + dx.toInt()).coerceIn(0, maxBubbleX)
+                                bubbleY = (initialParamY + dy.toInt()).coerceIn(minBubbleY, maxBubbleY)
 
                                 val currentParams = layoutParams as? WindowManager.LayoutParams
                                 if (currentParams != null) {
@@ -263,7 +278,28 @@ class FloatingOverlayManager(private val context: Context) {
                                 return true
                             }
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        MotionEvent.ACTION_UP -> {
+                            if (isDraggingBubble) {
+                                isDraggingBubble = false
+                                val density = context.resources.displayMetrics.density
+                                val sizePx = (56 * density).toInt()
+                                val displayMetrics = context.resources.displayMetrics
+                                val margin = (16 * density).toInt()
+                                // Snap smoothly to closest edge (Left or Right)
+                                val targetX = if (bubbleX + sizePx / 2 < displayMetrics.widthPixels / 2) {
+                                    margin
+                                } else {
+                                    displayMetrics.widthPixels - sizePx - margin
+                                }
+                                snapBubbleToEdge(targetX)
+                                return true
+                            } else {
+                                // Clean quick tap -> expand into full dock
+                                expandToDock()
+                                return true
+                            }
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
                             if (isDraggingBubble) {
                                 isDraggingBubble = false
                                 return true
@@ -330,6 +366,28 @@ class FloatingOverlayManager(private val context: Context) {
         }
     }
 
+    private fun snapBubbleToEdge(targetX: Int) {
+        snapAnimator?.cancel()
+        val container = dockContainer ?: return
+        val currentX = bubbleX
+        snapAnimator = ValueAnimator.ofInt(currentX, targetX).apply {
+            duration = 260L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { va ->
+                val animatedX = va.animatedValue as Int
+                bubbleX = animatedX
+                val params = container.layoutParams as? WindowManager.LayoutParams
+                if (params != null) {
+                    params.x = animatedX
+                    try {
+                        windowManager.updateViewLayout(container, params)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+        snapAnimator?.start()
+    }
+
     private fun createCollapsedParams(overlayType: Int): WindowManager.LayoutParams {
         val density = context.resources.displayMetrics.density
         val sizePx = (56 * density).toInt()
@@ -341,7 +399,7 @@ class FloatingOverlayManager(private val context: Context) {
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
+            gravity = Gravity.TOP or Gravity.START
             x = bubbleX
             y = bubbleY
         }
@@ -728,9 +786,14 @@ fun FloatingLiveVoiceCapsule(
 }
 
 /**
- * Collapsed Floating Glowing Orb (Image 2 - Bottom-Right Corner)
- * Sleek 56dp orb with deep dark base and electric blue glowing bottom crescent.
- * Tapping this blooms smoothly back into the full dock.
+ * Collapsed Floating Glowing Orb (Gemini Live Dynamic Color Gradient)
+ * Fluid, organic, and voice-reactive sphere shifting smoothly across:
+ * - Cyan (#00E5FF / #38BDF8)
+ * - Biru Elektrik (#2563EB / #1D4ED8)
+ * - Hijau Emerald / Mint (#10B981 / #34D399)
+ *
+ * When speaking: Colors swirl, rotate, and pulse dynamically with Nexa's speech.
+ * When listening/idle: Calm, soothing breathing glow waiting for user input.
  */
 @Composable
 fun FloatingGlowingBubble(
@@ -738,31 +801,65 @@ fun FloatingGlowingBubble(
 ) {
     val isSpeaking by ScreenCaptureService.isAssistantSpeaking.collectAsState()
     val audioEnergy by ScreenCaptureService.audioEnergy.collectAsState()
-    val shouldPulse = isSpeaking || audioEnergy > 0.05f
 
-    val infiniteTransition = rememberInfiniteTransition(label = "OrbPulse")
-    val pulseScale by if (shouldPulse) {
-        infiniteTransition.animateFloat(
-            initialValue = 1f,
-            targetValue = if (isSpeaking) 1.08f else 1.03f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1000, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "pulseScale"
-        )
+    val infiniteTransition = rememberInfiniteTransition(label = "GeminiOrb")
+
+    // Continuous dynamic rotation of the color gradient
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isSpeaking) 2800 else 7000, easing = androidx.compose.animation.core.LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbRotation"
+    )
+
+    // Breathing pulse phase
+    val breathePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (isSpeaking) 1100 else 2800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "breathePhase"
+    )
+
+    // Speech-reactive dynamic scale
+    val targetScale = if (isSpeaking) {
+        1.02f + (audioEnergy.coerceIn(0f, 1f) * 0.12f) + (breathePhase * 0.04f)
     } else {
-        remember { mutableStateOf(1f) }
+        1.0f + (breathePhase * 0.03f)
+    }
+    val animatedScale by animateFloatAsState(
+        targetValue = targetScale,
+        animationSpec = spring(stiffness = 400f, dampingRatio = 0.8f),
+        label = "orbScale"
+    )
+
+    // Dynamic aura glow color shifting across Cyan -> Electric Blue -> Emerald Green
+    val auraColor = if (isSpeaking) {
+        when {
+            breathePhase < 0.33f -> Color(0xFF00E5FF) // Cyan
+            breathePhase < 0.66f -> Color(0xFF2563EB) // Electric Blue
+            else -> Color(0xFF10B981) // Emerald Green
+        }
+    } else {
+        Color(0xFF00E5FF) // Calm Cyan
     }
 
     Box(
         modifier = Modifier
             .size(56.dp)
-            .scale(pulseScale)
-            .shadow(16.dp, CircleShape, spotColor = Color(0xFF38BDF8))
+            .scale(animatedScale)
+            .shadow(
+                elevation = if (isSpeaking) 22.dp else 12.dp,
+                shape = CircleShape,
+                spotColor = auraColor,
+                ambientColor = auraColor
+            )
             .clip(CircleShape)
-            .background(Color(0xFF0F172A))
-            .border(1.5.dp, Color(0x4438BDF8), CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -770,29 +867,140 @@ fun FloatingGlowingBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
-        // Bottom glowing blue crescent (Gemini Live Orb aesthetic)
         Canvas(modifier = Modifier.size(56.dp)) {
+            val center = Offset(size.width / 2f, size.height / 2f)
             val radius = size.minDimension / 2f
+
+            // 1. Deep cosmic midnight sphere base
+            drawCircle(
+                color = Color(0xFF090E1A),
+                radius = radius,
+                center = center
+            )
+
+            // 2. Swirling Organic Color Gradients (Cyan, Electric Blue, Hijau)
+            val rad = Math.toRadians(rotationAngle.toDouble())
+            val bDist = radius * (0.32f + (breathePhase * 0.12f))
+
+            // Blob 1: Biru Elektrik (#2563EB)
+            val b1Center = Offset(
+                center.x + (cos(rad) * bDist).toFloat(),
+                center.y + (sin(rad) * bDist).toFloat()
+            )
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFF38BDF8),
-                        Color(0xFF2563EB),
+                        Color(0xFF2563EB).copy(alpha = if (isSpeaking) 0.95f else 0.85f),
+                        Color(0xFF1D4ED8).copy(alpha = 0.6f),
                         Color.Transparent
                     ),
-                    center = Offset(size.width * 0.5f, size.height * 0.85f),
-                    radius = radius * 0.95f
+                    center = b1Center,
+                    radius = radius * 0.9f
                 ),
-                radius = radius
+                radius = radius,
+                center = center
+            )
+
+            // Blob 2: Neon Cyan (#00E5FF) - 120° offset
+            val rad2 = rad + (2.0 * Math.PI / 3.0)
+            val b2Center = Offset(
+                center.x + (cos(rad2) * bDist).toFloat(),
+                center.y + (sin(rad2) * bDist).toFloat()
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF00E5FF).copy(alpha = if (isSpeaking) 0.95f else 0.85f),
+                        Color(0xFF0284C7).copy(alpha = 0.5f),
+                        Color.Transparent
+                    ),
+                    center = b2Center,
+                    radius = radius * 0.9f
+                ),
+                radius = radius,
+                center = center
+            )
+
+            // Blob 3: Hijau Emerald / Mint (#10B981) - 240° offset
+            val rad3 = rad + (4.0 * Math.PI / 3.0)
+            val b3Center = Offset(
+                center.x + (cos(rad3) * bDist).toFloat(),
+                center.y + (sin(rad3) * bDist).toFloat()
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF10B981).copy(alpha = if (isSpeaking) 0.95f else 0.80f),
+                        Color(0xFF059669).copy(alpha = 0.5f),
+                        Color.Transparent
+                    ),
+                    center = b3Center,
+                    radius = radius * 0.9f
+                ),
+                radius = radius,
+                center = center
+            )
+
+            // 3. Central Luminous Nucleus (Breathing & Audio Energy reactive)
+            val coreRadius = (radius * (0.26f + (audioEnergy * 0.18f) + (breathePhase * 0.06f))).coerceIn(4f, radius * 0.55f)
+            val coreColors = if (isSpeaking) {
+                listOf(
+                    Color(0xFFFFFFFF),
+                    Color(0xFF67E8F9), // Light Cyan
+                    Color(0xFF34D399), // Mint Green
+                    Color.Transparent
+                )
+            } else {
+                listOf(
+                    Color(0xFFE0F2FE),
+                    Color(0xFF38BDF8),
+                    Color.Transparent
+                )
+            }
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = coreColors,
+                    center = center,
+                    radius = coreRadius * 1.5f
+                ),
+                radius = coreRadius,
+                center = center
+            )
+
+            // 4. Fine 3D Glass Spherical Rim Stroke
+            val rimBrush = Brush.sweepGradient(
+                colors = listOf(
+                    Color(0xFF00E5FF),
+                    Color(0xFF2563EB),
+                    Color(0xFF10B981),
+                    Color(0xFF00E5FF)
+                ),
+                center = center
+            )
+            drawCircle(
+                brush = rimBrush,
+                radius = radius - 1f,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+
+            // 5. Specular Reflection Arc Highlight (Glass 3D effect at top)
+            drawArc(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0x66FFFFFF),
+                        Color(0x00FFFFFF)
+                    ),
+                    startY = 0f,
+                    endY = radius * 0.6f
+                ),
+                startAngle = 200f,
+                sweepAngle = 140f,
+                useCenter = false,
+                style = Stroke(width = 2.dp.toPx()),
+                topLeft = Offset(radius * 0.2f, radius * 0.1f),
+                size = androidx.compose.ui.geometry.Size(radius * 1.6f, radius * 0.8f)
             )
         }
-
-        // Small subtle center pulse dot
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF93C5FD))
-        )
     }
 }
