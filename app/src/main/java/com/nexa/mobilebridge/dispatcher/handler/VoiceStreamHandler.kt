@@ -298,8 +298,11 @@ class VoiceStreamHandler(private val context: Context) {
     fun isReallyPlaying(): Boolean {
         val track = audioTrack ?: return false
         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) return false
+        if (playbackQueue.isNotEmpty()) return true
+        val timeSinceLast = System.currentTimeMillis() - lastAudioReceivedTime
+        if (timeSinceLast > 600) return false // Audio queue drained and speech burst tail elapsed
         val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-        return (totalFramesWritten > head) || playbackQueue.isNotEmpty()
+        return totalFramesWritten > head
     }
 
     fun isPlayingAudio(): Boolean {

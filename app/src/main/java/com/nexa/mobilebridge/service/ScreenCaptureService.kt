@@ -257,6 +257,12 @@ class ScreenCaptureService : Service() {
         val reader = imageReader ?: return
         val image = reader.acquireLatestImage() ?: return
 
+        // Prevent uplink backpressure HOL blocking for voice chunks
+        if (NexaBridgeService.getWebSocketQueueSize() > 64 * 1024) {
+            image.close()
+            return
+        }
+
         var rawBitmap: Bitmap? = null
         var cleanBitmap: Bitmap? = null
 

@@ -176,10 +176,15 @@ class NexaWebSocketClient @Inject constructor(
                         currentListener.onLiveReady()
                         return
                     } else if (text.contains("CALL_STATUS_UPDATE")) {
-                        val status = fastExtractField(text, "status")
-                        val txt = fastExtractField(text, "text")
-                        val userTr = fastExtractField(text, "user_transcript")
-                        currentListener.onStatusUpdate(status, txt, userTr)
+                        try {
+                            val jsonObject = org.json.JSONObject(text)
+                            val status = if (jsonObject.has("status")) jsonObject.optString("status") else null
+                            val txt = if (jsonObject.has("text")) jsonObject.optString("text") else null
+                            val userTr = if (jsonObject.has("user_transcript")) jsonObject.optString("user_transcript") else null
+                            currentListener.onStatusUpdate(status, txt, userTr)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse CALL_STATUS_UPDATE: ${e.message}")
+                        }
                         return
                     }
                 }
@@ -262,6 +267,8 @@ class NexaWebSocketClient @Inject constructor(
 
     /** Mengembalikan true jika WebSocket saat ini dalam status Connected. */
     fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
+
+    fun getQueueSize(): Long = webSocket?.queueSize() ?: 0L
 
     /**
      * Mereset ReconnectOrchestrator ke fase 1 tanpa mengubah konfigurasi koneksi.

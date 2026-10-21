@@ -150,7 +150,8 @@ class FloatingOverlayManager(private val context: Context) {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.END
@@ -265,12 +266,13 @@ class FloatingOverlayManager(private val context: Context) {
 
     private fun createCollapsedParams(overlayType: Int): WindowManager.LayoutParams {
         val density = context.resources.displayMetrics.density
-        val sizePx = (72 * density).toInt()
+        val sizePx = (56 * density).toInt()
         return WindowManager.LayoutParams(
             sizePx,
             sizePx,
             overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.END
@@ -283,25 +285,21 @@ class FloatingOverlayManager(private val context: Context) {
         if (isCurrentlyCollapsed) return
         isCurrentlyCollapsed = true
         isCollapsedState.value = true
+        pipContainer?.visibility = View.GONE
 
         collapseRunnable?.let { mainHandler.removeCallbacks(it) }
-        val runnable = Runnable {
-            if (!isCurrentlyCollapsed) return@Runnable
-            val container = dockContainer ?: return@Runnable
-            val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            }
-            try {
-                windowManager.updateViewLayout(container, createCollapsedParams(overlayType))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to update layout to collapsed: ${e.message}")
-            }
+        val container = dockContainer ?: return
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
         }
-        collapseRunnable = runnable
-        mainHandler.postDelayed(runnable, 220L)
+        try {
+            windowManager.updateViewLayout(container, createCollapsedParams(overlayType))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update layout to collapsed: ${e.message}")
+        }
     }
 
     fun expandToDock() {
@@ -323,6 +321,7 @@ class FloatingOverlayManager(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update layout to expanded: ${e.message}")
         }
+        pipContainer?.visibility = View.VISIBLE
         isCurrentlyCollapsed = false
         isCollapsedState.value = false
     }
@@ -389,7 +388,7 @@ fun FloatingDockOverlayScreen(
 
     Box(
         modifier = if (isCollapsed) {
-            Modifier.size(72.dp)
+            Modifier.size(56.dp)
         } else {
             Modifier
                 .fillMaxWidth()

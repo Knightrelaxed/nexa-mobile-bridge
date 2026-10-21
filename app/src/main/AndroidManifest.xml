@@ -65,7 +65,7 @@
             android:name=".NexaBridgeService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|specialUse">
+            android:foregroundServiceType="connectedDevice|specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Persistent neural relay connection to Nexa cloud server for executive commands, sensor telemetry, and bridge communication" />
@@ -92,7 +92,7 @@
             android:screenOrientation="portrait"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
-            android:excludeFromRecents="true"
+            android:excludeFromRecents="false"
             android:taskAffinity="com.nexa.mobilebridge.call"
             android:launchMode="singleInstance"
             android:showWhenLocked="true"

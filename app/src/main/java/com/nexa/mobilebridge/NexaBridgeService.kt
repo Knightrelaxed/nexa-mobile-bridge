@@ -51,15 +51,45 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.booleanOrNull
 import java.util.Locale
+import android.content.pm.ServiceInfo
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class NexaBridgeService : Service() {
 
     companion object {
+        const val NOTIF_SERVICE_ID = 1001
         /** Weak reference to the active WebSocket client for sending call events from Activities. */
         @Volatile var activeWebSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient? = null
         @Volatile private var activeJson: kotlinx.serialization.json.Json? = null
+        @Volatile var instance: NexaBridgeService? = null
+
+        /**
+         * Dynamically promote or demote this foreground service with FOREGROUND_SERVICE_TYPE_MICROPHONE.
+         * Ensures Android 14+ background mic recording is allowed during active calls even if the activity is moved to back.
+         */
+        fun enableCallMicrophone(enable: Boolean) {
+            val s = instance ?: return
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val notif = s.buildServiceNotification()
+                    val types = if (enable) {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    } else {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    }
+                    s.startForeground(NOTIF_SERVICE_ID, notif, types)
+                    Log.i("NexaBridge", "Foreground service microphone state updated: enable=$enable")
+                }
+            } catch (e: Exception) {
+                Log.w("NexaBridge", "Failed to update FGS microphone state: ${e.message}")
+            }
+        }
+
+        fun getWebSocketQueueSize(): Long = activeWebSocketClient?.getQueueSize() ?: 0L
 
         /**
          * Send a raw JSON payload to the N.E.X.A server via the active WebSocket connection.
@@ -94,7 +124,7 @@ class NexaBridgeService : Service() {
     private val CHANNEL_SERVICE_ID = "nexa_bridge_channel_01"
     // Kanal alert kegagalan koneksi — prioritas tinggi agar muncul sebagai heads-up
     private val CHANNEL_ALERT_ID   = "nexa_bridge_alert_01"
-    private val NOTIF_SERVICE_ID   = 1001
+    // private val NOTIF_SERVICE_ID in companion
     private val NOTIF_ALERT_ID     = 1002
 
     // ─── Alert TTS ────────────────────────────────────────────────
@@ -171,12 +201,19 @@ class NexaBridgeService : Service() {
         // Expose WebSocket client to companion object for cross-component access
         activeWebSocketClient = webSocketClient
         activeJson = json
+        instance = this
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             val notification = buildServiceNotification()
-            startForeground(NOTIF_SERVICE_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                startForeground(NOTIF_SERVICE_ID, notification, types)
+            } else {
+                startForeground(NOTIF_SERVICE_ID, notification)
+            }
         } catch (e: Exception) {
             Log.e("NexaBridge", "Failed to start foreground notification: ${e.message}", e)
         }
@@ -715,6 +752,9 @@ class NexaBridgeService : Service() {
         // Clear companion references before tearing down
         activeWebSocketClient = null
         activeJson = null
+        if (instance === this) {
+            instance = null
+        }
         super.onDestroy()
         networkDebounceJob?.cancel()
         networkDebounceJob = null
