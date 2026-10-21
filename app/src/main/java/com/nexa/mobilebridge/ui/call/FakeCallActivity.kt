@@ -1,6 +1,7 @@
 package com.nexa.mobilebridge.ui.call
 
 import android.Manifest
+import android.app.Activity
 import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,11 +16,16 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.util.Rational
 import android.view.WindowManager
+import android.widget.Toast
+import com.nexa.mobilebridge.service.ScreenCaptureService
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -49,6 +55,24 @@ import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.automirrored.filled.ScreenShare
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.text.font.FontStyle
 import com.nexa.mobilebridge.dispatcher.handler.AudioOutputRoute
 import com.nexa.mobilebridge.dispatcher.handler.CameraStreamHandler
 import com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler
@@ -121,6 +145,7 @@ class FakeCallActivity : ComponentActivity() {
     private lateinit var voiceRecorderHandler: VoiceRecorderHandler
     private lateinit var voiceStreamHandler: com.nexa.mobilebridge.dispatcher.handler.VoiceStreamHandler
     private lateinit var cameraStreamHandler: CameraStreamHandler
+    private lateinit var mediaProjectionManager: MediaProjectionManager
 
     private var commandId: String = ""
     private var callerName: String = "N.E.X.A Assistant"
@@ -145,7 +170,37 @@ class FakeCallActivity : ComponentActivity() {
     private val audioRoute = mutableStateOf(AudioOutputRoute.EARPIECE)
     private val isCameraActive = mutableStateOf(false)
     private val isBackCamera = mutableStateOf(true)
+    private val isMicMuted = mutableStateOf(false)
+    private val isScreenShareActive = mutableStateOf(false)
+    private val assistantMessage = mutableStateOf("")
+    private val userTranscript = mutableStateOf("")
     private var currentSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null
+
+    private fun toggleMicMute() {
+        isMicMuted.value = !isMicMuted.value
+        voiceStreamHandler.setMicrophoneMuted(isMicMuted.value)
+        ScreenCaptureService.isMicMuted.value = isMicMuted.value
+        Log.i(TAG, "Microphone mute state updated: ${isMicMuted.value}")
+    }
+
+    private fun interruptAssistant() {
+        voiceStreamHandler.flushOutputBuffer()
+        hudState.value = LiveVoiceHudState.LISTENING
+        pendingStateEntryTime = 0L
+        Log.i(TAG, "Assistant interrupted by user touch")
+    }
+
+    private fun selectAudioRoute(route: AudioOutputRoute) {
+        voiceStreamHandler.setExplicitAudioRoute(route)
+        audioRoute.value = voiceStreamHandler.currentRoute
+        isLoudspeaker.value = (audioRoute.value == AudioOutputRoute.SPEAKER)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                setPictureInPictureParams(buildPipParams())
+            } catch (_: Exception) {}
+        }
+        Log.i(TAG, "Audio route selected: $route")
+    }
 
 
     // Tracks when hudState entered THINKING or PROCESSING (used by watchdog to detect true slow network)
@@ -227,6 +282,42 @@ class FakeCallActivity : ComponentActivity() {
                     hudState.value = LiveVoiceHudState.LISTENING
                     pendingStateEntryTime = 0L
                 }
+
+                // Dynamic transcript/text updates from server if present
+                try {
+                    val jsonObj = org.json.JSONObject(rawJson)
+                    if (jsonObj.has("text")) {
+                        val tVal = jsonObj.optString("text")
+                        if (tVal.isNotBlank()) {
+                            assistantMessage.value = tVal
+                            ScreenCaptureService.assistantSubtitle.value = tVal
+                        }
+                    }
+                    if (jsonObj.has("user_transcript")) {
+                        val uVal = jsonObj.optString("user_transcript")
+                        if (uVal.isNotBlank()) {
+                            userTranscript.value = uVal
+                        }
+                    }
+                } catch (_: Exception) {
+                    val textRegex = Regex("\"text\"\\s*:\\s*\"([^\"]+)\"")
+                    val textMatch = textRegex.find(rawJson)
+                    if (textMatch != null) {
+                        val tVal = textMatch.groups[1]?.value
+                        if (!tVal.isNullOrBlank()) {
+                            assistantMessage.value = tVal
+                            ScreenCaptureService.assistantSubtitle.value = tVal
+                        }
+                    }
+                    val uRegex = Regex("\"user_transcript\"\\s*:\\s*\"([^\"]+)\"")
+                    val uMatch = uRegex.find(rawJson)
+                    if (uMatch != null) {
+                        val uVal = uMatch.groups[1]?.value
+                        if (!uVal.isNullOrBlank()) {
+                            userTranscript.value = uVal
+                        }
+                    }
+                }
             }
         }
     }
@@ -281,6 +372,54 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
+    // Runtime launcher for Screen Capture (MediaProjection)
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            Log.i(TAG, "Screen capture permission granted by user")
+            if (isCameraActive.value) {
+                stopCameraStream()
+            }
+            isScreenShareActive.value = true
+            ScreenCaptureService.start(
+                context = this,
+                resultCode = result.resultCode,
+                data = result.data!!,
+                commandId = commandId
+            )
+            // Move FakeCallActivity to background so homescreen / apps are visible to user
+            moveTaskToBack(true)
+        } else {
+            Log.w(TAG, "Screen capture permission denied by user")
+            isScreenShareActive.value = false
+        }
+    }
+
+    private fun toggleScreenShare() {
+        if (ScreenCaptureService.isRunning || isScreenShareActive.value) {
+            Log.i(TAG, "Stopping ScreenCaptureService")
+            ScreenCaptureService.stop(this)
+            isScreenShareActive.value = false
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                Toast.makeText(
+                    this,
+                    "Mohon izinkan N.E.X.A menampilkan overlay di atas aplikasi lain",
+                    Toast.LENGTH_LONG
+                ).show()
+                val overlayIntent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(overlayIntent)
+                return
+            }
+            Log.i(TAG, "Launching MediaProjection screen capture intent")
+            screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         isCallActive = true
@@ -306,6 +445,39 @@ class FakeCallActivity : ComponentActivity() {
             }
         }
         cameraStreamHandler = CameraStreamHandler(applicationContext)
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
+        // Hook up ScreenCaptureService floating overlay callbacks
+        ScreenCaptureService.onEndCallRequested = {
+            runOnUiThread { handleReject() }
+        }
+        ScreenCaptureService.onToggleMicMuteRequested = {
+            runOnUiThread { toggleMicMute() }
+        }
+        ScreenCaptureService.onInterruptRequested = {
+            runOnUiThread { interruptAssistant() }
+        }
+        ScreenCaptureService.onReturnToCallRequested = {
+            val returnIntent = Intent(this@FakeCallActivity, FakeCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            }
+            startActivity(returnIntent)
+        }
+
+        // Keep ScreenCaptureService reactive states synchronized with live engine
+        lifecycleScope.launch {
+            while (isActive) {
+                if (ScreenCaptureService.isRunning) {
+                    ScreenCaptureService.audioEnergy.value = voiceStreamHandler.currentAudioEnergy
+                    ScreenCaptureService.isAssistantSpeaking.value = voiceStreamHandler.isPlayingAudio()
+                    ScreenCaptureService.isMicMuted.value = isMicMuted.value
+                }
+                if (isScreenShareActive.value != ScreenCaptureService.isSharingActive.value) {
+                    isScreenShareActive.value = ScreenCaptureService.isSharingActive.value
+                }
+                delay(100L)
+            }
+        }
 
         commandId = intent.getStringExtra("command_id") ?: "call_${System.currentTimeMillis()}"
         callerName = intent.getStringExtra("caller_name") ?: "N.E.X.A Voice Bridge"
@@ -366,6 +538,10 @@ class FakeCallActivity : ComponentActivity() {
             val currentAudioRoute by audioRoute
             val cameraActive by isCameraActive
             val backCamera by isBackCamera
+            val micMuted by isMicMuted
+            val screenShareActive by isScreenShareActive
+            val asstText by assistantMessage
+            val userText by userTranscript
 
             // Start call flow immediately on UI render
             LaunchedEffect(Unit) {
@@ -390,6 +566,7 @@ class FakeCallActivity : ComponentActivity() {
                     cancelOngoingCallNotification()
                     delay(300L)
                     stopCameraStream()
+                    try { ScreenCaptureService.stop(this@FakeCallActivity) } catch (_: Exception) {}
                     voiceStreamHandler.stopStreaming()
                     finishAndRemoveTask()
                     @Suppress("DEPRECATION")
@@ -410,9 +587,27 @@ class FakeCallActivity : ComponentActivity() {
                 recordingElapsedMs = elapsedMs,
                 isCameraActive = cameraActive,
                 isBackCamera = backCamera,
+                isMicMuted = micMuted,
+                isScreenShareActive = screenShareActive,
+                availableAudioRoutes = voiceStreamHandler.getAvailableAudioRoutes(),
+                assistantText = asstText,
+                userTranscriptText = userText,
                 onAnswer = { handleAccept() },
                 onReject = { handleReject() },
                 onEyeTapped = { target, tapCount -> handleTactileEyeTap(target, tapCount) },
+                onToggleMicMute = { toggleMicMute() },
+                onToggleScreenShare = { toggleScreenShare() },
+                onSelectAudioRoute = { route -> selectAudioRoute(route) },
+                onInterruptAssistant = { interruptAssistant() },
+                onEnterPiP = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            enterPictureInPictureMode(buildPipParams())
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to enter PiP: ${e.message}")
+                        }
+                    }
+                },
                 onToggleLoudspeaker = { enabled ->
                     voiceStreamHandler.setLoudspeaker(enabled)
                     val current = voiceStreamHandler.currentRoute
@@ -574,6 +769,7 @@ class FakeCallActivity : ComponentActivity() {
             callState.value = CallState.REJECTED_SPEAKING
             audioPlayerHandler.stopAll()
             stopCameraStream()
+            try { ScreenCaptureService.stop(this) } catch (_: Exception) {}
             voiceStreamHandler.stopStreaming()
             rejectionCount++
 
@@ -596,6 +792,7 @@ class FakeCallActivity : ComponentActivity() {
             Log.i(TAG, "User hung up active live call — closing session")
             audioPlayerHandler.stopAll()
             stopCameraStream()
+            try { ScreenCaptureService.stop(this) } catch (_: Exception) {}
             voiceStreamHandler.stopStreaming()
             sendCallEvent("CALL_FINISHED")
             callState.value = CallState.FINISHED
@@ -765,7 +962,7 @@ class FakeCallActivity : ComponentActivity() {
             )
 
             val notification = NotificationCompat.Builder(this, CALL_ONGOING_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+                .setSmallIcon(applicationInfo.icon)
                 .setContentTitle("Panggilan N.E.X.A Aktif")
                 .setContentText("Sedang berlangsung di latar belakang (Ketuk untuk kembali)")
                 .setOngoing(true)
@@ -935,6 +1132,11 @@ class FakeCallActivity : ComponentActivity() {
             sendCallEvent("CALL_FINISHED")
         }
         cancelOngoingCallNotification()
+        try { ScreenCaptureService.stop(this) } catch (e: Exception) {}
+        ScreenCaptureService.onEndCallRequested = null
+        ScreenCaptureService.onToggleMicMuteRequested = null
+        ScreenCaptureService.onInterruptRequested = null
+        ScreenCaptureService.onReturnToCallRequested = null
         try { cameraStreamHandler.stopCamera() } catch (e: Exception) {}
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
@@ -957,19 +1159,28 @@ fun FakeCallScreen(
     recordingElapsedMs: Long,
     isCameraActive: Boolean = false,
     isBackCamera: Boolean = true,
+    isMicMuted: Boolean = false,
+    isScreenShareActive: Boolean = false,
+    availableAudioRoutes: List<AudioOutputRoute> = listOf(AudioOutputRoute.SPEAKER, AudioOutputRoute.EARPIECE),
+    assistantText: String = "",
+    userTranscriptText: String = "",
     onAnswer: () -> Unit,
     onReject: () -> Unit,
     onToggleLoudspeaker: (Boolean) -> Unit = {},
     onToggleAudioRoute: () -> Unit = {},
+    onSelectAudioRoute: (AudioOutputRoute) -> Unit = {},
     onToggleCamera: () -> Unit = {},
     onSwitchCamera: () -> Unit = {},
+    onToggleMicMute: () -> Unit = {},
+    onToggleScreenShare: () -> Unit = {},
+    onInterruptAssistant: () -> Unit = {},
+    onEnterPiP: () -> Unit = {},
     onPreviewSurfaceReady: (androidx.camera.core.Preview.SurfaceProvider) -> Unit = {},
     onEyeTapped: (target: String, tapCount: Int) -> Unit = { _, _ -> }
 ) {
     if (isInPipMode) {
         // Pure Minimalist Cybernetic PiP Mode (WhatsApp Style)
         // 100% ONLY Expressive Eyes in deep OLED black canvas.
-        // Tap on window reveals native OS controls (Speaker, End Call, Maximize).
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -989,47 +1200,45 @@ fun FakeCallScreen(
         return
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    if (callState == CallState.RINGING) {
+        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+        val pulseScale1 by infiniteTransition.animateFloat(
+            initialValue = 0.8f, targetValue = 1.3f,
+            animationSpec = infiniteRepeatable(tween(1500, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "pulseScale1"
+        )
+        val pulseScale2 by infiniteTransition.animateFloat(
+            initialValue = 1.0f, targetValue = 1.6f,
+            animationSpec = infiniteRepeatable(tween(2000, easing = LinearOutSlowInEasing), RepeatMode.Restart),
+            label = "pulseScale2"
+        )
+        val pulseAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.6f, targetValue = 0.0f,
+            animationSpec = infiniteRepeatable(tween(2000, easing = LinearOutSlowInEasing), RepeatMode.Restart),
+            label = "pulseAlpha"
+        )
 
-    val pulseScale1 by infiniteTransition.animateFloat(
-        initialValue = 0.8f, targetValue = 1.3f,
-        animationSpec = infiniteRepeatable(tween(1500, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "pulseScale1"
-    )
-    val pulseScale2 by infiniteTransition.animateFloat(
-        initialValue = 1.0f, targetValue = 1.6f,
-        animationSpec = infiniteRepeatable(tween(2000, easing = LinearOutSlowInEasing), RepeatMode.Restart),
-        label = "pulseScale2"
-    )
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.6f, targetValue = 0.0f,
-        animationSpec = infiniteRepeatable(tween(2000, easing = LinearOutSlowInEasing), RepeatMode.Restart),
-        label = "pulseAlpha"
-    )
+        val backgroundBrush = Brush.verticalGradient(
+            colors = listOf(Color(0xFF040B16), Color(0xFF0A192F), Color(0xFF020C1B))
+        )
 
-    val backgroundBrush = Brush.verticalGradient(
-        colors = listOf(Color(0xFF040B16), Color(0xFF0A192F), Color(0xFF020C1B))
-    )
-
-    Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(backgroundBrush)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween
+        Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(backgroundBrush)
             ) {
-                // ── Header ──────────────────────────────────────────────
-                CallHeader(callState = callState, hudState = hudState, callerName = callerName)
-
-                // ── Center: Avatar / Expressive Eyes / Camera Preview ────
                 Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth()
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    if (callState == CallState.RINGING) {
-                        // Incoming call pulsing phone orb
+                    // Header
+                    CallHeader(callState = callState, hudState = hudState, callerName = callerName)
+
+                    // Incoming call pulsing phone orb & message card
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier.size(180.dp)
@@ -1066,7 +1275,6 @@ fun FakeCallScreen(
 
                         Spacer(modifier = Modifier.height(32.dp))
 
-                        // Incoming Message Card
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = Color(0xFF112240).copy(alpha = 0.7f)
@@ -1084,83 +1292,13 @@ fun FakeCallScreen(
                                 lineHeight = 24.sp
                             )
                         }
-                    } else if (isCameraActive) {
-                        // Live Multimodal Video Call Camera Preview (3:4 Vertical Aspect Ratio)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.90f)
-                                .aspectRatio(3f / 4f)
-                                .clip(RoundedCornerShape(24.dp))
-                                .border(
-                                    2.dp,
-                                    Brush.linearGradient(listOf(Color(0xFF64FFDA), Color(0xFF00E5FF))),
-                                    RoundedCornerShape(24.dp)
-                                )
-                                .background(Color(0xFF0D1B2A)),
-                            contentAlignment = Alignment.Center
-                        ) {
-
-                            AndroidView(
-                                factory = { ctx ->
-                                    PreviewView(ctx).apply {
-                                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                                        onPreviewSurfaceReady(this.surfaceProvider)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            // Overlay Pill badge at Top-Start
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFF040B16).copy(alpha = 0.8f),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.45f)),
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(12.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(7.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF64FFDA))
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isBackCamera) "KAMERA BELAKANG (1 FPS)" else "KAMERA DEPAN (1 FPS)",
-                                        color = Color(0xFF64FFDA),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        // Active Live Call Session: Cybernetic Expressive OLED Eyes
-                        NexaExpressiveEyes(
-                            hudState = hudState,
-                            isSpeaking = isSpeaking,
-                            audioEnergy = audioEnergy,
-                            onEyeTapped = onEyeTapped,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 16.dp)
-                        )
                     }
-                }
 
-                // ── Bottom Buttons ───────────────────────────────────────
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (callState == CallState.RINGING) {
+                    // Swipe-Up Action Buttons
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1183,164 +1321,730 @@ fun FakeCallScreen(
                                 onTriggered = onAnswer
                             )
                         }
-                    } else if (callState != CallState.FINISHED) {
-                        // Ongoing call active: Loudspeaker + Camera + Lens Switch + End Call
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val haptic = LocalHapticFeedback.current
-
-                            // ── 1. Smart Audio Route Toggle (Bluetooth / Wired / Speaker / Earpiece) ──
-                            val isSpeaker = audioRoute == AudioOutputRoute.SPEAKER
-                            val isBt = audioRoute == AudioOutputRoute.BLUETOOTH
-                            val isWired = audioRoute == AudioOutputRoute.WIRED_HEADSET
-
-                            val routeBgBrush = when {
-                                isSpeaker -> Brush.radialGradient(listOf(Color(0xFF00E5FF), Color(0xFF0097A7)))
-                                isBt -> Brush.radialGradient(listOf(Color(0xFF64FFDA), Color(0xFF00897B)))
-                                isWired -> Brush.radialGradient(listOf(Color(0xFF81C784), Color(0xFF2E7D32)))
-                                else -> Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
-                            }
-                            val routeBorderColor = when {
-                                isSpeaker -> Color(0xFF84FFFF)
-                                isBt -> Color(0xFF64FFDA)
-                                isWired -> Color(0xFFA5D6A7)
-                                else -> Color(0xFF475569)
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .size(58.dp)
-                                    .clip(CircleShape)
-                                    .background(routeBgBrush)
-                                    .border(2.dp, routeBorderColor, CircleShape)
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onToggleAudioRoute()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                when (audioRoute) {
-                                    AudioOutputRoute.BLUETOOTH -> {
-                                        Icon(
-                                            imageVector = Icons.Default.Bluetooth,
-                                            contentDescription = "Bluetooth TWS",
-                                            tint = Color(0xFF040B16),
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                    AudioOutputRoute.WIRED_HEADSET -> {
-                                        Icon(
-                                            imageVector = Icons.Default.Headset,
-                                            contentDescription = "Headset Kabel",
-                                            tint = Color(0xFF040B16),
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                    AudioOutputRoute.SPEAKER -> {
-                                        SpeakerIcon(
-                                            isLoudspeaker = true,
-                                            tint = Color(0xFF002B36),
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                    AudioOutputRoute.EARPIECE -> {
-                                        SpeakerIcon(
-                                            isLoudspeaker = false,
-                                            tint = Color(0xFF94A3B8),
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // ── 2. Camera Stream Toggle ──
-                            Box(
-                                modifier = Modifier
-                                    .size(58.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (isCameraActive)
-                                            Brush.radialGradient(listOf(Color(0xFF64FFDA), Color(0xFF00BFA5)))
-                                        else
-                                            Brush.radialGradient(listOf(Color(0xFF1E293B), Color(0xFF0F172A)))
-                                    )
-                                    .border(
-                                        2.dp,
-                                        if (isCameraActive) Color(0xFF64FFDA) else Color(0xFF475569),
-                                        CircleShape
-                                    )
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onToggleCamera()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                                    contentDescription = if (isCameraActive) "Matikan Kamera" else "Aktifkan Kamera",
-                                    tint = if (isCameraActive) Color(0xFF040B16) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-
-                            // ── 3. Switch Lens (Visible when camera active) ──
-                            if (isCameraActive) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(58.dp)
-                                        .clip(CircleShape)
-                                        .background(Brush.radialGradient(listOf(Color(0xFF334155), Color(0xFF1E293B))))
-                                        .border(2.dp, Color(0xFF64748B), CircleShape)
-                                        .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onSwitchCamera()
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FlipCameraAndroid,
-                                        contentDescription = "Ganti Lensa Kamera",
-                                        tint = Color(0xFFE2E8F0),
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
-
-                            // ── 4. End Call ──
-                            Box(
-                                modifier = Modifier
-                                    .size(62.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        Brush.radialGradient(
-                                            colors = listOf(Color(0xFFFF1744), Color(0xFFB71C1C))
-                                        )
-                                    )
-                                    .border(2.dp, Color(0xFFFF8A80), CircleShape)
-                                    .clickable {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onReject()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Tutup Panggilan",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.height(80.dp))
                     }
                 }
             }
+        }
+        return
+    }
+
+    // ── Active Live Session (Gemini Live Clean OLED & Video Layout) ───────────
+    val haptic = LocalHapticFeedback.current
+    var showAudioRouteDropdown by remember { mutableStateOf(false) }
+
+    val flipRotation by animateFloatAsState(
+        targetValue = if (isBackCamera) 0f else 180f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "flipCameraRotation"
+    )
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color(0xFF020617)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // ── Layer 0: Background ──────────────────────────────────────────
+            if (isCameraActive) {
+                // Full Screen Edge-to-Edge Camera Preview
+                AndroidView(
+                    factory = { ctx ->
+                        PreviewView(ctx).apply {
+                            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                            scaleType = PreviewView.ScaleType.FILL_CENTER
+                            onPreviewSurfaceReady(this.surfaceProvider)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // ── Layer 1: Scrim Gradients (Top & Bottom subtle dark shade) ───
+                // Top Scrim for status bar and top icons legibility
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color(0xB3000000), Color.Transparent)
+                            )
+                        )
+                )
+
+                // Bottom Scrim for subtitle card and bottom dock legibility
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color(0xB3000000), Color(0xE6000000))
+                            )
+                        )
+                )
+            } else {
+                // Audio-Only Pure Dark OLED Canvas
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color(0xFF020617), Color(0xFF0B1120), Color(0xFF020617))
+                            )
+                        )
+                )
+            }
+
+            // ── Layer 2: Main Foreground Scaffold ─────────────────────────────
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 24.dp)
+                    .padding(top = 16.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                // ── Top Bar: Status Pill (Left) & Controls (Right) ────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LiveStatusPill(state = hudState)
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Putar Kamera Button (Beralih kamera depan/belakang) Sesuai Gambar 3
+                        if (isCameraActive) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xCC1E1E1E),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSwitchCamera()
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.FlipCameraAndroid,
+                                        contentDescription = "Putar Kamera (Beralih kamera depan/belakang)",
+                                        tint = Color(0xFFF1F5F9),
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .graphicsLayer { rotationZ = flipRotation }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Top Right Pill: [ ◱ PiP │ ··· MoreHoriz ] Sesuai Gambar 3
+                        Surface(
+                            shape = RoundedCornerShape(23.dp),
+                            color = Color(0xCC1E1E1E),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onEnterPiP()
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PictureInPictureAlt,
+                                        contentDescription = "Mode Layar Kecil (Picture-in-Picture)",
+                                        tint = Color(0xFFCBD5E1),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .height(18.dp)
+                                        .background(Color(0x33FFFFFF))
+                                )
+
+                                Box {
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showAudioRouteDropdown = true
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.MoreHoriz,
+                                            contentDescription = "Pengaturan & Opsi Lainnya",
+                                            tint = Color(0xFFCBD5E1),
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+
+                                    AudioRouteOptionsMenu(
+                                        expanded = showAudioRouteDropdown,
+                                        currentRoute = audioRoute,
+                                        availableRoutes = availableAudioRoutes,
+                                        onDismiss = { showAudioRouteDropdown = false },
+                                        onSelectRoute = { route ->
+                                            showAudioRouteDropdown = false
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSelectAudioRoute(route)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Center & Lower Area ───────────────────────────────────────
+                if (!isCameraActive) {
+                    // Mode Audio-Only: Teks Respons Asisten di Atas + Cybernetic OLED Eyes di Tengah
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (assistantText.isNotBlank()) {
+                            Text(
+                                text = assistantText,
+                                color = Color(0xFFF1F5F9),
+                                fontSize = 21.sp,
+                                lineHeight = 30.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Start,
+                                maxLines = 5,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 20.dp, start = 8.dp, end = 8.dp)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(20.dp))
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            NexaExpressiveEyes(
+                                hudState = hudState,
+                                isSpeaking = isSpeaking,
+                                audioEnergy = audioEnergy,
+                                onEyeTapped = onEyeTapped,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                            )
+                        }
+
+                        // Floating barge-in pill & transcript capsule (elemen elips di tengah)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+                            AnimatedVisibility(
+                                visible = isSpeaking || hudState == LiveVoiceHudState.SPEAKING,
+                                enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                                exit = fadeOut() + scaleOut(targetScale = 0.85f)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = Color(0xFF1E293B).copy(alpha = 0.92f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF475569)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onInterruptAssistant()
+                                        }
+                                        .padding(bottom = 10.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF38BDF8))
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Ketuk untuk menyela",
+                                            color = Color(0xFFF1F5F9),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(
+                                visible = userTranscriptText.isNotBlank(),
+                                enter = fadeIn() + scaleIn(initialScale = 0.9f),
+                                exit = fadeOut() + scaleOut(targetScale = 0.9f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = Color(0xFF1E2024),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = userTranscriptText,
+                                            color = Color(0xFFE2E8F0),
+                                            fontSize = 15.sp,
+                                            lineHeight = 22.sp,
+                                            fontStyle = FontStyle.Italic,
+                                            fontWeight = FontWeight.Normal,
+                                            textAlign = TextAlign.Start,
+                                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Mode Video Kamera Layar Penuh:
+                    // Area tengah transparan bersih; Subtitle Card melayang di atas dok bawah Sesuai Gambar 3
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.Bottom,
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        // "Ketuk untuk menyela" pill (Floating Barge-in Button)
+                        AnimatedVisibility(
+                            visible = isSpeaking || hudState == LiveVoiceHudState.SPEAKING,
+                            enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                            exit = fadeOut() + scaleOut(targetScale = 0.85f),
+                            modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xCC1E1E1E),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                modifier = Modifier.clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onInterruptAssistant()
+                                }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF38BDF8))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Ketuk untuk menyela",
+                                        color = Color(0xFFF1F5F9),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+
+                        // Floating Subtitle Card ("Transkrip Suara / Respons Teks" Sesuai Gambar 3)
+                        val displaySubtitle = if (isSpeaking || hudState == LiveVoiceHudState.SPEAKING) {
+                            assistantText
+                        } else if (userTranscriptText.isNotBlank()) {
+                            userTranscriptText
+                        } else {
+                            ""
+                        }
+
+                        if (displaySubtitle.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xEE1A1A1A),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x26FFFFFF)),
+                                modifier = Modifier
+                                    .fillMaxWidth(0.92f)
+                                    .padding(bottom = 12.dp, start = 4.dp)
+                            ) {
+                                Text(
+                                    text = displaySubtitle,
+                                    color = Color(0xFFF8FAFC),
+                                    fontSize = 16.sp,
+                                    lineHeight = 22.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── Bottom Dock (5 Control Buttons Sesuai Gambar 3) ───────────────
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1. Camera Toggle (Aktifkan/Nonaktifkan Kamera — Biru Gemini saat aktif)
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isCameraActive) Color(0xFF2563EB) else Color(0xFF26262A),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isCameraActive) Color(0xFF60A5FA) else Color(0x33FFFFFF)
+                        ),
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleCamera()
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                contentDescription = "Aktifkan/Nonaktifkan Kamera",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    // 2. Screen Share Toggle (Bagikan Layar — Ikon [ ↑ ] Upload Sesuai Gambar 3)
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isScreenShareActive) Color(0xFF38BDF8) else Color(0xFF26262A),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isScreenShareActive) Color(0xFF7DD3FC) else Color(0x33FFFFFF)
+                        ),
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleScreenShare()
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Upload,
+                                contentDescription = "Bagikan Layar",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    // 3. Center Gemini Live Voice Capsule (Indikator Suara Gemini — Sedang Aktif)
+                    LiveGeminiVoiceCapsule(
+                        hudState = hudState,
+                        isSpeaking = isSpeaking,
+                        audioEnergy = audioEnergy,
+                        isCameraMode = isCameraActive,
+                        onTap = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (isSpeaking) onInterruptAssistant()
+                        }
+                    )
+
+                    // 4. Mic Mute Toggle (Mute / Matikan Suara Mikrofon)
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isMicMuted) Color(0xFFEF4444) else Color(0xFF26262A),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isMicMuted) Color(0xFFF87171) else Color(0x33FFFFFF)
+                        ),
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleMicMute()
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = "Mute / Matikan Suara Mikrofon",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    // 5. Hang Up / Close Call (Akhiri Panggilan — Charcoal Gelap Sesuai Gambar 3)
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF26262A),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onReject()
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Akhiri Panggilan",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Gemini Live Bottom Central Voice Capsule ────────────────────────────────
+@Composable
+fun LiveGeminiVoiceCapsule(
+    hudState: LiveVoiceHudState,
+    isSpeaking: Boolean,
+    audioEnergy: Float,
+    isCameraMode: Boolean = false,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "capsuleAnim")
+
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+
+    val wavePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "wavePhase"
+    )
+
+    val capsuleBackgroundBrush = if (isCameraMode) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0F172A),
+                Color(0xFF132035),
+                Color(0xFF1D4ED8),
+                Color(0xFF38BDF8)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(Color(0xFF0F172A), Color(0xFF0F172A))
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(27.dp),
+        color = Color.Transparent,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isCameraMode) Color(0x6638BDF8) else Color(0x3338BDF8)
+        ),
+        modifier = modifier
+            .width(96.dp)
+            .height(54.dp)
+            .clip(RoundedCornerShape(27.dp))
+            .background(capsuleBackgroundBrush)
+            .clickable { onTap() }
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val centerY = h / 2f
+            val centerX = w / 2f
+
+            if (isSpeaking || hudState == LiveVoiceHudState.SPEAKING) {
+                // Multi-bar animated waveform driven by audio energy
+                val barCount = 5
+                val barWidth = 4.dp.toPx()
+                val totalBarsWidth = (barCount * barWidth) + ((barCount - 1) * 5.dp.toPx())
+                val startX = (w - totalBarsWidth) / 2f
+
+                val energyBoost = (audioEnergy * 2.5f).coerceIn(0f, 1f)
+
+                for (i in 0 until barCount) {
+                    val barX = startX + i * (barWidth + 5.dp.toPx())
+                    val sineOffset = kotlin.math.sin((wavePhase * 2 * Math.PI + i * 0.9)).toFloat()
+                    val dynamicFactor = 0.35f + 0.65f * kotlin.math.abs(sineOffset)
+                    val barHeight = (10.dp.toPx() + (22.dp.toPx() * (dynamicFactor + energyBoost * 0.8f))).coerceIn(8.dp.toPx(), h - 12.dp.toPx())
+
+                    val barColor = when (i % 3) {
+                        0 -> Color(0xFF38BDF8) // Electric Sky Blue
+                        1 -> Color(0xFF64FFDA) // Cyan
+                        else -> Color(0xFF818CF8) // Indigo
+                    }
+
+                    drawRoundRect(
+                        color = barColor,
+                        topLeft = Offset(barX, centerY - barHeight / 2f),
+                        size = Size(barWidth, barHeight),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f, barWidth / 2f)
+                    )
+                }
+            } else if (hudState == LiveVoiceHudState.PROCESSING || hudState == LiveVoiceHudState.THINKING) {
+                // Shimmering thinking wave
+                val glowRadius = 14.dp.toPx() * pulseScale
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF10B981).copy(alpha = 0.7f), Color(0xFFF59E0B).copy(alpha = 0.3f), Color.Transparent),
+                        center = Offset(centerX, centerY),
+                        radius = glowRadius
+                    ),
+                    radius = glowRadius,
+                    center = Offset(centerX, centerY)
+                )
+                drawCircle(
+                    color = Color(0xFF10B981),
+                    radius = 5.dp.toPx(),
+                    center = Offset(centerX, centerY)
+                )
+            } else {
+                // Gentle breathing cyan dot (Listening / Idle)
+                val dotRadius = 5.5.dp.toPx() * pulseScale
+                val glowRadius = 16.dp.toPx() * pulseScale
+
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF38BDF8).copy(alpha = 0.35f), Color.Transparent),
+                        center = Offset(centerX, centerY),
+                        radius = glowRadius
+                    ),
+                    radius = glowRadius,
+                    center = Offset(centerX, centerY)
+                )
+                drawCircle(
+                    color = Color(0xFF38BDF8),
+                    radius = dotRadius,
+                    center = Offset(centerX, centerY)
+                )
+            }
+        }
+    }
+}
+
+// ─── Audio Route Options Dropdown Menu ─────────────────────────────────────────
+@Composable
+fun AudioRouteOptionsMenu(
+    expanded: Boolean,
+    currentRoute: AudioOutputRoute,
+    availableRoutes: List<AudioOutputRoute> = listOf(AudioOutputRoute.SPEAKER, AudioOutputRoute.EARPIECE),
+    onDismiss: () -> Unit,
+    onSelectRoute: (AudioOutputRoute) -> Unit
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .background(Color(0xFF0F172A))
+            .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
+    ) {
+        val routes = listOf(
+            Triple(AudioOutputRoute.SPEAKER, "Loudspeaker", Icons.AutoMirrored.Filled.VolumeUp),
+            Triple(AudioOutputRoute.EARPIECE, "Earpiece (Telepon)", Icons.Default.Hearing),
+            Triple(AudioOutputRoute.BLUETOOTH, "Bluetooth Headset", Icons.Default.Bluetooth),
+            Triple(AudioOutputRoute.WIRED_HEADSET, "Headset Kabel", Icons.Default.Headset)
+        )
+
+        routes.forEach { (route, label, icon) ->
+            val isSelected = currentRoute == route
+            val isAvailable = availableRoutes.contains(route)
+            DropdownMenuItem(
+                enabled = isAvailable,
+                text = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = label,
+                            tint = when {
+                                isSelected -> Color(0xFF38BDF8)
+                                isAvailable -> Color(0xFF94A3B8)
+                                else -> Color(0xFF475569)
+                            },
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = if (isAvailable) label else "$label (Tidak Terhubung)",
+                            color = when {
+                                isSelected -> Color(0xFFF1F5F9)
+                                isAvailable -> Color(0xFFCBD5E1)
+                                else -> Color(0xFF64748B)
+                            },
+                            fontSize = 14.sp,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                },
+                trailingIcon = {
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                },
+                onClick = {
+                    if (isAvailable) {
+                        onSelectRoute(route)
+                    }
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = Color(0xFFF1F5F9),
+                    disabledTextColor = Color(0xFF64748B)
+                )
+            )
         }
     }
 }
