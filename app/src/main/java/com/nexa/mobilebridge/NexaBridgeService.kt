@@ -58,7 +58,7 @@ class NexaBridgeService : Service() {
 
     companion object {
         /** Weak reference to the active WebSocket client for sending call events from Activities. */
-        @Volatile private var activeWebSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient? = null
+        @Volatile var activeWebSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient? = null
         @Volatile private var activeJson: kotlinx.serialization.json.Json? = null
 
         /**

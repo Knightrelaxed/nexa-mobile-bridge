@@ -772,7 +772,6 @@ class VoiceStreamHandler(private val context: Context) {
         } catch (_: Exception) {}
         audioTrack = null
 
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioDeviceCallback?.let {
             try {
                 audioManager.unregisterAudioDeviceCallback(it)
