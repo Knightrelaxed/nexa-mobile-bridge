@@ -937,10 +937,15 @@ class FakeCallActivity : ComponentActivity() {
         }
     }
 
+    private var cameraFrameCount = 0
+
     private fun sendVideoFrame(frameBase64: String) {
         if (!isCameraActive.value) return
-        // Do not transmit video frames while assistant is speaking or playing audio
-        if (voiceStreamHandler.isPlayingAudio()) return
+
+        cameraFrameCount++
+        if (cameraFrameCount % 5 == 1) {
+            Log.i(TAG, "Camera frame sent to Nexa: #$cameraFrameCount (${frameBase64.length / 1024} KB)")
+        }
 
         val payload = buildJsonObject {
             put("type", "CALL_VIDEO_FRAME")

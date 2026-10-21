@@ -111,6 +111,7 @@ class ScreenCaptureService : Service() {
 
     private var overlayManager: FloatingOverlayManager? = null
     private var commandId: String = ""
+    private var screenFrameCount = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -241,10 +242,7 @@ class ScreenCaptureService : Service() {
             Log.i(TAG, "Screen capture loop active (1 FPS throttle)")
             while (isActive && isRunning) {
                 try {
-                    // Conserve bandwidth & thermal energy: skip frame extraction while assistant speaks
-                    if (!isAssistantSpeaking.value) {
-                        captureAndSendFrame()
-                    }
+                    captureAndSendFrame()
                 } catch (e: Exception) {
                     Log.w(TAG, "Error capturing screen frame: ${e.message}")
                 }
@@ -257,8 +255,8 @@ class ScreenCaptureService : Service() {
         val reader = imageReader ?: return
         val image = reader.acquireLatestImage() ?: return
 
-        // Prevent uplink backpressure HOL blocking for voice chunks
-        if (NexaBridgeService.getWebSocketQueueSize() > 64 * 1024) {
+        // Prevent uplink backpressure HOL blocking for voice chunks (>512KB threshold)
+        if (NexaBridgeService.getWebSocketQueueSize() > 512 * 1024) {
             image.close()
             return
         }
@@ -294,6 +292,11 @@ class ScreenCaptureService : Service() {
 
             val jpegBytes = outputStream.toByteArray()
             val base64Frame = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+            screenFrameCount++
+            if (screenFrameCount % 5 == 1) {
+                Log.i(TAG, "Screen frame sent to Nexa: #$screenFrameCount (${base64Frame.length / 1024} KB)")
+            }
 
             // Relay directly to Google Gemini Multimodal Live API
             val payload = buildJsonObject {

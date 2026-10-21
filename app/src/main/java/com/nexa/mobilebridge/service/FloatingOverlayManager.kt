@@ -10,8 +10,10 @@ import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
+import kotlin.math.abs
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -104,19 +106,34 @@ class FloatingOverlayManager(private val context: Context) {
     private var pipContainer: FrameLayout? = null
     private var dockContainer: FrameLayout? = null
 
-    // Layout params for bottom overlay
-    private var isCurrentlyCollapsed = false
-    private val isCollapsedState = mutableStateOf(false)
+    // Layout params & coordinates for draggable bottom overlay bubble
+    private var isCurrentlyCollapsed = true
+    private val isCollapsedState = mutableStateOf(true)
     private var collapseRunnable: Runnable? = null
+
+    private var bubbleX = 0
+    private var bubbleY = 0
+    private var initialTouchRawX = 0f
+    private var initialTouchRawY = 0f
+    private var initialParamX = 0
+    private var initialParamY = 0
+    private var isDraggingBubble = false
+    private val touchSlop by lazy { ViewConfiguration.get(context).scaledTouchSlop }
 
     fun show() {
         if (dockContainer != null) return
+
+        val density = context.resources.displayMetrics.density
+        bubbleX = (16 * density).toInt()
+        bubbleY = (36 * density).toInt()
 
         val owner = FloatingLifecycleOwner()
         owner.handleStart()
         lifecycleOwner = owner
 
-        showPipWindow(owner)
+        // Start collapsed as a sleek, non-intrusive floating bubble
+        isCurrentlyCollapsed = true
+        isCollapsedState.value = true
         showDockWindow(owner)
     }
 
@@ -126,9 +143,13 @@ class FloatingOverlayManager(private val context: Context) {
         mainHandler.removeCallbacksAndMessages(null)
         try {
             pipContainer?.let { windowManager.removeView(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error removing pipContainer: ${e.message}")
+        }
+        try {
             dockContainer?.let { windowManager.removeView(it) }
         } catch (e: Exception) {
-            Log.w(TAG, "Error removing overlay views: ${e.message}")
+            Log.w(TAG, "Error removing dockContainer: ${e.message}")
         }
         pipContainer = null
         dockContainer = null
@@ -138,6 +159,8 @@ class FloatingOverlayManager(private val context: Context) {
 
     // ─── 1. Top-Right PiP Capsule Window ─────────────────────────────────────
     private fun showPipWindow(owner: FloatingLifecycleOwner) {
+        if (pipContainer != null) return
+
         val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -201,15 +224,58 @@ class FloatingOverlayManager(private val context: Context) {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // Expanded window occupies bottom area with touch-outside watching
-        val dockParams = createExpandedParams(overlayType)
+        // Initialize as collapsed draggable bubble
+        val dockParams = createCollapsedParams(overlayType)
 
         val container = object : FrameLayout(context) {
             override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-                if (ev.action == MotionEvent.ACTION_OUTSIDE) {
-                    // Screen touched outside dock -> trigger smooth collapse
-                    collapseToBubble()
-                    return false
+                if (isCurrentlyCollapsed) {
+                    when (ev.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            initialTouchRawX = ev.rawX
+                            initialTouchRawY = ev.rawY
+                            initialParamX = bubbleX
+                            initialParamY = bubbleY
+                            isDraggingBubble = false
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = ev.rawX - initialTouchRawX
+                            val dy = ev.rawY - initialTouchRawY
+                            if (!isDraggingBubble && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                                isDraggingBubble = true
+                            }
+                            if (isDraggingBubble) {
+                                val density = context.resources.displayMetrics.density
+                                val sizePx = (56 * density).toInt()
+                                val displayMetrics = context.resources.displayMetrics
+                                val maxBubbleX = displayMetrics.widthPixels - sizePx
+                                val maxBubbleY = displayMetrics.heightPixels - sizePx
+
+                                bubbleX = (initialParamX - dx.toInt()).coerceIn(0, maxBubbleX)
+                                bubbleY = (initialParamY - dy.toInt()).coerceIn(0, maxBubbleY)
+
+                                val currentParams = layoutParams as? WindowManager.LayoutParams
+                                if (currentParams != null) {
+                                    currentParams.x = bubbleX
+                                    currentParams.y = bubbleY
+                                    windowManager.updateViewLayout(this, currentParams)
+                                }
+                                return true
+                            }
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            if (isDraggingBubble) {
+                                isDraggingBubble = false
+                                return true
+                            }
+                        }
+                    }
+                } else {
+                    if (ev.action == MotionEvent.ACTION_OUTSIDE) {
+                        // Screen touched outside dock -> trigger smooth collapse
+                        collapseToBubble()
+                        return false
+                    }
                 }
                 return super.dispatchTouchEvent(ev)
             }
@@ -241,8 +307,8 @@ class FloatingOverlayManager(private val context: Context) {
         try {
             windowManager.addView(container, dockParams)
             dockContainer = container
-            isCurrentlyCollapsed = false
-            isCollapsedState.value = false
+            isCurrentlyCollapsed = true
+            isCollapsedState.value = true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add Dock overlay window: ${e.message}")
         }
@@ -276,8 +342,8 @@ class FloatingOverlayManager(private val context: Context) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.END
-            x = (16 * density).toInt()
-            y = (24 * density).toInt()
+            x = bubbleX
+            y = bubbleY
         }
     }
 
@@ -285,7 +351,10 @@ class FloatingOverlayManager(private val context: Context) {
         if (isCurrentlyCollapsed) return
         isCurrentlyCollapsed = true
         isCollapsedState.value = true
-        pipContainer?.visibility = View.GONE
+        pipContainer?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+            pipContainer = null
+        }
 
         collapseRunnable?.let { mainHandler.removeCallbacks(it) }
         val container = dockContainer ?: return
@@ -321,7 +390,7 @@ class FloatingOverlayManager(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update layout to expanded: ${e.message}")
         }
-        pipContainer?.visibility = View.VISIBLE
+        lifecycleOwner?.let { showPipWindow(it) }
         isCurrentlyCollapsed = false
         isCollapsedState.value = false
     }
