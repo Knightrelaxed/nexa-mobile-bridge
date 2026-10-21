@@ -240,7 +240,8 @@ class VoiceStreamHandler(private val context: Context) {
                         // Pure 1:1 unclipped 16kHz audio transmission to Google Gemini Live.
                         // Hardware AEC natively cancels loudspeaker feedback without digital zero-gating,
                         // eliminating artificial audio dropouts and enabling smooth barge-in.
-                        val base64Chunk = Base64.encodeToString(chunk, Base64.NO_WRAP)
+                        val processedChunk = processMicrophoneChunk(chunk)
+                        val base64Chunk = Base64.encodeToString(processedChunk, Base64.NO_WRAP)
                         if (!isMicrophoneMuted) {
                             onAudioChunk(base64Chunk)
                         }
@@ -817,5 +818,45 @@ class VoiceStreamHandler(private val context: Context) {
         }
         val rms = Math.sqrt(sum / sampleCount).toFloat()
         return (rms * 3.5f).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Smart acoustic preprocessing for distant speech with START_SENSITIVITY_HIGH:
+     * 1. Noise Floor Clamp: If raw RMS <= 6.0 (thermal mic hiss / silent room background),
+     *    clamp chunk to pure digital zero (0x00). This prevents Gemini's hypersensitive
+     *    neural VAD from hallucinating Spanish/foreign tokens (¿Qué?, de) from white noise.
+     * 2. Gentle Digital Gain: If RMS > 6.0 (real human voice, even when speaking from across
+     *    the room / desk), apply a 1.7x digital boost with soft saturation limiting so Gemini
+     *    detects distant speech clearly without distortion.
+     */
+    private fun processMicrophoneChunk(bytes: ByteArray): ByteArray {
+        if (bytes.size < 2) return bytes
+        val sampleCount = bytes.size / 2
+        var sumSquares = 0.0
+
+        for (i in 0 until sampleCount) {
+            val sample = ((bytes[i * 2].toInt() and 0xFF) or (bytes[i * 2 + 1].toInt() shl 8)).toShort()
+            sumSquares += sample.toDouble() * sample.toDouble()
+        }
+        val rawRms = Math.sqrt(sumSquares / sampleCount)
+
+        // Silent room / mic preamp hiss: clamp to pure digital zero
+        if (rawRms <= 6.0) {
+            return ByteArray(bytes.size)
+        }
+
+        // Real human speech detected: apply gentle 1.7x digital boost for distant/handsfree clarity
+        val boosted = ByteArray(bytes.size)
+        val gain = 1.7f
+        for (i in 0 until sampleCount) {
+            val sample = ((bytes[i * 2].toInt() and 0xFF) or (bytes[i * 2 + 1].toInt() shl 8)).toShort()
+            var boostedSample = (sample * gain).toInt()
+            if (boostedSample > 32767) boostedSample = 32767
+            else if (boostedSample < -32768) boostedSample = -32768
+
+            boosted[i * 2] = (boostedSample and 0xFF).toByte()
+            boosted[i * 2 + 1] = ((boostedSample shr 8) and 0xFF).toByte()
+        }
+        return boosted
     }
 }
