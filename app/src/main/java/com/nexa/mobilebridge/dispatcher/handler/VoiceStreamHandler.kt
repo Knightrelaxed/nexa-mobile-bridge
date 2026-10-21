@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -16,6 +17,7 @@ import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -105,6 +107,52 @@ class VoiceStreamHandler(private val context: Context) {
     private var userExplicitSpeaker: Boolean = false
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private var communicationDeviceListener: AudioManager.OnCommunicationDeviceChangedListener? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    private fun requestAudioFocus(audioManager: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val playbackAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                val focusReq = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(playbackAttributes)
+                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener { focusChange ->
+                        Log.i(TAG, "AudioFocus change: $focusChange")
+                    }
+                    .build()
+                audioFocusRequest = focusReq
+                audioManager.requestAudioFocus(focusReq)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+            Log.i(TAG, "Audio focus acquired for live communication")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to request audio focus: ${e.message}")
+        }
+    }
+
+    private fun abandonAudioFocus(audioManager: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(null)
+            }
+            Log.i(TAG, "Audio focus abandoned cleanly")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to abandon audio focus: ${e.message}")
+        }
+    }
 
     /**
      * Start full-duplex audio stream with hardware DSP session pairing.
@@ -117,13 +165,15 @@ class VoiceStreamHandler(private val context: Context) {
         if (isStreaming) return
         isStreaming = true
         isMicrophoneMuted = false
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        requestAudioFocus(audioManager)
 
         val minBufSize = AudioRecord.getMinBufferSize(
             INPUT_SAMPLE_RATE,
             INPUT_CHANNEL_CONFIG,
             INPUT_AUDIO_FORMAT
         )
-        val bufferSize = (minBufSize * 2).coerceAtLeast(2048)
+        val bufferSize = (minBufSize * 4).coerceAtLeast(16000)
 
         try {
             audioRecord = AudioRecord(
@@ -175,6 +225,7 @@ class VoiceStreamHandler(private val context: Context) {
 
             // 1. Microphone Loop (Continuous Full-Duplex PCM Stream)
             recordingJob = scope.launch(Dispatchers.IO) {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
                 // 3200 bytes = 1600 samples = 100ms PCM window @ 16kHz 16-bit Mono (Standard Google Gemini Live chunk)
                 val audioBuffer = ByteArray(3200)
                 while (isActive && isStreaming) {
@@ -202,10 +253,20 @@ class VoiceStreamHandler(private val context: Context) {
 
             // 2. Anti-Jitter Playback Loop
             playbackJob = scope.launch(Dispatchers.IO) {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                var wasEmpty = true
                 while (isActive && isStreaming) {
                     try {
                         val chunk = playbackQueue.poll(50, TimeUnit.MILLISECONDS)
                         if (chunk != null && audioTrack != null) {
+                            if (wasEmpty) {
+                                // Jitter buffer: brief pre-buffering on speech burst onset (up to 75ms)
+                                val burstStart = System.currentTimeMillis()
+                                while (playbackQueue.size < 2 && (System.currentTimeMillis() - burstStart < 75)) {
+                                    kotlinx.coroutines.delay(10)
+                                }
+                                wasEmpty = false
+                            }
                             isAssistantSpeaking = true
                             lastAudioReceivedTime = System.currentTimeMillis()
                             currentAudioEnergy = calculatePcmRms(chunk)
@@ -214,8 +275,10 @@ class VoiceStreamHandler(private val context: Context) {
                                 totalFramesWritten += (bytesWritten / 2)
                             }
                         } else {
-                            // When queue drains, verify if hardware DAC has really finished playing buffered frames
-                            if (!isReallyPlaying()) {
+                            wasEmpty = true
+                            // Watchdog: If queue drained and no audio received for 700ms, force reset speaking state
+                            val timeSinceLastAudio = System.currentTimeMillis() - lastAudioReceivedTime
+                            if (!isReallyPlaying() || timeSinceLastAudio > 700) {
                                 isAssistantSpeaking = false
                                 currentAudioEnergy = 0f
                             }
@@ -681,6 +744,8 @@ class VoiceStreamHandler(private val context: Context) {
         isStreaming = false
         isAssistantSpeaking = false
         isMicrophoneMuted = false
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        abandonAudioFocus(audioManager)
         totalFramesWritten = 0L
         recordingJob?.cancel()
         playbackJob?.cancel()

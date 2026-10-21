@@ -25,6 +25,13 @@ import okhttp3.WebSocketListener
 import javax.inject.Inject
 import javax.inject.Singleton
 
+interface LiveCallEventListener {
+    fun onAudioPlay(pcmChunk: String)
+    fun onAudioInterrupted()
+    fun onLiveReady()
+    fun onStatusUpdate(status: String?, text: String?, userTranscript: String?)
+}
+
 @Singleton
 class NexaWebSocketClient @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -32,6 +39,33 @@ class NexaWebSocketClient @Inject constructor(
     private val json: Json,
 ) {
     private val TAG = "NexaWS"
+
+    companion object {
+        fun fastExtractPcmChunk(text: String): String? {
+            val key = "\"pcm_chunk\":"
+            val idx = text.indexOf(key)
+            if (idx == -1) return null
+            val quoteStart = text.indexOf('"', idx + key.length)
+            if (quoteStart == -1) return null
+            val quoteEnd = text.indexOf('"', quoteStart + 1)
+            if (quoteEnd == -1) return null
+            return text.substring(quoteStart + 1, quoteEnd)
+        }
+
+        fun fastExtractField(text: String, fieldName: String): String? {
+            val key = "\"$fieldName\":"
+            val idx = text.indexOf(key)
+            if (idx == -1) return null
+            val quoteStart = text.indexOf('"', idx + key.length)
+            if (quoteStart == -1) return null
+            val quoteEnd = text.indexOf('"', quoteStart + 1)
+            if (quoteEnd == -1) return null
+            return text.substring(quoteStart + 1, quoteEnd)
+        }
+    }
+
+    @Volatile
+    var liveCallListener: LiveCallEventListener? = null
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected(null))
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -126,7 +160,31 @@ class NexaWebSocketClient @Inject constructor(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
 
-                // 1. Fast path for Live Voice Stream Events (Audio Play, Status Updates, Interrupted)
+                // 1. Zero-IPC Direct Path for Live Voice Stream Events
+                val currentListener = liveCallListener
+                if (currentListener != null) {
+                    if (text.contains("CALL_AUDIO_PLAY")) {
+                        val pcm = fastExtractPcmChunk(text)
+                        if (pcm != null) {
+                            currentListener.onAudioPlay(pcm)
+                        }
+                        return
+                    } else if (text.contains("CALL_AUDIO_INTERRUPTED")) {
+                        currentListener.onAudioInterrupted()
+                        return
+                    } else if (text.contains("CALL_LIVE_READY")) {
+                        currentListener.onLiveReady()
+                        return
+                    } else if (text.contains("CALL_STATUS_UPDATE")) {
+                        val status = fastExtractField(text, "status")
+                        val txt = fastExtractField(text, "text")
+                        val userTr = fastExtractField(text, "user_transcript")
+                        currentListener.onStatusUpdate(status, txt, userTr)
+                        return
+                    }
+                }
+
+                // Fallback broadcast path if no direct listener registered
                 if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY") || text.contains("CALL_STATUS_UPDATE")) {
                     val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
                         putExtra("raw_json", text)

@@ -1,5 +1,6 @@
 package com.nexa.mobilebridge.service
 
+import android.Manifest
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -8,6 +9,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -148,12 +150,22 @@ class ScreenCaptureService : Service() {
         }
 
         // 1. Mandatory Android 14+ Foreground Service start BEFORE calling getMediaProjection()
+        // Coupled with FOREGROUND_SERVICE_TYPE_MICROPHONE so AudioRecord is not silenced when FakeCallActivity moves to back.
         val notification = buildOngoingNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val hasMicPermission = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMicPermission) {
+                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+
             startForeground(
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                serviceType
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)

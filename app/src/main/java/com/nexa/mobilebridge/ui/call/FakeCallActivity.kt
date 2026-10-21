@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.nexa.mobilebridge.NexaBridgeService
+import com.nexa.mobilebridge.core.network.LiveCallEventListener
 import com.nexa.mobilebridge.dispatcher.handler.AudioPlayerHandler
 import com.nexa.mobilebridge.dispatcher.handler.TtsHandler
 import com.nexa.mobilebridge.dispatcher.handler.VoiceRecorderHandler
@@ -210,6 +211,80 @@ class FakeCallActivity : ComponentActivity() {
     // Track how many times user has rejected (sent to server for importance evaluation)
     private var rejectionCount = 0
 
+    // Zero-IPC Direct Live Call Event Listener (Direct background path to avoid Main Thread Binder stalls)
+    private val liveCallEventListener = object : LiveCallEventListener {
+        override fun onAudioPlay(pcmChunk: String) {
+            voiceStreamHandler.enqueueAudioChunk(pcmChunk)
+            if (hudState.value != LiveVoiceHudState.SPEAKING && hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                runOnUiThread {
+                    if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                        hudState.value = LiveVoiceHudState.SPEAKING
+                    }
+                    pendingStateEntryTime = 0L
+                }
+            }
+        }
+
+        override fun onAudioInterrupted() {
+            voiceStreamHandler.flushOutputBuffer()
+            runOnUiThread {
+                hudState.value = LiveVoiceHudState.LISTENING
+                pendingStateEntryTime = 0L
+            }
+        }
+
+        override fun onLiveReady() {
+            runOnUiThread {
+                hudState.value = LiveVoiceHudState.LISTENING
+                pendingStateEntryTime = 0L
+            }
+        }
+
+        override fun onStatusUpdate(status: String?, text: String?, userTranscriptVal: String?) {
+            runOnUiThread {
+                if (status != null) {
+                    when (status) {
+                        "DISCONNECTING" -> {
+                            hudState.value = LiveVoiceHudState.DISCONNECTING
+                            pendingStateEntryTime = 0L
+                        }
+                        "THINKING" -> {
+                            hudState.value = LiveVoiceHudState.LISTENING
+                            pendingStateEntryTime = 0L
+                        }
+                        "PROCESSING" -> {
+                            hudState.value = LiveVoiceHudState.PROCESSING
+                            pendingStateEntryTime = System.currentTimeMillis()
+                        }
+                        "SPEAKING" -> {
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                                hudState.value = LiveVoiceHudState.SPEAKING
+                            }
+                            pendingStateEntryTime = 0L
+                        }
+                        "LISTENING" -> {
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                                hudState.value = LiveVoiceHudState.LISTENING
+                            }
+                            pendingStateEntryTime = 0L
+                        }
+                        "RECONNECTING" -> {
+                            hudState.value = LiveVoiceHudState.RECONNECTING
+                            pendingStateEntryTime = 0L
+                        }
+                    }
+                }
+                if (!text.isNullOrBlank()) {
+                    assistantMessage.value = text
+                    ScreenCaptureService.assistantSubtitle.value = text
+                }
+                if (!userTranscriptVal.isNullOrBlank()) {
+                    userTranscript.value = userTranscriptVal
+                }
+            }
+        }
+    }
+
     // BroadcastReceiver for server audio events and PiP RemoteAction controls
     private val callReplyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -241,6 +316,8 @@ class FakeCallActivity : ComponentActivity() {
                     callState.value = CallState.FINISHED
                 }
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
+                // If direct listener is already attached, skip broadcast processing to prevent double handling & UI lag
+                if (NexaBridgeService.activeWebSocketClient?.liveCallListener != null) return
                 val rawJson = intent.getStringExtra("raw_json") ?: return
                 if (rawJson.contains("CALL_AUDIO_PLAY")) {
                     if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
@@ -432,6 +509,7 @@ class FakeCallActivity : ComponentActivity() {
         audioPlayerHandler = AudioPlayerHandler(applicationContext)
         voiceRecorderHandler = VoiceRecorderHandler(applicationContext)
         voiceStreamHandler = VoiceStreamHandler(applicationContext)
+        NexaBridgeService.activeWebSocketClient?.liveCallListener = liveCallEventListener
         voiceStreamHandler.onAudioRouteChanged = { route ->
             lifecycleScope.launch(Dispatchers.Main) {
                 audioRoute.value = route
@@ -1139,6 +1217,9 @@ class FakeCallActivity : ComponentActivity() {
         ScreenCaptureService.onReturnToCallRequested = null
         try { cameraStreamHandler.stopCamera() } catch (e: Exception) {}
         try { voiceStreamHandler.stopStreaming() } catch (e: Exception) {}
+        if (NexaBridgeService.activeWebSocketClient?.liveCallListener === liveCallEventListener) {
+            NexaBridgeService.activeWebSocketClient?.liveCallListener = null
+        }
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
         audioPlayerHandler.stopAll()
     }

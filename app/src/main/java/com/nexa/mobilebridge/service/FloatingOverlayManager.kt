@@ -265,16 +265,17 @@ class FloatingOverlayManager(private val context: Context) {
 
     private fun createCollapsedParams(overlayType: Int): WindowManager.LayoutParams {
         val density = context.resources.displayMetrics.density
+        val sizePx = (72 * density).toInt()
         return WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            sizePx,
+            sizePx,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.END
-            x = (20 * density).toInt()
-            y = (28 * density).toInt()
+            x = (16 * density).toInt()
+            y = (24 * density).toInt()
         }
     }
 
@@ -300,7 +301,7 @@ class FloatingOverlayManager(private val context: Context) {
             }
         }
         collapseRunnable = runnable
-        mainHandler.postDelayed(runnable, 320L)
+        mainHandler.postDelayed(runnable, 220L)
     }
 
     fun expandToDock() {
@@ -375,8 +376,6 @@ fun FloatingDockOverlayScreen(
 ) {
     val subtitleText by ScreenCaptureService.assistantSubtitle.collectAsState()
     val isMicMuted by ScreenCaptureService.isMicMuted.collectAsState()
-    val audioEnergy by ScreenCaptureService.audioEnergy.collectAsState()
-    val isSpeaking by ScreenCaptureService.isAssistantSpeaking.collectAsState()
 
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
@@ -389,9 +388,13 @@ fun FloatingDockOverlayScreen(
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .wrapContentHeight(),
+        modifier = if (isCollapsed) {
+            Modifier.size(72.dp)
+        } else {
+            Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+        },
         contentAlignment = Alignment.BottomEnd
     ) {
         // ── State 1: Expanded Dock (Image 1) ──
@@ -403,8 +406,8 @@ fun FloatingDockOverlayScreen(
             ) + fadeIn(tween(250)),
             exit = slideOutHorizontally(
                 targetOffsetX = { it / 2 },
-                animationSpec = tween(280, easing = FastOutSlowInEasing)
-            ) + fadeOut(tween(220))
+                animationSpec = tween(200, easing = FastOutSlowInEasing)
+            ) + fadeOut(tween(180))
         ) {
             Column(
                 modifier = Modifier
@@ -419,8 +422,6 @@ fun FloatingDockOverlayScreen(
                 // 5-Button Control Dock
                 Floating5ButtonDock(
                     isMicMuted = isMicMuted,
-                    audioEnergy = audioEnergy,
-                    isSpeaking = isSpeaking,
                     onReturnToCall = {
                         lastInteractionTime = System.currentTimeMillis()
                         onReturnToCall()
@@ -459,8 +460,6 @@ fun FloatingDockOverlayScreen(
             ) + fadeOut(tween(180))
         ) {
             FloatingGlowingBubble(
-                isSpeaking = isSpeaking,
-                audioEnergy = audioEnergy,
                 onClick = onExpandRequested
             )
         }
@@ -501,8 +500,6 @@ fun FloatingSubtitleCard(text: String) {
 @Composable
 fun Floating5ButtonDock(
     isMicMuted: Boolean,
-    audioEnergy: Float,
-    isSpeaking: Boolean,
     onReturnToCall: () -> Unit,
     onStopScreenShare: () -> Unit,
     onInterrupt: () -> Unit,
@@ -536,8 +533,6 @@ fun Floating5ButtonDock(
 
         // 3. Central Gemini Live Voice Visualizer Capsule
         FloatingLiveVoiceCapsule(
-            audioEnergy = audioEnergy,
-            isSpeaking = isSpeaking,
             onInterrupt = onInterrupt
         )
 
@@ -600,10 +595,10 @@ fun FloatingCircleButton(
  */
 @Composable
 fun FloatingLiveVoiceCapsule(
-    audioEnergy: Float,
-    isSpeaking: Boolean,
     onInterrupt: () -> Unit
 ) {
+    val audioEnergy by ScreenCaptureService.audioEnergy.collectAsState()
+    val isSpeaking by ScreenCaptureService.isAssistantSpeaking.collectAsState()
     val infiniteTransition = rememberInfiniteTransition(label = "VoiceWaveInfinite")
     val phase by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -671,20 +666,26 @@ fun FloatingLiveVoiceCapsule(
  */
 @Composable
 fun FloatingGlowingBubble(
-    isSpeaking: Boolean,
-    audioEnergy: Float,
     onClick: () -> Unit
 ) {
+    val isSpeaking by ScreenCaptureService.isAssistantSpeaking.collectAsState()
+    val audioEnergy by ScreenCaptureService.audioEnergy.collectAsState()
+    val shouldPulse = isSpeaking || audioEnergy > 0.05f
+
     val infiniteTransition = rememberInfiniteTransition(label = "OrbPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isSpeaking) 1.08f else 1.03f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
+    val pulseScale by if (shouldPulse) {
+        infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = if (isSpeaking) 1.08f else 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+    } else {
+        remember { mutableStateOf(1f) }
+    }
 
     Box(
         modifier = Modifier

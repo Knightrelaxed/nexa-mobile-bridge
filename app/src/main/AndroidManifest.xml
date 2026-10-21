@@ -145,7 +145,7 @@
             android:name=".service.ScreenCaptureService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|microphone" />
 
         <!-- Geofence Receiver -->
         <receiver
