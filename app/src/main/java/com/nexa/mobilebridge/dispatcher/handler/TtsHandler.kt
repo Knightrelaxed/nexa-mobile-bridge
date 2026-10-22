@@ -60,8 +60,8 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
             return CommandResult.failure(command.command_id, "Missing 'text' parameter")
         }
 
-        // Sanitize phonetic pronunciation: replace "N.E.X.A" with "NEXA" so Android TTS speaks "Nexa" (not "en-e-ex-a")
-        val text = rawText.replace(Regex("(?i)\\bN\\.?E\\.?X\\.?A\\.?\\b|N\\.E\\.X\\.A"), "NEXA")
+        // Sanitize phonetic pronunciation: replace "N.E.X.A" or "NEXA" with Title Case "Nexa" so Android TTS speaks "Nexa" as a natural word (not "en-e-ex-a")
+        val text = rawText.replace(Regex("(?i)\\bN\\.?E\\.?X\\.?A\\.?\\b|N\\.E\\.X\\.A"), "Nexa")
 
         // Unmute and set volume to ~70% so the AI can be heard
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
