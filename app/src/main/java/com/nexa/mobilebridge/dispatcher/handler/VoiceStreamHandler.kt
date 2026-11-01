@@ -176,6 +176,23 @@ class VoiceStreamHandler(private val context: Context) {
         val bufferSize = (minBufSize * 4).coerceAtLeast(16000)
 
         try {
+            // Reset AudioManager mode to NORMAL before opening AudioRecord.
+            // This is required to prevent inheriting the close-talk earpiece DSP profile
+            // from a previous Desktop or background Gemini Live session that may have set
+            // MODE_IN_COMMUNICATION on the same AudioManager instance. Without this reset,
+            // AudioRecord(VOICE_COMMUNICATION) would open the earpiece microphone in close-talk
+            // mode, attenuating signals from distances greater than ~5cm by up to -40dB,
+            // causing the noise floor clamp to zero-pad all incoming chunks (RMS flatline = 0).
+            // The 80ms delay allows the hardware DSP to fully exit close-talk state before
+            // AudioRecord initializes and locks its mic routing.
+            try {
+                audioManager.mode = AudioManager.MODE_NORMAL
+                Thread.sleep(80)
+                Log.i(TAG, "AudioManager mode reset to NORMAL — DSP close-talk profile cleared")
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioManager mode reset failed (non-fatal): ${e.message}")
+            }
+
             audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 INPUT_SAMPLE_RATE,
@@ -822,12 +839,14 @@ class VoiceStreamHandler(private val context: Context) {
 
     /**
      * Smart acoustic preprocessing for distant speech with START_SENSITIVITY_HIGH:
-     * 1. Noise Floor Clamp: If raw RMS <= 6.0 (thermal mic hiss / silent room background),
+     * 1. Noise Floor Clamp: If raw RMS <= 2.0 (pure hardware thermal noise floor, 1-2 ADC bits),
      *    clamp chunk to pure digital zero (0x00). This prevents Gemini's hypersensitive
-     *    neural VAD from hallucinating Spanish/foreign tokens (¿Qué?, de) from white noise.
-     * 2. Gentle Digital Gain: If RMS > 6.0 (real human voice, even when speaking from across
-     *    the room / desk), apply a 1.7x digital boost with soft saturation limiting so Gemini
-     *    detects distant speech clearly without distortion.
+     *    neural VAD from hallucinating tokens from inaudible ADC quantization noise.
+     *    Threshold set conservatively at 2.0 to preserve weak consonant onsets ('s', 'h', 'f', 'k')
+     *    and distant speech (RMS 3-6) that were previously destroyed by the old threshold of 6.0.
+     * 2. Gentle Digital Gain: If RMS > 2.0 (any real acoustic signal above hardware noise floor),
+     *    apply a 1.7x digital boost with soft saturation limiting so Gemini detects distant
+     *    and quiet speech clearly without distortion.
      */
     private fun processMicrophoneChunk(bytes: ByteArray): ByteArray {
         if (bytes.size < 2) return bytes
@@ -840,8 +859,9 @@ class VoiceStreamHandler(private val context: Context) {
         }
         val rawRms = Math.sqrt(sumSquares / sampleCount)
 
-        // Silent room / mic preamp hiss: clamp to pure digital zero
-        if (rawRms <= 6.0) {
+        // Pure hardware thermal noise floor (1-2 ADC bits): clamp to digital zero.
+        // Threshold 2.0 is conservative — real acoustic signals (even faint consonants) are >= 3.
+        if (rawRms <= 2.0) {
             return ByteArray(bytes.size)
         }
 
