@@ -66,12 +66,12 @@ object ChatReplyMetadata {
     }
 
     fun senderLabel(role: String): String {
-        return if (role == ChatRole.ASSISTANT) "N.E.X.A" else "Anda"
+        return if (role == ChatRole.ASSISTANT) "N.E.X.A" else "You"
     }
 
     fun sanitizePreview(raw: String, maxChars: Int = 140): String {
         val cleaned = raw
-            .replace(Regex("```[\\s\\S]*?```"), "[kode]")
+            .replace(Regex("```[\\s\\S]*?```"), "[code]")
             .replace(Regex("`([^`]+)`"), "$1")
             .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
             .replace(Regex("\\s+"), " ")

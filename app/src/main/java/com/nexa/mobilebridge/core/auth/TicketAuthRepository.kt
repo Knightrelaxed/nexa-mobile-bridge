@@ -75,14 +75,14 @@ class TicketAuthRepository @Inject constructor(
         enrollCode: String
     ): EnrollmentOutcome {
         if (!webSocketClient.isConnected()) {
-            return EnrollmentOutcome.Failure("OFFLINE", "WebSocket belum terhubung ke server N.E.X.A.")
+            return EnrollmentOutcome.Failure("OFFLINE", "Not connected to N.E.X.A server.")
         }
 
         val keySnap = keystoreManager.getOrCreateKeySnapshot()
         if (keySnap.state != KeystoreKeyState.READY || keySnap.spkiDerB64.isBlank()) {
             return EnrollmentOutcome.Failure(
                 keySnap.state.name,
-                keySnap.errorMessage ?: "Kunci Android Keystore belum siap."
+                keySnap.errorMessage ?: "Hardware security key is not ready."
             )
         }
 
@@ -96,7 +96,7 @@ class TicketAuthRepository @Inject constructor(
         }.toString()
 
         val responseRaw = awaitAuthResponse(reqId, payload)
-            ?: return EnrollmentOutcome.Failure("TIMEOUT", "Server tidak merespons permintaan pendaftaran dalam 10 detik.")
+            ?: return EnrollmentOutcome.Failure("TIMEOUT", "Server did not respond to pairing request within 10 seconds.")
 
         val resp = JSONObject(responseRaw)
         return when (resp.optString("type")) {
@@ -112,7 +112,7 @@ class TicketAuthRepository @Inject constructor(
             }
             else -> EnrollmentOutcome.Failure(
                 code = resp.optString("code", "ENROLL_ERR"),
-                message = resp.optString("message", "Pendaftaran perangkat ditolak oleh server.")
+                message = resp.optString("message", "Device pairing was rejected by server.")
             )
         }
     }
@@ -121,11 +121,11 @@ class TicketAuthRepository @Inject constructor(
         activity: FragmentActivity,
         scope: String,
         resumeSid: String = "",
-        promptTitle: String = "Verifikasi Sidik Jari N.E.X.A",
-        promptSubtitle: String = "Otorisasi akses $scope"
+        promptTitle: String = "N.E.X.A Verification",
+        promptSubtitle: String = "Verify fingerprint to authorize $scope"
     ): TicketOutcome {
         if (!webSocketClient.isConnected()) {
-            return TicketOutcome.Failure("OFFLINE", "WebSocket inti belum terhubung.")
+            return TicketOutcome.Failure("OFFLINE", "Core connection is offline.")
         }
         val config = preferencesDataStore.getConfig()
         val deviceId = config.deviceName.trim().ifBlank { "samsung-a33-tuan" }
@@ -141,17 +141,17 @@ class TicketAuthRepository @Inject constructor(
         }.toString()
 
         val challengeRaw = awaitAuthResponse(reqId, reqPayload)
-            ?: return TicketOutcome.Failure("TIMEOUT", "Timeout menunggu tantangan nonce dari server.")
+            ?: return TicketOutcome.Failure("TIMEOUT", "Timed out waiting for server auth challenge.")
 
         val challengeObj = try {
             JSONObject(challengeRaw)
         } catch (_: Exception) {
-            return TicketOutcome.Failure("MALFORMED_CHALLENGE", "Format tantangan nonce dari server tidak valid.")
+            return TicketOutcome.Failure("MALFORMED_CHALLENGE", "Invalid auth challenge received from server.")
         }
         if (challengeObj.optString("type") != "CHALLENGE") {
             return TicketOutcome.Failure(
                 code = challengeObj.optString("code", "AUTH_ERR"),
-                message = challengeObj.optString("message", "Server menolak permintaan tiket.")
+                message = challengeObj.optString("message", "Server rejected session ticket request.")
             )
         }
 
@@ -160,13 +160,13 @@ class TicketAuthRepository @Inject constructor(
         val assignedScope = challengeObj.optString("scope", "").trim()
 
         if (nonce.isBlank()) {
-            return TicketOutcome.Failure("INVALID_NONCE", "Server mengirim tantangan nonce kosong.")
+            return TicketOutcome.Failure("INVALID_NONCE", "Server returned an empty auth challenge.")
         }
         // Reject scope escalation mismatch so biometric prompt always matches the signed scope
         if (assignedScope != scope) {
             return TicketOutcome.Failure(
                 code = "SCOPE_MISMATCH",
-                message = "Scope tantangan server ($assignedScope) tidak cocok dengan permintaan ($scope)."
+                message = "Server challenge scope ($assignedScope) did not match request ($scope)."
             )
         }
 
@@ -176,10 +176,10 @@ class TicketAuthRepository @Inject constructor(
         } catch (_: KeyPermanentlyInvalidatedException) {
             preferencesDataStore.saveEnrollmentState("INVALIDATED", config.enrolledAtEpochSec, config.enrolledFingerprint)
             return TicketOutcome.KeyInvalidated(
-                "Kunci perangkat gugur karena perubahan sidik jari di Android. Jalankan nexa-enroll re-pair."
+                "Device key was invalidated after a fingerprint change. Open Settings to re-pair this device."
             )
         } catch (e: Exception) {
-            return TicketOutcome.Failure("KEYSTORE_ERR", "Gagal menyiapkan kunci: ${e.message}")
+            return TicketOutcome.Failure("KEYSTORE_ERR", "Failed to prepare hardware key: ${e.message}")
         }
 
         val canonicalMsg = DeviceKeystoreManager.buildCanonicalTicketMessage(nonce, assignedScope, assignedSid)
@@ -206,7 +206,7 @@ class TicketAuthRepository @Inject constructor(
         }
 
         val sigBytes = derSignature.getOrElse { err ->
-            return TicketOutcome.Failure("BIOMETRIC_ABORTED", err.message ?: "Verifikasi sidik jari dibatalkan.")
+            return TicketOutcome.Failure("BIOMETRIC_ABORTED", err.message ?: "Fingerprint verification cancelled.")
         }
 
         // Step 3: Send signed challenge response and receive Ed25519 ticket
@@ -220,17 +220,17 @@ class TicketAuthRepository @Inject constructor(
         }.toString()
 
         val ticketRaw = awaitAuthResponse(respReqId, respPayload)
-            ?: return TicketOutcome.Failure("TIMEOUT", "Timeout menunggu penerbitan tiket dari server.")
+            ?: return TicketOutcome.Failure("TIMEOUT", "Timed out waiting for server session ticket.")
 
         val ticketObj = try {
             JSONObject(ticketRaw)
         } catch (_: Exception) {
-            return TicketOutcome.Failure("MALFORMED_TICKET", "Format respons tiket dari server tidak valid.")
+            return TicketOutcome.Failure("MALFORMED_TICKET", "Invalid session ticket response from server.")
         }
         return if (ticketObj.optString("type") == "TICKET") {
             val issuedToken = ticketObj.optString("ticket").trim()
             if (issuedToken.isBlank()) {
-                return TicketOutcome.Failure("EMPTY_TICKET", "Server mengembalikan tiket kosong.")
+                return TicketOutcome.Failure("EMPTY_TICKET", "Server returned an empty session ticket.")
             }
             TicketOutcome.Success(
                 IssuedTicket(
@@ -243,7 +243,7 @@ class TicketAuthRepository @Inject constructor(
         } else {
             TicketOutcome.Failure(
                 code = ticketObj.optString("code", "AUTH_ERR"),
-                message = ticketObj.optString("message", "Verifikasi tantangan ditolak server.")
+                message = ticketObj.optString("message", "Server rejected challenge verification.")
             )
         }
     }

@@ -99,9 +99,9 @@ class NexaBridgeService : Service() {
                 upper.contains("BANK")
 
             val summary = when {
-                isSensitive -> "[Disamarkan]"
+                isSensitive -> "[Redacted]"
                 result.status == ResultStatus.SUCCESS -> summarizeResultMessage(result.message)
-                else -> "Gagal"
+                else -> "Failed"
             }
 
             val record = CommandHistoryRecord(
@@ -118,7 +118,7 @@ class NexaBridgeService : Service() {
 
         private fun summarizeResultMessage(message: String): String {
             val clean = message.trim()
-            if (clean.isEmpty()) return "Selesai"
+            if (clean.isEmpty()) return "Done"
             return if (clean.length <= 18) clean else clean.take(15) + "..."
         }
 
@@ -443,23 +443,23 @@ class NexaBridgeService : Service() {
     // Alert Helpers
     private fun buildAlertNotifContent(event: PhaseFailureEvent): Pair<String, String> {
         val errorName = when (event.errorType) {
-            ReconnectErrorType.NO_INTERNET -> "Tidak Ada Internet / DNS Gagal"
-            ReconnectErrorType.SERVER_DOWN -> "Server Offline / Koneksi Ditolak"
-            ReconnectErrorType.TIMEOUT -> "Server Timeout (Tidak Merespons)"
-            ReconnectErrorType.SSL_ERROR -> "Kesalahan Sertifikat SSL"
+            ReconnectErrorType.NO_INTERNET -> "No internet connection or DNS lookup failed"
+            ReconnectErrorType.SERVER_DOWN -> "Server unreachable or connection refused"
+            ReconnectErrorType.TIMEOUT -> "Server timed out"
+            ReconnectErrorType.SSL_ERROR -> "SSL certificate error"
             ReconnectErrorType.UNKNOWN -> "Error: ${event.techMessage}"
         }
 
         val title = if (event.isFinal) {
-            "N.E.X.A Bridge - Koneksi Dihentikan Total"
+            "N.E.X.A connection stopped"
         } else {
-            "N.E.X.A Bridge - Koneksi Gagal (Fase ${event.phase})"
+            "N.E.X.A connection interrupted"
         }
 
         val body = if (event.isFinal) {
-            "$errorName\n${event.techMessage}\n\nSemua percobaan habis. Buka app untuk coba kembali."
+            "$errorName\n${event.techMessage}\n\nAll retry attempts ended. Open N.E.X.A to reconnect."
         } else {
-            "$errorName\n${event.techMessage}\n\nPercobaan berikutnya dalam ${event.nextRetryIn}."
+            "$errorName\n${event.techMessage}\n\nNext retry in ${event.nextRetryIn}."
         }
 
         return Pair(title, body)
@@ -660,13 +660,13 @@ class NexaBridgeService : Service() {
     private fun createNotificationChannels() {
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        NotificationChannel(CHANNEL_SERVICE_ID, "N.E.X.A Bridge", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Menjaga koneksi ke N.E.X.A Cloud Server"
+        NotificationChannel(CHANNEL_SERVICE_ID, "Background Service", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Keeps N.E.X.A connected in the background"
             notifManager.createNotificationChannel(this)
         }
 
-        NotificationChannel(CHANNEL_ALERT_ID, "N.E.X.A Bridge - Alert Koneksi", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Notifikasi kegagalan koneksi ke server N.E.X.A"
+        NotificationChannel(CHANNEL_ALERT_ID, "Connection Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Alerts when connection to N.E.X.A server fails"
             enableLights(true)
             enableVibration(true)
             notifManager.createNotificationChannel(this)
@@ -682,8 +682,8 @@ class NexaBridgeService : Service() {
 
     private fun buildServiceNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_SERVICE_ID)
-            .setContentTitle("N.E.X.A Mobile Bridge")
-            .setContentText("Control Center Standby (Power-Save)")
+            .setContentTitle("N.E.X.A")
+            .setContentText("Active in background · Power-save")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

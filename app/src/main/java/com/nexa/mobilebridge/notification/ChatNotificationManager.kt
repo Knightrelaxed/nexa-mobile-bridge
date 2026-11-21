@@ -128,18 +128,18 @@ class ChatNotificationManager @Inject constructor(
     fun showStepUpRequired(actionLabel: String, formattedAmount: String, recipient: String) {
         if (tracker.isChatVisible()) return
         try {
-            val body = "$actionLabel $formattedAmount ke $recipient. Verifikasi sidik jari dalam 30 detik."
+            val body = "$actionLabel $formattedAmount to $recipient. Verify with fingerprint within 30s."
             val publicVersion = NotificationCompat.Builder(context, CHANNEL_URGENT)
                 .setSmallIcon(R.drawable.ic_notif_nexa)
                 .setContentTitle("N.E.X.A")
-                .setContentText("Otorisasi diperlukan")
+                .setContentText("Approval required")
                 .build()
 
             val open = openChatPendingIntent(requestCode = NOTIF_ID_STEPUP)
             val notification = NotificationCompat.Builder(context, CHANNEL_URGENT)
                 .setSmallIcon(R.drawable.ic_notif_nexa)
                 .setColor(ACCENT_COLOR)
-                .setContentTitle("Otorisasi Sidik Jari Diperlukan")
+                .setContentTitle("Fingerprint approval required")
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -147,7 +147,7 @@ class ChatNotificationManager @Inject constructor(
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .setPublicVersion(publicVersion)
                 .setContentIntent(open)
-                .addAction(R.drawable.ic_notif_nexa, "Buka & Verifikasi", open)
+                .addAction(R.drawable.ic_notif_nexa, "Verify", open)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false)
                 .setTimeoutAfter(STEPUP_TTL_MS)
@@ -186,7 +186,7 @@ class ChatNotificationManager @Inject constructor(
         tracker.clearUnread()
     }
 
-    // ── Internals ───────────────────────────────────────────────────────────
+    // Internals
 
     private fun postConversation(channel: String, unread: Int, silent: Boolean, alertOnce: Boolean) {
         try {
@@ -196,17 +196,17 @@ class ChatNotificationManager @Inject constructor(
                 style.addMessage(entry.text, entry.timestamp, if (entry.fromUser) null else nexaPerson)
             }
 
-            val countLabel = if (unread <= 1) "1 pesan baru" else "$unread pesan baru"
+            val countLabel = if (unread <= 1) "1 new message" else "$unread new messages"
             val publicVersion = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_notif_nexa)
                 .setContentTitle("N.E.X.A")
                 .setContentText(countLabel)
                 .build()
 
-            val remoteInput = RemoteInput.Builder(KEY_REPLY_TEXT).setLabel("Balas ke N.E.X.A").build()
+            val remoteInput = RemoteInput.Builder(KEY_REPLY_TEXT).setLabel("Write a reply...").build()
             val replyAction = NotificationCompat.Action.Builder(
                 R.drawable.ic_notif_nexa,
-                "Balas",
+                "Reply",
                 actionPendingIntent(ACTION_REPLY, mutable = true)
             )
                 .addRemoteInput(remoteInput)
@@ -217,7 +217,7 @@ class ChatNotificationManager @Inject constructor(
 
             val markReadAction = NotificationCompat.Action.Builder(
                 R.drawable.ic_notif_nexa,
-                "Tandai Dibaca",
+                "Mark as read",
                 actionPendingIntent(ACTION_MARK_READ, mutable = false)
             )
                 .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
@@ -284,19 +284,19 @@ class ChatNotificationManager @Inject constructor(
         try {
             notificationManager.deleteNotificationChannel(LEGACY_PROACTIVE_CHANNEL)
 
-            NotificationChannel(CHANNEL_URGENT, "N.E.X.A - Mendesak", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Otorisasi sidik jari keuangan dan peringatan prioritas tinggi"
+            NotificationChannel(CHANNEL_URGENT, "Urgent", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Fingerprint approvals and high-priority alerts"
                 enableVibration(true)
                 enableLights(true)
                 notificationManager.createNotificationChannel(this)
             }
-            NotificationChannel(CHANNEL_CHAT, "N.E.X.A - Pesan Chat", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Balasan N.E.X.A, briefing, dan pengingat proaktif"
+            NotificationChannel(CHANNEL_CHAT, "Chat Messages", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Replies, briefings, and proactive reminders"
                 enableVibration(true)
                 notificationManager.createNotificationChannel(this)
             }
-            NotificationChannel(CHANNEL_SILENT, "N.E.X.A - Ringkasan Senyap", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Ringkasan berkala tanpa suara atau getar"
+            NotificationChannel(CHANNEL_SILENT, "Silent Digest", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Periodic updates without sound or vibration"
                 notificationManager.createNotificationChannel(this)
             }
         } catch (e: Exception) {
@@ -312,7 +312,7 @@ class ChatNotificationManager @Inject constructor(
             }
             val shortcut = ShortcutInfoCompat.Builder(context, SHORTCUT_ID)
                 .setShortLabel("N.E.X.A")
-                .setLongLabel("Chat N.E.X.A")
+                .setLongLabel("Chat with N.E.X.A")
                 .setLongLived(true)
                 .setPerson(nexaPerson)
                 .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))

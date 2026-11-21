@@ -41,9 +41,9 @@ data class SettingsUiState(
     val heartbeatScreenOnSec: Int = NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_ON_SEC,
     val heartbeatScreenOffSec: Int = NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_OFF_SEC,
     val chatNotificationSoundUri: String = "",
-    val chatNotificationSoundLabel: String = "Default Sistem",
-    val killSwitchLabel: String = "Nonaktif",
-    val killSwitchSubtitle: String = "Nonaktif secara default di server",
+    val chatNotificationSoundLabel: String = "System default",
+    val killSwitchLabel: String = "Disabled",
+    val killSwitchSubtitle: String = "Disabled by default on server",
     val isKillSwitchActive: Boolean = false,
     val isSaved: Boolean = false,
     // Hardware Identity & Enrollment (Tahap 1.5 / Audit A7)
@@ -99,18 +99,18 @@ class SettingsViewModel @Inject constructor(
                     TerminalSessionStatus.ACTIVE,
                     TerminalSessionStatus.PAUSED_SCREEN_OFF,
                     TerminalSessionStatus.DETACHED_RECONNECTING -> Triple(
-                        "Aktif",
-                        "Sesi terminal sedang aktif di server (/io/term)",
+                        "Active",
+                        "Remote terminal session is currently active",
                         true
                     )
                     TerminalSessionStatus.DISABLED_BY_SERVER -> Triple(
-                        "Nonaktif",
-                        "Dinonaktifkan oleh kill switch server",
+                        "Disabled",
+                        "Disabled by server kill switch",
                         false
                     )
                     else -> Triple(
-                        "Nonaktif (server)",
-                        "Verifikasi saat membuka tab Shell",
+                        "Disabled on server",
+                        "Verified when opening the Shell tab",
                         false
                     )
                 }
@@ -240,7 +240,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun onChatNotificationSoundSelected(uri: String, label: String) {
-        val safeLabel = label.ifBlank { "Default Sistem" }
+        val safeLabel = label.ifBlank { "System default" }
         _uiState.update {
             it.copy(
                 chatNotificationSoundUri = uri,
@@ -279,7 +279,7 @@ class SettingsViewModel @Inject constructor(
             it.copy(
                 isDomainUnlocked = true,
                 isServerEditMode = true,
-                statusNotice = "Mode ubah konfigurasi server dibuka."
+                statusNotice = "Server settings unlocked for editing."
             )
         }
     }
@@ -334,7 +334,7 @@ class SettingsViewModel @Inject constructor(
                     isDomainUnlocked = true,
                     isServerEditMode = true,
                     statusNotice = if (newSnap.state == KeystoreKeyState.READY) {
-                        "Kunci Keystore P-256 baru dibuat. Masukkan kode nexa-enroll re-pair dari server."
+                        "New hardware key created. Enter a pairing code from your server to re-pair."
                     } else {
                         newSnap.errorMessage
                     }
@@ -346,7 +346,7 @@ class SettingsViewModel @Inject constructor(
     fun submitEnrollmentCode(code: String) {
         val clean = code.trim()
         if (clean.replace("-", "").length < 8) {
-            _uiState.update { it.copy(enrollError = "Masukkan kode enrollment 8 karakter (contoh: ABCD-2345).") }
+            _uiState.update { it.copy(enrollError = "Enter an 8-character pairing code (e.g. ABCD-2345).") }
             return
         }
         viewModelScope.launch {
@@ -362,7 +362,7 @@ class SettingsViewModel @Inject constructor(
                             isDomainUnlocked = false,
                             isServerEditMode = false,
                             lastEnrollSuccessTick = it.lastEnrollSuccessTick + 1,
-                            statusNotice = "Perangkat terdaftar! Cocokkan SHA-256 32 oktet dengan CLI server."
+                            statusNotice = "Device paired. Confirm the SHA-256 fingerprint matches your server CLI."
                         )
                     }
                 }
@@ -370,7 +370,7 @@ class SettingsViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             isEnrolling = false,
-                            enrollError = "Gagal daftar (${res.code}): ${res.message}"
+                            enrollError = "Pairing failed (${res.code}): ${res.message}"
                         )
                     }
                 }
@@ -396,7 +396,7 @@ class SettingsViewModel @Inject constructor(
                     state.hmacSecret != stored.hmacSecret)
             if (hasUnverifiedCredentialEdits) {
                 _uiState.update {
-                    it.copy(statusNotice = "Simpan perubahan dengan sidik jari terlebih dahulu sebelum menguji koneksi baru.")
+                    it.copy(statusNotice = "Save your changes with fingerprint first before testing.")
                 }
                 return@launch
             }
@@ -404,7 +404,7 @@ class SettingsViewModel @Inject constructor(
             if (targetUrl.isNotBlank()) {
                 webSocketClient.setHmacSecret(stored.hmacSecret)
                 webSocketClient.forceReconnect(targetUrl, stored.authToken)
-                _uiState.update { it.copy(statusNotice = "Menguji sambungan WebSocket ke $targetUrl...") }
+                _uiState.update { it.copy(statusNotice = "Testing connection to $targetUrl...") }
             }
         }
     }
@@ -433,7 +433,7 @@ class SettingsViewModel @Inject constructor(
                     isSaved = true,
                     isDomainUnlocked = editableByDefault,
                     isServerEditMode = editableByDefault,
-                    statusNotice = "Konfigurasi server tersimpan dan disambung ulang."
+                    statusNotice = "Server settings saved and reconnecting."
                 )
             }
             onSaved()

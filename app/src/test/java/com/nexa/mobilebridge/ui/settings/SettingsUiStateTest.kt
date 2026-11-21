@@ -30,7 +30,7 @@ class SettingsUiStateTest {
             "df:14:fc:a6...",
             formatFingerprintPreview("df:14:fc:a6:33:8c:3c:67:15:5a")
         )
-        assertEquals("Belum tersedia", formatFingerprintPreview("   "))
+        assertEquals("Not available", formatFingerprintPreview("   "))
     }
 
     @Test
@@ -39,6 +39,6 @@ class SettingsUiStateTest {
             "nexa-server.indonesiacentral.cloudapp.azure.com",
             extractDisplayHost("wss://nexa-server.indonesiacentral.cloudapp.azure.com/ws")
         )
-        assertEquals("Belum diatur", extractDisplayHost(""))
+        assertEquals("Not set", extractDisplayHost(""))
     }
 }

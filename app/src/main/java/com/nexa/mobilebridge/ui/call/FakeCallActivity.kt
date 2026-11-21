@@ -131,13 +131,13 @@ enum class CallState {
 
 // ─── Live Voice Diagnostic HUD State ──────────────────────────────────────────
 enum class LiveVoiceHudState(val label: String, val colorHex: Long) {
-    LISTENING("Mendengarkan..", 0xFF64FFDA),        // Cyan Glow
-    THINKING("Berpikir..", 0xFF10B981),             // Emerald Green
-    PROCESSING("Mengerjakan..", 0xFFF59E0B),        // Amber Gold
-    SPEAKING("Mentransmisikan..", 0xFF38BDF8),       // Electric Blue
-    SLOW_NETWORK("Jaringan Lemah..", 0xFFFB923C),   // Orange Coral
-    RECONNECTING("Memulihkan Koneksi..", 0xFFEF4444),// Crimson Red
-    DISCONNECTING("Mengakhiri..", 0xFF94A3B8)       // Slate Gray
+    LISTENING("Listening...", 0xFF64FFDA),        // Cyan Glow
+    THINKING("Thinking...", 0xFF10B981),          // Emerald Green
+    PROCESSING("Working...", 0xFFF59E0B),         // Amber Gold
+    SPEAKING("Speaking...", 0xFF38BDF8),          // Electric Blue
+    SLOW_NETWORK("Weak network...", 0xFFFB923C),  // Orange Coral
+    RECONNECTING("Reconnecting...", 0xFFEF4444),  // Crimson Red
+    DISCONNECTING("Ending call...", 0xFF94A3B8)   // Slate Gray
 }
 
 class FakeCallActivity : ComponentActivity() {
@@ -1061,10 +1061,10 @@ class FakeCallActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     CALL_ONGOING_CHANNEL_ID,
-                    "N.E.X.A Panggilan Suara",
+                    "Voice Call",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
-                    description = "Status panggilan suara aktif N.E.X.A"
+                    description = "Active N.E.X.A voice call status"
                     setShowBadge(false)
                 }
                 notificationManager.createNotificationChannel(channel)
@@ -1079,7 +1079,7 @@ class FakeCallActivity : ComponentActivity() {
                 PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
             )
 
-            // "Matikan Telepon" action button right in the notification shade
+            // "End call" action button right in the notification shade
             val endCallIntent = Intent(this, FakeCallActivity::class.java).apply {
                 action = "ACTION_END_CALL_FROM_NOTIF"
                 flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1091,12 +1091,12 @@ class FakeCallActivity : ComponentActivity() {
 
             val notification = NotificationCompat.Builder(this, CALL_ONGOING_CHANNEL_ID)
                 .setSmallIcon(applicationInfo.icon)
-                .setContentTitle("Panggilan N.E.X.A Aktif")
-                .setContentText("Sedang berlangsung di latar belakang (Ketuk untuk kembali)")
+                .setContentTitle("N.E.X.A Voice Call")
+                .setContentText("In progress · Tap to return")
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setContentIntent(contentPendingIntent)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Matikan Telepon", endCallPendingIntent)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "End call", endCallPendingIntent)
                 .build()
 
             notificationManager.notify(NOTIF_CALL_ONGOING_ID, notification)
@@ -1243,8 +1243,8 @@ class FakeCallActivity : ComponentActivity() {
         actions.add(
             RemoteAction(
                 Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
-                "Tutup Telepon",
-                "Tutup Telepon",
+                "End call",
+                "End call",
                 endCallPendingIntent
             )
         )
@@ -1607,7 +1607,7 @@ fun FakeCallScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.PictureInPictureAlt,
-                                        contentDescription = "Mode Layar Kecil (Picture-in-Picture)",
+                                        contentDescription = "Picture-in-Picture",
                                         tint = Color(0xFFCBD5E1),
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -1630,7 +1630,7 @@ fun FakeCallScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.MoreHoriz,
-                                            contentDescription = "Pengaturan & Opsi Lainnya",
+                                            contentDescription = "Audio & more options",
                                             tint = Color(0xFFCBD5E1),
                                             modifier = Modifier.size(22.dp)
                                         )
@@ -1655,7 +1655,7 @@ fun FakeCallScreen(
 
                 // ── Center & Lower Area ───────────────────────────────────────
                 if (!isCameraActive) {
-                    // Mode Audio-Only: Teks Respons Asisten di Atas + Cybernetic OLED Eyes di Tengah
+                    // Mode Audio-Only: Assistant text on top + Cybernetic OLED Eyes in center
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1700,7 +1700,7 @@ fun FakeCallScreen(
                             )
                         }
 
-                        // Floating barge-in pill & transcript capsule (elemen elips di tengah)
+                        // Floating barge-in pill & transcript capsule
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
@@ -1735,7 +1735,7 @@ fun FakeCallScreen(
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "Ketuk untuk menyela",
+                                            text = "Tap to interrupt",
                                             color = Color(0xFFF1F5F9),
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Medium
@@ -1777,8 +1777,7 @@ fun FakeCallScreen(
                         }
                     }
                 } else {
-                    // Mode Video Kamera Layar Penuh:
-                    // Area tengah transparan bersih; Subtitle Card melayang di atas dok bawah Sesuai Gambar 3
+                    // Full-screen camera mode with floating barge-in pill and subtitle card
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1786,7 +1785,7 @@ fun FakeCallScreen(
                         verticalArrangement = Arrangement.Bottom,
                         horizontalAlignment = Alignment.Start
                     ) {
-                        // "Ketuk untuk menyela" pill (Floating Barge-in Button)
+                        // Floating barge-in pill
                         AnimatedVisibility(
                             visible = isSpeaking || hudState == LiveVoiceHudState.SPEAKING,
                             enter = fadeIn() + scaleIn(initialScale = 0.85f),
@@ -1814,7 +1813,7 @@ fun FakeCallScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Ketuk untuk menyela",
+                                        text = "Tap to interrupt",
                                         color = Color(0xFFF1F5F9),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium
@@ -1823,7 +1822,7 @@ fun FakeCallScreen(
                             }
                         }
 
-                        // Floating Subtitle Card ("Transkrip Suara / Respons Teks" Sesuai Gambar 3)
+                        // Floating Subtitle Card
                         val displaySubtitle = if (isSpeaking || hudState == LiveVoiceHudState.SPEAKING) {
                             assistantText
                         } else if (userTranscriptText.isNotBlank()) {
@@ -1856,7 +1855,7 @@ fun FakeCallScreen(
                     }
                 }
 
-                // ── Bottom Dock (5 Control Buttons Sesuai Gambar 3) ───────────────
+                // Bottom Dock (5 Control Buttons)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1864,7 +1863,7 @@ fun FakeCallScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 1. Camera Toggle (Aktifkan/Nonaktifkan Kamera — Biru Gemini saat aktif)
+                    // 1. Camera Toggle
                     Surface(
                         shape = CircleShape,
                         color = if (isCameraActive) Color(0xFF2563EB) else Color(0xFF26262A),
@@ -1882,14 +1881,14 @@ fun FakeCallScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = if (isCameraActive) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                                contentDescription = "Aktifkan/Nonaktifkan Kamera",
+                                contentDescription = "Toggle camera",
                                 tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
                     }
 
-                    // 2. Screen Share Toggle (Bagikan Layar — Ikon [ ↑ ] Upload Sesuai Gambar 3)
+                    // 2. Screen Share Toggle
                     Surface(
                         shape = CircleShape,
                         color = if (isScreenShareActive) Color(0xFF38BDF8) else Color(0xFF26262A),
@@ -1907,14 +1906,14 @@ fun FakeCallScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Upload,
-                                contentDescription = "Bagikan Layar",
+                                contentDescription = "Share screen",
                                 tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
                     }
 
-                    // 3. Center Gemini Live Voice Capsule (Indikator Suara Gemini — Sedang Aktif)
+                    // 3. Center Gemini Live Voice Capsule
                     LiveGeminiVoiceCapsule(
                         hudState = hudState,
                         isSpeaking = isSpeaking,
@@ -1926,7 +1925,7 @@ fun FakeCallScreen(
                         }
                     )
 
-                    // 4. Mic Mute Toggle (Mute / Matikan Suara Mikrofon)
+                    // 4. Mic Mute Toggle
                     Surface(
                         shape = CircleShape,
                         color = if (isMicMuted) Color(0xFFEF4444) else Color(0xFF26262A),
@@ -1944,14 +1943,14 @@ fun FakeCallScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                contentDescription = "Mute / Matikan Suara Mikrofon",
+                                contentDescription = "Mute microphone",
                                 tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
                     }
 
-                    // 5. Hang Up / Close Call (Akhiri Panggilan — Charcoal Gelap Sesuai Gambar 3)
+                    // 5. End Call
                     Surface(
                         shape = CircleShape,
                         color = Color(0xFF26262A),
@@ -1966,7 +1965,7 @@ fun FakeCallScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Akhiri Panggilan",
+                                contentDescription = "End call",
                                 tint = Color.White,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1978,7 +1977,7 @@ fun FakeCallScreen(
     }
 }
 
-// ─── Gemini Live Bottom Central Voice Capsule ────────────────────────────────
+// Gemini Live Bottom Central Voice Capsule
 @Composable
 fun LiveGeminiVoiceCapsule(
     hudState: LiveVoiceHudState,
@@ -2114,7 +2113,7 @@ fun LiveGeminiVoiceCapsule(
     }
 }
 
-// ─── Audio Route Options Dropdown Menu ─────────────────────────────────────────
+// Audio Route Options Dropdown Menu
 @Composable
 fun AudioRouteOptionsMenu(
     expanded: Boolean,
@@ -2131,10 +2130,10 @@ fun AudioRouteOptionsMenu(
             .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
     ) {
         val routes = listOf(
-            Triple(AudioOutputRoute.SPEAKER, "Loudspeaker", Icons.AutoMirrored.Filled.VolumeUp),
-            Triple(AudioOutputRoute.EARPIECE, "Earpiece (Telepon)", Icons.Default.Hearing),
-            Triple(AudioOutputRoute.BLUETOOTH, "Bluetooth Headset", Icons.Default.Bluetooth),
-            Triple(AudioOutputRoute.WIRED_HEADSET, "Headset Kabel", Icons.Default.Headset)
+            Triple(AudioOutputRoute.SPEAKER, "Speaker", Icons.AutoMirrored.Filled.VolumeUp),
+            Triple(AudioOutputRoute.EARPIECE, "Earpiece", Icons.Default.Hearing),
+            Triple(AudioOutputRoute.BLUETOOTH, "Bluetooth", Icons.Default.Bluetooth),
+            Triple(AudioOutputRoute.WIRED_HEADSET, "Wired headset", Icons.Default.Headset)
         )
 
         routes.forEach { (route, label, icon) ->
@@ -2159,7 +2158,7 @@ fun AudioRouteOptionsMenu(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = if (isAvailable) label else "$label (Tidak Terhubung)",
+                            text = if (isAvailable) label else "$label (Disconnected)",
                             color = when {
                                 isSelected -> Color(0xFFF1F5F9)
                                 isAvailable -> Color(0xFFCBD5E1)

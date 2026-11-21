@@ -131,7 +131,7 @@ fun MessageActionMenuPopup(
             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                 MessageActionMenuRow(
                     icon = Icons.AutoMirrored.Filled.Reply,
-                    label = "Balas",
+                    label = "Reply",
                     tint = MaterialTheme.colorScheme.onSurface,
                     onClick = onReply
                 )
@@ -139,7 +139,7 @@ fun MessageActionMenuPopup(
                 if (anchor.canCopy) {
                     MessageActionMenuRow(
                         icon = Icons.Default.ContentCopy,
-                        label = "Salin",
+                        label = "Copy",
                         tint = MaterialTheme.colorScheme.onSurface,
                         onClick = onCopy
                     )
@@ -153,7 +153,7 @@ fun MessageActionMenuPopup(
 
                 MessageActionMenuRow(
                     icon = Icons.Default.Delete,
-                    label = "Hapus",
+                    label = "Delete",
                     tint = nexaColors.crimson,
                     onClick = onDelete
                 )
@@ -235,12 +235,12 @@ fun ChatSelectionTopBar(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Batal pilih pesan",
+                            contentDescription = "Cancel selection",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
-                        text = "$selectedCount dipilih",
+                        text = "$selectedCount selected",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -255,7 +255,7 @@ fun ChatSelectionTopBar(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Reply,
-                                contentDescription = "Balas pesan terpilih",
+                                contentDescription = "Reply to selected message",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -267,7 +267,7 @@ fun ChatSelectionTopBar(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Salin pesan terpilih",
+                                contentDescription = "Copy selected messages",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -278,7 +278,7 @@ fun ChatSelectionTopBar(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
-                            contentDescription = "Hapus pesan terpilih",
+                            contentDescription = "Delete selected messages",
                             tint = nexaColors.crimson
                         )
                     }
@@ -319,7 +319,7 @@ fun SelectionCheckCircle(
         if (isSelected) {
             Icon(
                 imageVector = Icons.Default.Check,
-                contentDescription = "Terpilih",
+                contentDescription = "Selected",
                 tint = nexaColors.onPrimaryButtonFill,
                 modifier = Modifier.size(14.dp)
             )
@@ -334,11 +334,11 @@ fun DeleteMessagesConfirmDialog(
     onDismiss: () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
-    val titleText = if (count <= 1) "Hapus pesan ini?" else "Hapus $count pesan?"
+    val titleText = if (count <= 1) "Delete message?" else "Delete $count messages?"
     val bodyText = if (count <= 1) {
-        "Pesan ini akan dihapus dari perangkat ini saja. Memori N.E.X.A di server tidak terpengaruh."
+        "This removes the message from this device only. N.E.X.A's memory on the server is unaffected."
     } else {
-        "$count pesan terpilih akan dihapus dari perangkat ini saja. Memori N.E.X.A di server tidak terpengaruh."
+        "This removes $count selected messages from this device only. N.E.X.A's memory on the server is unaffected."
     }
 
     AlertDialog(
@@ -360,7 +360,7 @@ fun DeleteMessagesConfirmDialog(
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
-                    text = "Hapus",
+                    text = "Delete",
                     color = nexaColors.crimson,
                     fontWeight = FontWeight.Bold
                 )
@@ -368,7 +368,7 @@ fun DeleteMessagesConfirmDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(text = "Batal")
+                Text(text = "Cancel")
             }
         }
     )

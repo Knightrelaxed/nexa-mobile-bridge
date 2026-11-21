@@ -112,9 +112,9 @@ class LogViewerViewModel @Inject constructor(
 
             if (cfg.enrollmentStatus != "ACTIVE") {
                 val msg = if (cfg.enrollmentStatus == "INVALIDATED") {
-                    "Kunci Keystore perangkat gugur karena perubahan sidik jari Android. Buka Pengaturan -> Panduan Daftar Ulang (nexa-enroll re-pair)."
+                    "Device hardware key was invalidated after Android fingerprint changes. Open Settings to regenerate and re-pair."
                 } else {
-                    "Perangkat belum terdaftar untuk akses Log Sidecar. Buka Pengaturan & Keamanan lalu daftarkan kunci perangkat dengan CLI nexa-enroll."
+                    "This device is not paired for Server Logs. Open Settings to pair your device key via nexa-enroll."
                 }
                 sidecarLogsClient.setError(msg)
                 isSessionActiveOrStarting.set(false)
@@ -122,7 +122,7 @@ class LogViewerViewModel @Inject constructor(
             }
 
             if (activity == null) {
-                sidecarLogsClient.setError("Activity tidak tersedia untuk menampilkan BiometricPrompt.")
+                sidecarLogsClient.setError("Biometric prompt is unavailable.")
                 isSessionActiveOrStarting.set(false)
                 return@launch
             }
@@ -132,8 +132,8 @@ class LogViewerViewModel @Inject constructor(
                 val outcome = ticketAuthRepository.requestTicket(
                     activity = activity,
                     scope = "logs",
-                    promptTitle = "Buka Server Log Monitor",
-                    promptSubtitle = "Verifikasi sidik jari untuk tiket Ed25519 (scope=logs)"
+                    promptTitle = "Open Server Logs",
+                    promptSubtitle = "Verify fingerprint to stream server logs"
                 )
             ) {
                 is TicketOutcome.Success -> {

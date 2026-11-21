@@ -318,7 +318,7 @@ fun LogViewerScreen(
                                     triggerHaptic()
                                     val clipboard = context.getSystemService(ClipboardManager::class.java)
                                     val line = "$formattedTime [${entry.unitName}] [${entry.priorityBadge}] ${entry.message}"
-                                    clipboard?.setPrimaryClip(ClipData.newPlainText("Log N.E.X.A", line))
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("N.E.X.A Log", line))
                                 }
                             )
                         }
@@ -360,11 +360,11 @@ fun LogViewerScreen(
                     LogStatusOverlay(
                         isLoading = true,
                         title = if (streamStatus == LogStreamStatus.AWAITING_BIOMETRIC) {
-                            "Menunggu Verifikasi Sidik Jari"
+                            "Waiting for fingerprint"
                         } else {
-                            "Menyambungkan ke /io/logs..."
+                            "Connecting to server logs..."
                         },
-                        subtitle = "Koneksi B on-demand diamankan dengan tiket Ed25519 sekali pakai (TTL 45 detik).",
+                        subtitle = "Secure on-demand stream stays active only while this tab is open.",
                         actionLabel = null,
                         onAction = {}
                     )
@@ -374,9 +374,9 @@ fun LogViewerScreen(
                     val needsSettings = enrollmentStatus != "ACTIVE"
                     LogStatusOverlay(
                         isLoading = false,
-                        title = if (needsSettings) "Perangkat Belum Terdaftar" else "Aliran Log Terhenti",
-                        subtitle = errorMessage ?: "Gagal membuka aliran /io/logs.",
-                        actionLabel = if (needsSettings) "Buka Pengaturan & Enroll" else "Verifikasi & Sambung Ulang",
+                        title = if (needsSettings) "Device not paired" else "Log stream disconnected",
+                        subtitle = errorMessage ?: "Failed to open server log stream.",
+                        actionLabel = if (needsSettings) "Open Settings" else "Reconnect",
                         actionIcon = if (needsSettings) Icons.Default.Settings else Icons.Default.Refresh,
                         onAction = {
                             triggerHaptic()
@@ -393,9 +393,9 @@ fun LogViewerScreen(
                 searchQuery.isNotBlank() -> {
                     LogStatusOverlay(
                         isLoading = false,
-                        title = "Tidak Ada Log yang Cocok",
-                        subtitle = "Kata kunci \"$searchQuery\" tidak ditemukan pada filter ${activeFilter.label} ($totalBufferedCount baris di buffer).",
-                        actionLabel = "Reset Pencarian",
+                        title = "No matching logs",
+                        subtitle = "\"$searchQuery\" was not found in ${activeFilter.label} ($totalBufferedCount buffered lines).",
+                        actionLabel = "Clear search",
                         actionIcon = Icons.Default.Close,
                         onAction = {
                             triggerHaptic()
@@ -407,14 +407,14 @@ fun LogViewerScreen(
                 else -> {
                     LogStatusOverlay(
                         isLoading = false,
-                        title = "Buffer Log Kosong (${activeFilter.label})",
+                        title = "No logs yet (${activeFilter.label})",
                         subtitle = if (streamStatus == LogStreamStatus.PAUSED) {
-                            "Aliran log sedang dijeda (CREDIT ditahan). Ketuk tombol Play di atas untuk melanjutkan."
+                            "Log stream is paused. Tap resume above to continue."
                         } else {
-                            "Menunggu baris log baru dari server..."
+                            "Waiting for new log entries..."
                         },
                         actionLabel = if (streamStatus == LogStreamStatus.IDLE_DISCONNECTED) {
-                            "Buka Koneksi /io/logs"
+                            "Open Logs"
                         } else null,
                         onAction = {
                             triggerHaptic()
@@ -439,8 +439,7 @@ fun LogViewerScreen(
 }
 
 /**
- * Slim single-row unified header for LOGS tab (fits 360-384 dp cleanly):
- * [Visor] N.E.X.A / ● Log Aktif     [⏸][🗑][⚙] (36 dp visual, 44 dp touch target)
+ * Slim single-row unified header for LOGS tab (fits 360-384 dp cleanly).
  */
 @Composable
 private fun LogUnifiedTopHeader(
@@ -453,10 +452,10 @@ private fun LogUnifiedTopHeader(
 ) {
     val nexaColors = LocalNexaColors.current
     val (statusText, statusColor) = when (status) {
-        LogStreamStatus.LIVE -> "Log Aktif" to nexaColors.emerald
-        LogStreamStatus.PAUSED -> "Dijeda" to nexaColors.amber
-        LogStreamStatus.CONNECTING, LogStreamStatus.AWAITING_BIOMETRIC -> "Tiket Auth" to nexaColors.amber
-        LogStreamStatus.ERROR, LogStreamStatus.IDLE_DISCONNECTED -> "Siaga" to MaterialTheme.colorScheme.onSurfaceVariant
+        LogStreamStatus.LIVE -> "Live" to nexaColors.emerald
+        LogStreamStatus.PAUSED -> "Paused" to nexaColors.amber
+        LogStreamStatus.CONNECTING, LogStreamStatus.AWAITING_BIOMETRIC -> "Auth" to nexaColors.amber
+        LogStreamStatus.ERROR, LogStreamStatus.IDLE_DISCONNECTED -> "Standby" to MaterialTheme.colorScheme.onSurfaceVariant
     }
 
     val visorVisualState = when (status) {
@@ -529,28 +528,28 @@ private fun LogUnifiedTopHeader(
                 ) {
                     LogSquareIconButton(
                         icon = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                        contentDescription = if (isSearchActive) "Tutup pencarian log" else "Cari kata kunci log",
+                        contentDescription = if (isSearchActive) "Close log search" else "Search logs",
                         isActive = isSearchActive,
                         activeColor = MaterialTheme.colorScheme.primary,
                         onClick = onToggleSearch
                     )
                     LogSquareIconButton(
                         icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = if (isPaused) "Lanjutkan aliran log" else "Jeda aliran log (tahan CREDIT)",
+                        contentDescription = if (isPaused) "Resume log stream" else "Pause log stream",
                         isActive = isPaused,
                         activeColor = nexaColors.amber,
                         onClick = onTogglePause
                     )
                     LogSquareIconButton(
                         icon = Icons.Default.DeleteOutline,
-                        contentDescription = "Bersihkan buffer log lokal",
+                        contentDescription = "Clear local log buffer",
                         isActive = false,
                         activeColor = MaterialTheme.colorScheme.primary,
                         onClick = onClearBuffer
                     )
                     LogSquareIconButton(
                         icon = Icons.Default.Settings,
-                        contentDescription = "Pengaturan dan Keamanan",
+                        contentDescription = "Settings",
                         isActive = false,
                         activeColor = MaterialTheme.colorScheme.primary,
                         onClick = onOpenSettings
@@ -611,7 +610,7 @@ private fun LogLocalSearchBar(
                 ) {
                     if (query.isEmpty()) {
                         Text(
-                            text = "Cari: finance, calendar, gmail, docs, task...",
+                            text = "Search: finance, calendar, gmail, docs, task...",
                             style = NexaMonoTypography.codeLine.copy(fontSize = 11.5.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                             maxLines = 1,
@@ -642,7 +641,7 @@ private fun LogLocalSearchBar(
 
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = if (query.isNotEmpty()) "Hapus kata kunci" else "Tutup pencarian",
+                    contentDescription = if (query.isNotEmpty()) "Clear search" else "Close search",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .size(18.dp)
@@ -688,7 +687,7 @@ private fun LogJumpToBottomButton(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Default.ArrowDownward,
-                    contentDescription = "Lompat ke log terbaru di bawah",
+                    contentDescription = "Jump to latest logs",
                     tint = iconTint,
                     modifier = Modifier.size(18.dp)
                 )
@@ -989,7 +988,7 @@ private fun LogAccurateFooter(
     streamStatus: LogStreamStatus
 ) {
     val nexaColors = LocalNexaColors.current
-    val formattedCap = if (bufferCapacity == 2000) "2.000" else bufferCapacity.toString()
+    val formattedCap = if (bufferCapacity == 2000) "2,000" else bufferCapacity.toString()
     val statusLabel = when (streamStatus) {
         LogStreamStatus.LIVE -> "WSS-SECURE"
         LogStreamStatus.PAUSED -> "PAUSED"
@@ -1015,9 +1014,9 @@ private fun LogAccurateFooter(
                 withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)) {
                     append("$bufferCount/$formattedCap")
                 }
-                append(" baris")
+                append(" lines")
                 if (skippedCount > 0) {
-                    append(" • Lewat ")
+                    append(" • Skipped ")
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = nexaColors.amber)) {
                         append(skippedCount.toString())
                     }

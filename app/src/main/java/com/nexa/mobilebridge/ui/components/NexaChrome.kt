@@ -582,21 +582,21 @@ fun NexaTopBar(
         is ConnectionState.Connected -> Triple(
             nexaColors.emerald,
             Icons.Default.CheckCircle,
-            if (activeTab == NexaMainTab.CHAT) "Terhubung (TLS 1.3)" else "Terhubung · TLS"
+            if (activeTab == NexaMainTab.CHAT) "Connected" else "Connected · TLS"
         )
-        is ConnectionState.Connecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Menyambungkan...")
-        is ConnectionState.Reconnecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Mencoba ulang #${connectionState.attempt}")
-        is ConnectionState.Disconnected -> Triple(nexaColors.crimson, Icons.Default.CloudOff, "Terputus")
-        is ConnectionState.AuthFailed -> Triple(nexaColors.crimson, Icons.Default.ErrorOutline, "Gagal Otentikasi")
+        is ConnectionState.Connecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Connecting...")
+        is ConnectionState.Reconnecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Reconnecting #${connectionState.attempt}")
+        is ConnectionState.Disconnected -> Triple(nexaColors.crimson, Icons.Default.CloudOff, "Disconnected")
+        is ConnectionState.AuthFailed -> Triple(nexaColors.crimson, Icons.Default.ErrorOutline, "Auth failed")
     }
 
     val visorState = resolveVisorVisualState(avatarState = avatarState, connectionState = connectionState)
 
     val subtitleLabel = when {
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.THINKING -> "Sedang mengerjakan..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STREAMING -> "Sedang menjawab..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STEP_UP -> "Menunggu verifikasi sidik jari..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.LISTENING -> "Menyimak..."
+        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.THINKING -> "Working..."
+        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STREAMING -> "Replying..."
+        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STEP_UP -> "Waiting for fingerprint..."
+        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.LISTENING -> "Listening..."
         activeTab == NexaMainTab.CHAT -> statusText
         else -> "$statusText · ${activeTab.label.uppercase()}"
     }
@@ -660,7 +660,7 @@ fun NexaTopBar(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Call,
-                                contentDescription = "Panggilan Suara Langsung N.E.X.A",
+                                contentDescription = "Start N.E.X.A voice call",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -672,7 +672,7 @@ fun NexaTopBar(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
-                            contentDescription = "Pengaturan dan Keamanan",
+                            contentDescription = "Settings",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -735,7 +735,7 @@ fun NexaBottomNavBar(
                             .height(64.dp)
                             .semantics {
                                 selected = isSelected
-                                contentDescription = if (showBadge) "${tab.label} ($chatUnreadCount belum dibaca)" else tab.label
+                                contentDescription = if (showBadge) "${tab.label} ($chatUnreadCount unread)" else tab.label
                             }
                             .clickable(
                                 role = Role.Tab,

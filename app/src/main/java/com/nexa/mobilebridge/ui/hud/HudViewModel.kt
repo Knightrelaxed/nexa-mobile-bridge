@@ -46,8 +46,8 @@ sealed interface HudUiState {
         val isPowerLockActive: Boolean = false,
         val permissions: PermissionSnapshot = PermissionSnapshot(),
         val isSidecarActive: Boolean = false,
-        val sidecarStatusLabel: String = "Tidak terhubung (on-demand)",
-        val geofenceSummary: String = "Belum ada zona"
+        val sidecarStatusLabel: String = "Standby",
+        val geofenceSummary: String = "No zones"
     ) : HudUiState
 }
 
@@ -89,11 +89,11 @@ class HudViewModel @Inject constructor(
 
         val isSidecarActive = logsActive || termActive
         val sidecarLabel = when {
-            logsActive && termActive -> "Aktif (/io/logs & /io/term)"
-            logsActive -> if (logStatus == LogStreamStatus.PAUSED) "Dijeda (/io/logs)" else "Aktif (/io/logs)"
-            termActive -> if (termState.status == TerminalSessionStatus.ACTIVE) "Aktif (/io/term)" else "Siaga (/io/term)"
-            connecting -> "Menyambungkan /io..."
-            else -> "Tidak terhubung (on-demand)"
+            logsActive && termActive -> "Logs & Shell active"
+            logsActive -> if (logStatus == LogStreamStatus.PAUSED) "Logs paused" else "Logs active"
+            termActive -> if (termState.status == TerminalSessionStatus.ACTIVE) "Shell active" else "Shell paused"
+            connecting -> "Connecting..."
+            else -> "Standby"
         }
         SidecarAndContextSnapshot(
             isSidecarActive = isSidecarActive,
@@ -150,12 +150,12 @@ class HudViewModel @Inject constructor(
         return try {
             val zones = GeofenceManager(context).getAllGeofences()
             when {
-                zones.isEmpty() -> "Belum ada zona"
-                zones.size == 1 -> "1 Zona (${zones.first().name})"
-                else -> "${zones.size} Zona (${zones.first().name})"
+                zones.isEmpty() -> "No zones"
+                zones.size == 1 -> "1 zone (${zones.first().name})"
+                else -> "${zones.size} zones (${zones.first().name})"
             }
         } catch (_: Exception) {
-            "Belum ada zona"
+            "No zones"
         }
     }
 

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -50,7 +49,6 @@ import com.nexa.mobilebridge.theme.LocalNexaColors
 
 /**
  * Clean detail bottom sheet for Hardware Identity & full 32-octet SHA-256 public key fingerprint.
- * Keeps the main Settings screen uncluttered while preserving full technical verification & copy actions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,7 +83,6 @@ internal fun DeviceSecurityDetailSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -93,7 +90,7 @@ internal fun DeviceSecurityDetailSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Kunci & Identitas Perangkat",
+                        text = "Device Identity & Key",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -140,14 +137,14 @@ internal fun DeviceSecurityDetailSheet(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Kunci Keystore Gugur",
+                                text = "Device key invalidated",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = nexaColors.crimson
                             )
                         }
                         Text(
-                            text = "Sidik jari sistem Android berubah. Buat ulang kunci P-256 di perangkat ini lalu jalankan nexa-enroll re-pair di server.",
+                            text = "Android fingerprint settings changed. Generate a new P-256 hardware key and re-pair via nexa-enroll on your server.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -162,16 +159,15 @@ internal fun DeviceSecurityDetailSheet(
                                 contentColor = MaterialTheme.colorScheme.onError
                             )
                         ) {
-                            Text("Buat Ulang Kunci Hardware", fontWeight = FontWeight.SemiBold)
+                            Text("Regenerate Hardware Key", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
 
-            // Grouped key metadata
             SettingsGroupCard {
                 SettingsListRow(
-                    title = "ID Perangkat",
+                    title = "Device ID",
                     subtitle = uiState.deviceName,
                     subtitleMonospace = true,
                     trailing = {
@@ -181,7 +177,7 @@ internal fun DeviceSecurityDetailSheet(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Salin ID perangkat",
+                                contentDescription = "Copy device ID",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
@@ -191,18 +187,17 @@ internal fun DeviceSecurityDetailSheet(
                 SettingsRowDivider(insetStart = false)
                 SettingsListRow(
                     leadingIcon = Icons.Default.Memory,
-                    title = "Penyimpanan Kunci",
+                    title = "Key storage",
                     subtitle = "Android Keystore · ${uiState.keySnapshot.securityLevelLabel}"
                 )
                 SettingsRowDivider(insetStart = true)
                 SettingsListRow(
                     leadingIcon = Icons.Default.Fingerprint,
-                    title = "Otentikasi",
-                    subtitle = "Sidik jari per penggunaan (BIOMETRIC_STRONG)"
+                    title = "Authentication",
+                    subtitle = "Fingerprint required per sensitive action"
                 )
             }
 
-            // Full 32-octet SHA-256 fingerprint block
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -210,7 +205,7 @@ internal fun DeviceSecurityDetailSheet(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Sidik jari publik (SHA-256)",
+                        text = "Public key fingerprint (SHA-256)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -227,7 +222,7 @@ internal fun DeviceSecurityDetailSheet(
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text("Salin", style = MaterialTheme.typography.labelMedium)
+                            Text("Copy", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
@@ -250,7 +245,7 @@ internal fun DeviceSecurityDetailSheet(
                     } else {
                         Text(
                             text = uiState.keySnapshot.errorMessage
-                                ?: "Kunci hardware belum tersedia. Pastikan sidik jari aktif di Android.",
+                                ?: "Hardware key unavailable. Make sure fingerprint lock is enabled in Android settings.",
                             style = MaterialTheme.typography.bodySmall,
                             color = nexaColors.amber,
                             modifier = Modifier.padding(14.dp)
@@ -279,9 +274,9 @@ internal fun DeviceSecurityDetailSheet(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (uiState.enrollmentStatus == "ACTIVE") {
-                        "Panduan Daftar Ulang (nexa-enroll re-pair)"
+                        "Re-pair device via CLI"
                     } else {
-                        "Daftarkan Perangkat via Kode CLI"
+                        "Pair device via CLI"
                     },
                     style = MaterialTheme.typography.labelLarge
                 )
@@ -291,7 +286,7 @@ internal fun DeviceSecurityDetailSheet(
 }
 
 /**
- * CLI Enrollment / Re-Pair Dialog (FR-AUTH-01 & FR-AUTH-03 / Audit A7) with one-tap command copy.
+ * CLI Enrollment / Re-Pair Dialog with one-tap command copy.
  */
 @Composable
 internal fun EnrollmentCliDialog(
@@ -312,9 +307,9 @@ internal fun EnrollmentCliDialog(
         title = {
             Text(
                 text = if (uiState.enrollmentStatus == "ACTIVE") {
-                    "Daftar Ulang Perangkat (re-pair)"
+                    "Re-pair Device"
                 } else {
-                    "Daftarkan Perangkat via CLI"
+                    "Pair Device via CLI"
                 },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
@@ -323,7 +318,7 @@ internal fun EnrollmentCliDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "1. Jalankan perintah berikut via SSH di server N.E.X.A:",
+                    text = "1. Run this command over SSH on your N.E.X.A server:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -353,7 +348,7 @@ internal fun EnrollmentCliDialog(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Salin perintah CLI",
+                                contentDescription = "Copy CLI command",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -361,14 +356,14 @@ internal fun EnrollmentCliDialog(
                     }
                 }
                 Text(
-                    text = "2. Masukkan kode sekali pakai 8 karakter (berlaku 5 menit):",
+                    text = "2. Enter the 8-character one-time code (valid for 5 minutes):",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
                     value = enrollCodeInput,
                     onValueChange = { onCodeChanged(it.uppercase().take(9)) },
-                    label = { Text("Kode Enrollment (contoh: ABCD-2345)") },
+                    label = { Text("Pairing code (e.g. ABCD-2345)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -378,7 +373,7 @@ internal fun EnrollmentCliDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Text("Mengirim kunci publik ke server...", style = MaterialTheme.typography.bodySmall)
+                        Text("Registering public key...", style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 if (!uiState.enrollError.isNullOrBlank()) {
@@ -399,7 +394,7 @@ internal fun EnrollmentCliDialog(
                 ),
                 onClick = onSubmit
             ) {
-                Text("Kirim & Daftarkan", fontWeight = FontWeight.SemiBold)
+                Text("Pair Device", fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {
@@ -407,7 +402,7 @@ internal fun EnrollmentCliDialog(
                 enabled = !uiState.isEnrolling,
                 onClick = onDismiss
             ) {
-                Text("Tutup")
+                Text("Cancel")
             }
         }
     )

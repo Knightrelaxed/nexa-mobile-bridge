@@ -265,11 +265,11 @@ fun TerminalScreen(
                             isLoading = true,
                             isKillSwitchOff = false,
                             title = if (sessionState.status == TerminalSessionStatus.AWAITING_BIOMETRIC) {
-                                "Verifikasi Sidik Jari (scope=term)"
+                                "Waiting for fingerprint"
                             } else {
-                                "Menyambungkan PTY /io/term..."
+                                "Connecting to terminal..."
                             },
-                            subtitle = "Menyiapkan shell inspeksi terisolasi (user nexa-term, tanpa sudo, batas sesi 4 jam).",
+                            subtitle = "Starting isolated shell without root access (4h max session).",
                             actionLabel = null,
                             onAction = {}
                         )
@@ -279,9 +279,9 @@ fun TerminalScreen(
                         TerminalStateOverlay(
                             isLoading = false,
                             isKillSwitchOff = true,
-                            title = "Terminal dinonaktifkan di server",
-                            subtitle = "Sakelar keamanan server-side (kill switch) dalam posisi NONAKTIF (FR-TERM-18). Aktifkan secara eksplisit di VPS hanya saat dibutuhkan.",
-                            actionLabel = "Cek Ulang Status Server",
+                            title = "Remote terminal disabled",
+                            subtitle = "Disabled by server kill switch. Enable it on your VPS when needed.",
+                            actionLabel = "Recheck status",
                             actionIcon = Icons.Default.Refresh,
                             onAction = {
                                 triggerHaptic()
@@ -299,19 +299,19 @@ fun TerminalScreen(
                             isLoading = false,
                             isKillSwitchOff = false,
                             title = when {
-                                needsEnroll -> "Perangkat Belum Terdaftar"
-                                sessionState.status == TerminalSessionStatus.ERROR -> "Koneksi Terminal Gagal"
-                                else -> "Terminal Inspeksi Siaga (On-Demand)"
+                                needsEnroll -> "Device not paired"
+                                sessionState.status == TerminalSessionStatus.ERROR -> "Terminal connection failed"
+                                else -> "Terminal on standby"
                             },
                             subtitle = when {
                                 !errMsg.isNullOrBlank() -> errMsg
-                                needsEnroll -> "Perangkat belum terdaftar untuk Terminal Inspeksi. Buka Pengaturan & Keamanan lalu daftarkan kunci perangkat dengan CLI nexa-enroll."
-                                else -> "Shell /bin/bash -l terisolasi (nexa-term) hanya dijalankan saat dibuka dengan sidik jari. Layar mati menjeda output (masa resume 120 dtk)."
+                                needsEnroll -> "Pair this device in Settings to use the remote terminal."
+                                else -> "Isolated shell opens only after fingerprint verification. Output pauses when screen is off (120s resume window)."
                             },
                             actionLabel = if (needsEnroll) {
-                                "Buka Pengaturan & Enroll"
+                                "Open Settings"
                             } else {
-                                "Buka Sesi Terminal (Sidik Jari)"
+                                "Open Terminal (Fingerprint)"
                             },
                             actionIcon = if (needsEnroll) {
                                 Icons.Default.Settings
@@ -335,7 +335,7 @@ fun TerminalScreen(
 
         // 4. Compact Footer matching 04_terminal_pty_v2.png (ellipsis guard for large font scale)
         Text(
-            text = "xterm-256color • UTF-8 • Scrollback: ${snapshot.scrollbackLines}/1.000",
+            text = "xterm-256color • UTF-8 • Scrollback: ${snapshot.scrollbackLines}/1,000",
             style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -370,14 +370,14 @@ fun TerminalScreen(
             containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
-                    text = "Putuskan Sesi Terminal?",
+                    text = "End terminal session?",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = "Menutup sesi akan mengirim SIGHUP/SIGKILL ke seluruh process group bash di server agar tidak meninggalkan proses zombie.",
+                    text = "All running processes in this shell session will be terminated on the server.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -394,12 +394,12 @@ fun TerminalScreen(
                         contentColor = MaterialTheme.colorScheme.onError
                     )
                 ) {
-                    Text("Putuskan Sesi", fontWeight = FontWeight.Bold)
+                    Text("End session", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDisconnectConfirm = false }) {
-                    Text("Batal")
+                    Text("Cancel")
                 }
             }
         )
@@ -441,7 +441,7 @@ private fun DetachedReconnectBanner(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "Menyambung kembali • Sisa masa resume: $graceSecLeft dtk",
+                text = "Reconnecting • ${graceSecLeft}s grace left",
                 style = NexaMonoTypography.codeLine,
                 fontWeight = FontWeight.SemiBold,
                 color = nexaColors.amber,
@@ -449,7 +449,7 @@ private fun DetachedReconnectBanner(
             )
             TextButton(onClick = onResume) {
                 Text(
-                    text = "Pulihkan",
+                    text = "Resume",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -461,7 +461,7 @@ private fun DetachedReconnectBanner(
 
 /**
  * Single compact 40 dp header matching 04_terminal_pty_v2.png:
- * [Visor] nexa-term@vps •   [Inspeksi] [🔒] [⋮]
+ * [Visor] nexa-term@vps •   [Inspect] [lock] [menu]
  */
 @Composable
 private fun TerminalSingleCompactHeader(
@@ -490,12 +490,12 @@ private fun TerminalSingleCompactHeader(
     val remainingSessionText = remember(sessionState.sessionExpiresAtMs, menuOpenedAtMs, sessionState.activeSid) {
         val now = if (menuOpenedAtMs > 0L) menuOpenedAtMs else System.currentTimeMillis()
         if (sessionState.sessionExpiresAtMs <= now || sessionState.activeSid == null) {
-            "Belum aktif"
+            "Not active"
         } else {
             val totalMin = (sessionState.sessionExpiresAtMs - now) / 60_000L
             val hours = totalMin / 60L
             val mins = totalMin % 60L
-            "Sisa ${hours}j ${mins}m"
+            "${hours}h ${mins}m left"
         }
     }
 
@@ -554,7 +554,7 @@ private fun TerminalSingleCompactHeader(
                         border = BorderStroke(1.dp, nexaColors.emerald.copy(alpha = 0.7f))
                     ) {
                         Text(
-                            text = "Inspeksi",
+                            text = "Inspect",
                             style = NexaMonoTypography.badge.copy(fontSize = 11.sp),
                             color = nexaColors.emerald,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -563,7 +563,7 @@ private fun TerminalSingleCompactHeader(
 
                     Icon(
                         imageVector = Icons.Default.LockOpen,
-                        contentDescription = "Mode testing (screenshot aktif)",
+                        contentDescription = "Debug mode (screenshots enabled)",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
@@ -578,7 +578,7 @@ private fun TerminalSingleCompactHeader(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Menu sesi terminal",
+                                contentDescription = "Terminal menu",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -590,7 +590,7 @@ private fun TerminalSingleCompactHeader(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = "Durasi Sesi (Maks 4j): $remainingSessionText",
+                                        text = "Session (4h max): $remainingSessionText",
                                         style = NexaMonoTypography.codeLine
                                     )
                                 },
@@ -599,14 +599,14 @@ private fun TerminalSingleCompactHeader(
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("Perkecil Font ($fontSizeSp sp -> ${(fontSizeSp - 1).coerceAtLeast(8)} sp)") },
+                                text = { Text("Smaller font ($fontSizeSp sp -> ${(fontSizeSp - 1).coerceAtLeast(8)} sp)") },
                                 onClick = {
                                     onAdjustFont(-1)
                                     menuExpanded = false
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Perbesar Font ($fontSizeSp sp -> ${(fontSizeSp + 1).coerceAtMost(16)} sp)") },
+                                text = { Text("Larger font ($fontSizeSp sp -> ${(fontSizeSp + 1).coerceAtMost(16)} sp)") },
                                 onClick = {
                                     onAdjustFont(1)
                                     menuExpanded = false
@@ -614,7 +614,7 @@ private fun TerminalSingleCompactHeader(
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("Pengaturan & Keamanan") },
+                                text = { Text("Settings") },
                                 leadingIcon = {
                                     Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                                 },
@@ -627,7 +627,7 @@ private fun TerminalSingleCompactHeader(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            text = "Putuskan Sesi",
+                                            text = "End session",
                                             color = nexaColors.crimson,
                                             fontWeight = FontWeight.Bold
                                         )

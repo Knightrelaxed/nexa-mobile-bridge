@@ -29,10 +29,10 @@ enum class ThemeMode {
 }
 
 enum class AccentPreset(val displayName: String, val badgeName: String) {
-    CYAN("Cyan", "NEXA CYAN"),
-    EMERALD("Hijau", "EMERALD"),
+    CYAN("Cyan", "CYAN"),
+    EMERALD("Emerald", "EMERALD"),
     AMBER("Amber", "AMBER"),
-    VIOLET("Ungu", "VIOLET");
+    VIOLET("Violet", "VIOLET");
 
     companion object {
         fun fromStored(value: String?): AccentPreset = when (value?.uppercase()) {
@@ -68,7 +68,7 @@ data class NexaConfig(
     val heartbeatScreenOnSec: Int = 60,
     val heartbeatScreenOffSec: Int = 120,
     val chatNotificationSoundUri: String = "",
-    val chatNotificationSoundLabel: String = "Default Sistem"
+    val chatNotificationSoundLabel: String = "System default"
 )
 
 @Singleton
@@ -145,8 +145,8 @@ class NexaPreferencesDataStore @Inject constructor(
             heartbeatScreenOffSec = (prefs[Keys.HEARTBEAT_SCREEN_OFF_SEC] ?: DEFAULT_HEARTBEAT_SCREEN_OFF_SEC)
                 .coerceIn(60, 300),
             chatNotificationSoundUri = prefs[Keys.CHAT_NOTIF_SOUND_URI] ?: "",
-            chatNotificationSoundLabel = prefs[Keys.CHAT_NOTIF_SOUND_LABEL]?.ifBlank { "Default Sistem" }
-                ?: "Default Sistem"
+            chatNotificationSoundLabel = prefs[Keys.CHAT_NOTIF_SOUND_LABEL]?.ifBlank { "System default" }
+                ?: "System default"
         )
     }
 

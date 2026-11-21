@@ -149,7 +149,7 @@ fun HudScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sambungkan Ulang WebSocket")
+                            Text("Reconnect")
                         }
                     }
                 }
@@ -182,7 +182,7 @@ fun HudScreen(
                     )
                 }
 
-                // 4. Single Framed Card: RIWAYAT PERINTAH PERANGKAT
+                // 4. Single Framed Card: Device Activity
                 item(key = "command_history_card") {
                     CommandHistoryCard(
                         commands = state.recentCommands,
@@ -211,14 +211,14 @@ fun HudScreen(
             containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
-                    text = "Hentikan Layanan Bridge?",
+                    text = "Stop background service?",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = "Koneksi WebSocket inti (/ws), telemetri perangkat, dan kendali jarak jauh akan dihentikan hingga Anda menyalakannya kembali.",
+                    text = "Core connection, device telemetry, and remote actions will pause until you start the service again.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -234,12 +234,12 @@ fun HudScreen(
                         contentColor = MaterialTheme.colorScheme.onError
                     )
                 ) {
-                    Text("Ya, Hentikan")
+                    Text("Stop")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showStopConfirmDialog = false }) {
-                    Text("Batal")
+                    Text("Cancel")
                 }
             }
         )
@@ -256,22 +256,22 @@ private fun DualConnectionRow(
 ) {
     val nexaColors = LocalNexaColors.current
     val (wsAColor, wsAIcon, wsAStatus) = when (connectionState) {
-        is ConnectionState.Connected -> Triple(nexaColors.emerald, Icons.Default.CheckCircle, "Terhubung · TLS")
-        is ConnectionState.Connecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Menyambungkan")
-        is ConnectionState.Reconnecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Ulang #${connectionState.attempt}")
-        is ConnectionState.Disconnected -> Triple(nexaColors.crimson, Icons.Default.CloudOff, "Terputus")
-        is ConnectionState.AuthFailed -> Triple(nexaColors.crimson, Icons.Default.ErrorOutline, "Gagal Auth")
+        is ConnectionState.Connected -> Triple(nexaColors.emerald, Icons.Default.CheckCircle, "Connected · TLS")
+        is ConnectionState.Connecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Connecting")
+        is ConnectionState.Reconnecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Retry #${connectionState.attempt}")
+        is ConnectionState.Disconnected -> Triple(nexaColors.crimson, Icons.Default.CloudOff, "Disconnected")
+        is ConnectionState.AuthFailed -> Triple(nexaColors.crimson, Icons.Default.ErrorOutline, "Auth failed")
     }
 
     val netBadge = when (networkType) {
         "WIFI" -> "Wi-Fi"
-        "CELLULAR" -> "Seluler"
+        "CELLULAR" -> "Cellular"
         "ETHERNET" -> "Ethernet"
         "OFFLINE" -> "Offline"
         else -> null
     }
     val displayHost = remember(serverHost) {
-        val raw = serverHost.ifBlank { "Belum diatur" }
+        val raw = serverHost.ifBlank { "Not configured" }
         if (raw.length > 26 && raw.contains(":")) {
             val portSuffix = raw.substringAfterLast(":")
             val hostOnly = raw.substringBeforeLast(":")
@@ -289,7 +289,7 @@ private fun DualConnectionRow(
             .height(IntrinsicSize.Max),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Koneksi A (Inti /ws)
+        // Core Link (/ws)
         HudSurfaceCard(
             modifier = Modifier
                 .weight(1f)
@@ -301,7 +301,7 @@ private fun DualConnectionRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Koneksi A (/ws)",
+                    text = "Core Link",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -343,7 +343,7 @@ private fun DualConnectionRow(
             }
         }
 
-        // Koneksi B (Sidecar /io) - reflects live SidecarLogsClient / SidecarTerminalClient state (U-H11 / RD-H2)
+        // Inspection Link (Sidecar /io) - reflects live SidecarLogsClient / SidecarTerminalClient state
         HudSurfaceCard(
             modifier = Modifier
                 .weight(1f)
@@ -355,7 +355,7 @@ private fun DualConnectionRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Koneksi B (/io)",
+                    text = "Inspection Link",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = if (isSidecarActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -379,7 +379,7 @@ private fun DualConnectionRow(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Aktif saat buka Log / Shell",
+                text = "Opens with Logs or Shell",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -393,10 +393,10 @@ private fun HudTelemetryGrid(state: HudUiState.Active) {
     val telemetry = state.lastTelemetry
 
     val batteryValue = if (telemetry != null) {
-        val modeText = if (telemetry.battery_charging) "Mengisi" else "Normal"
+        val modeText = if (telemetry.battery_charging) "Charging" else "Normal"
         "${telemetry.battery_level}% · $modeText"
     } else {
-        "Menunggu data"
+        "Waiting for data"
     }
     val batteryIcon = if (telemetry?.battery_charging == true) {
         Icons.Default.BatteryChargingFull
@@ -405,20 +405,20 @@ private fun HudTelemetryGrid(state: HudUiState.Active) {
     }
 
     val screenValue = when (telemetry?.screen_on) {
-        true -> "Menyala (${state.displayRefreshRateHz} Hz)"
-        false -> "Mati"
-        null -> "Menyala (${state.displayRefreshRateHz} Hz)"
+        true -> "On (${state.displayRefreshRateHz} Hz)"
+        false -> "Off"
+        null -> "On (${state.displayRefreshRateHz} Hz)"
     }
 
     val wakeLockValue = if (state.isPowerLockActive) {
-        "Aktif (Transfer)"
+        "Active (Transfer)"
     } else {
-        "Dilepas (Hemat Daya)"
+        "Power-save"
     }
     val wakeLockIcon = if (state.isPowerLockActive) Icons.Default.Bolt else Icons.Default.CheckCircle
     val wakeLockAccent = if (state.isPowerLockActive) nexaColors.amber else nexaColors.emerald
 
-    val hasGeofence = !state.geofenceSummary.startsWith("Belum")
+    val hasGeofence = !state.geofenceSummary.startsWith("No ")
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -428,7 +428,7 @@ private fun HudTelemetryGrid(state: HudUiState.Active) {
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             TelemetryStatCard(
-                label = "Baterai",
+                label = "Battery",
                 value = batteryValue,
                 icon = batteryIcon,
                 iconTint = nexaColors.emerald,
@@ -437,7 +437,7 @@ private fun HudTelemetryGrid(state: HudUiState.Active) {
                     .fillMaxHeight()
             )
             TelemetryStatCard(
-                label = "Status Layar",
+                label = "Display",
                 value = screenValue,
                 icon = Icons.Default.Smartphone,
                 iconTint = MaterialTheme.colorScheme.primary,
@@ -454,7 +454,7 @@ private fun HudTelemetryGrid(state: HudUiState.Active) {
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             TelemetryStatCard(
-                label = "WakeLock CPU",
+                label = "Power Lock",
                 value = wakeLockValue,
                 icon = wakeLockIcon,
                 iconTint = wakeLockAccent,
@@ -524,14 +524,14 @@ private fun PermissionsHygieneRow(
         ) {
             PermissionQuickChip(
                 icon = Icons.Outlined.QueryStats,
-                label = if (permissions.hasUsageStats) "Usage: Aktif" else "Usage: Off",
+                label = if (permissions.hasUsageStats) "Usage: On" else "Usage: Off",
                 granted = permissions.hasUsageStats,
                 onClick = onOpenUsageSettings,
                 modifier = Modifier.weight(1f)
             )
             PermissionQuickChip(
                 icon = if (permissions.hasNotifListener) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
-                label = if (permissions.hasNotifListener) "Notif: Aktif" else "Notif: Off",
+                label = if (permissions.hasNotifListener) "Notifications: On" else "Notifications: Off",
                 granted = permissions.hasNotifListener,
                 onClick = onOpenNotifSettings,
                 modifier = Modifier.weight(1f)
@@ -581,7 +581,7 @@ private fun CommandHistoryCard(
     val nexaColors = LocalNexaColors.current
     HudSurfaceCard {
         Text(
-            text = "RIWAYAT PERINTAH PERANGKAT",
+            text = "DEVICE ACTIVITY",
             style = NexaMonoTypography.badge,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -592,7 +592,7 @@ private fun CommandHistoryCard(
 
         if (commands.isEmpty()) {
             Text(
-                text = "Belum ada perintah perangkat yang dieksekusi pada sesi ini.",
+                text = "No device actions executed in this session.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 6.dp)
@@ -667,7 +667,7 @@ private fun BridgeServiceControlButton(
     if (isRunning) {
         var holdProgress by remember { mutableFloatStateOf(0f) }
 
-        // FR-CORE-07 / 02_hud_bridge_control_v2.png: 2-second hold-to-confirm with TalkBack dialog fallback
+        // 2-second hold-to-confirm with TalkBack dialog fallback
         Surface(
             color = nexaColors.crimson.copy(alpha = if (nexaColors.isDark) 0.12f else 0.08f),
             shape = RoundedCornerShape(12.dp),
@@ -676,9 +676,9 @@ private fun BridgeServiceControlButton(
                 .fillMaxWidth()
                 .heightIn(min = 52.dp)
                 .semantics {
-                    contentDescription = "Tahan 2 detik untuk hentikan layanan Bridge"
+                    contentDescription = "Hold 2 seconds to stop background service"
                     role = Role.Button
-                    onClick(label = "Buka konfirmasi hentikan layanan Bridge") {
+                    onClick(label = "Confirm stopping background service") {
                         onRequestStopDialog()
                         true
                     }
@@ -738,9 +738,9 @@ private fun BridgeServiceControlButton(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (holdProgress > 0f) {
-                            "Menahan... ${(holdProgress * 100).toInt()}%"
+                            "Holding... ${(holdProgress * 100).toInt()}%"
                         } else {
-                            "Tahan 2 dtk untuk Hentikan Layanan Bridge"
+                            "Hold 2s to Stop Bridge Service"
                         },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
@@ -770,7 +770,7 @@ private fun BridgeServiceControlButton(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Jalankan Layanan Bridge",
+                text = "Start Bridge Service",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
             )

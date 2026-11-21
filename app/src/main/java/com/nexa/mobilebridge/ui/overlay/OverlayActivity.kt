@@ -50,7 +50,7 @@ class OverlayActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         val commandId = intent.getStringExtra("COMMAND_ID") ?: "unknown"
-        val message = intent.getStringExtra("MESSAGE") ?: "Pesan dari N.E.X.A"
+        val message = intent.getStringExtra("MESSAGE") ?: "Message from N.E.X.A"
         val optionsJson = intent.getStringExtra("OPTIONS_JSON")
 
         val options: List<OverlayOption> = try {
@@ -98,9 +98,9 @@ class OverlayActivity : ComponentActivity() {
         finish()
     }
     private fun defaultOptions() = listOf(
-        OverlayOption("TIDAK", "NO", "#FF5252"),
-        OverlayOption("BICARA", "VOICE", "#CE93D8"),
-        OverlayOption("YA", "YES", "#00E676")
+        OverlayOption("NO", "NO", "#FF5252"),
+        OverlayOption("VOICE", "VOICE", "#CE93D8"),
+        OverlayOption("YES", "YES", "#00E676")
     )
 }
 

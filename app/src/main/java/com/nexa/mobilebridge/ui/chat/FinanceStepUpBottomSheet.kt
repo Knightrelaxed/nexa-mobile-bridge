@@ -164,12 +164,12 @@ fun FinanceStepUpBottomSheet(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Warning,
-                                contentDescription = "Peringatan Step-Up",
+                                contentDescription = "Approval warning",
                                 tint = amberText,
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "Butuh konfirmasi sidik jari",
+                                text = "Fingerprint approval required",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = amberText
@@ -179,7 +179,7 @@ fun FinanceStepUpBottomSheet(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Text(
-                            text = "Sisa $secondsLeft dtk",
+                            text = "${secondsLeft}s left",
                             style = NexaMonoTypography.badge,
                             fontWeight = FontWeight.Bold,
                             color = amberText
@@ -192,12 +192,12 @@ fun FinanceStepUpBottomSheet(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
-                            contentDescription = "FLAG_SECURE Aktif",
+                            contentDescription = "Screen protected",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(13.dp)
                         )
                         Text(
-                            text = "Layar terlindungi (FLAG_SECURE)",
+                            text = "Screen protected",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -218,22 +218,22 @@ fun FinanceStepUpBottomSheet(
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Row 1: Aksi + ID
+                    // Row 1: Action + ID
                     StepUpDetailRow(
-                        label = "Aksi",
+                        label = "Action",
                         value = "${stepUp.actionLabel} (ID: #${stepUp.actionId})",
                         isMono = true
                     )
                     HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
 
-                    // Row 2: Nominal (Highlighted in Cyan)
+                    // Row 2: Amount
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Nominal",
+                            text = "Amount",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -246,14 +246,14 @@ fun FinanceStepUpBottomSheet(
                     }
                     HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
 
-                    // Row 3: Penerima (Full Name Without Ellipsis - FR-AUTH-07)
+                    // Row 3: Recipient (Full Name Without Ellipsis - FR-AUTH-07)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.Top
                     ) {
                         Text(
-                            text = "Penerima",
+                            text = "Recipient",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(end = 12.dp)
@@ -269,10 +269,10 @@ fun FinanceStepUpBottomSheet(
                     }
                     HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
 
-                    // Row 4: Rekening Tujuan + Whitelist Status
-                    val wlTag = if (stepUp.whitelisted) "Whitelist" else "Non-Whitelist"
+                    // Row 4: Destination + Whitelist Status
+                    val wlTag = if (stepUp.whitelisted) "Verified" else "Unverified"
                     StepUpDetailRow(
-                        label = "Rekening Tujuan",
+                        label = "Destination",
                         value = "${stepUp.bank} •••• ${stepUp.acctLast4} ($wlTag)",
                         isMono = true,
                         valueColor = if (stepUp.whitelisted) {
@@ -283,9 +283,9 @@ fun FinanceStepUpBottomSheet(
                     )
                     HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
 
-                    // Row 5: Sisa Batas Harian
+                    // Row 5: Daily Limit Left
                     StepUpDetailRow(
-                        label = "Sisa Batas Harian",
+                        label = "Daily limit left",
                         value = stepUp.formattedDailyRemaining,
                         isMono = true
                     )
@@ -301,7 +301,7 @@ fun FinanceStepUpBottomSheet(
                 )
             }
 
-            // 3. Primary Biometric Confirmation Button (48 dp, #00B8D4 fill, #04181F dark text)
+            // 3. Primary Biometric Confirmation Button
             Button(
                 onClick = { onConfirmBiometric(stepUp) },
                 enabled = !stepUp.isSubmitting && secondsLeft > 0,
@@ -323,16 +323,16 @@ fun FinanceStepUpBottomSheet(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (stepUp.isSubmitting) {
-                        "Memverifikasi tanda tangan..."
+                        "Verifying..."
                     } else {
-                        "Konfirmasi dengan sidik jari"
+                        "Approve with fingerprint"
                     },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // 4. Secondary Cancel Button (48 dp, WCAG AA contrast >= 4.5:1)
+            // 4. Secondary Cancel Button
             OutlinedButton(
                 onClick = { onCancel(stepUp.actionId) },
                 enabled = !stepUp.isSubmitting,
@@ -347,7 +347,7 @@ fun FinanceStepUpBottomSheet(
                     .height(48.dp)
             ) {
                 Text(
-                    text = "Batalkan",
+                    text = "Cancel",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )

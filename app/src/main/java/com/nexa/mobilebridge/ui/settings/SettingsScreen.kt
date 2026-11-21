@@ -123,13 +123,11 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Minimalist grouped Settings & Security screen (Option A):
- * - Grouped list surfaces with 8dp rhythm, zero nested boxes, neutral-first hierarchy
- * - Top Ringkasan status card (live TLS connection + hardware key state)
- * - Frequency-ordered groups: Tampilan -> Notifikasi -> Koneksi Server -> Keamanan -> Lanjutan
- * - Full 32-octet SHA-256 fingerprint moved to DeviceSecurityDetailSheet
- * - View-first Server Connection with biometric-gated Edit mode & sticky Save bar
- * - Preserves all BIOMETRIC_STRONG guards, 10s token reveal, and FLAG_SECURE on release builds
+ * Minimalist grouped Settings screen (Full English UI):
+ * - Top summary card (live TLS status + device hardware key state)
+ * - Frequency-ordered groups: Appearance -> Notifications & Feedback -> Server Connection -> Device Security -> Advanced
+ * - Full 32-octet SHA-256 fingerprint inside DeviceSecurityDetailSheet
+ * - View-first Server Connection with fingerprint-gated Edit mode & sticky Save bar
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -137,7 +135,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onNavigateBack: () -> Unit
 ) {
-    // Otomatis aktif FLAG_SECURE pada build release; tetap bebas screenshot saat debug/testing.
+    // Automatically enforces FLAG_SECURE on release builds; allows screenshots during debug/testing.
     SecureScreenEffect(allowInDebugBuild = true)
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -154,7 +152,6 @@ fun SettingsScreen(
     var activePreviewRingtone by remember { mutableStateOf<Ringtone?>(null) }
     var isPlayingSoundPreview by remember { mutableStateOf(false) }
 
-    // Automatically revert Stop icon back to Play once notification tone finishes playing
     LaunchedEffect(activePreviewRingtone, isPlayingSoundPreview) {
         val currentRingtone = activePreviewRingtone
         if (currentRingtone != null && isPlayingSoundPreview) {
@@ -167,7 +164,6 @@ fun SettingsScreen(
         }
     }
 
-    // Auto-close enrollment dialog only when enrollment succeeds
     LaunchedEffect(uiState.lastEnrollSuccessTick) {
         if (uiState.lastEnrollSuccessTick > 0) {
             enrollCodeInput = ""
@@ -197,32 +193,32 @@ fun SettingsScreen(
             }
             val displayName = resolveAudioDisplayName(context, uri)
             viewModel.onChatNotificationSoundSelected(uri.toString(), displayName)
-            viewModel.setStatusNotice("Nada notifikasi chat diperbarui: $displayName")
+            viewModel.setStatusNotice("Chat notification tone updated: $displayName")
         }
     }
 
-    val dateFormatter = remember { SimpleDateFormat("dd MMM yyyy", Locale.forLanguageTag("id-ID")) }
+    val dateFormatter = remember { SimpleDateFormat("dd MMM yyyy", Locale.US) }
     val enrolledDateText = if (uiState.enrolledAtEpochSec > 0L) {
-        "Terdaftar ${dateFormatter.format(Date(uiState.enrolledAtEpochSec * 1000L))}"
+        "Paired ${dateFormatter.format(Date(uiState.enrolledAtEpochSec * 1000L))}"
     } else {
-        "Belum terdaftar di server"
+        "Not paired with server"
     }
 
     val isKeyInvalidated = uiState.keySnapshot.state == KeystoreKeyState.INVALIDATED ||
         uiState.enrollmentStatus == "INVALIDATED"
 
     val (identitySummaryTitle, identityBadgeLabel, identityStatusColor) = when {
-        isKeyInvalidated -> Triple("Kunci perangkat gugur", "Gugur", nexaColors.crimson)
-        uiState.enrollmentStatus == "ACTIVE" -> Triple("Kunci perangkat aktif · P-256", "Aktif · P-256", nexaColors.emerald)
-        else -> Triple("Perangkat belum terdaftar", "Belum daftar", nexaColors.amber)
+        isKeyInvalidated -> Triple("Device key invalidated", "Invalidated", nexaColors.crimson)
+        uiState.enrollmentStatus == "ACTIVE" -> Triple("Device key active · P-256", "Active · P-256", nexaColors.emerald)
+        else -> Triple("Device not paired", "Not paired", nexaColors.amber)
     }
 
     val (connStatusText, connStatusColor) = when (val cs = uiState.connectionState) {
-        is ConnectionState.Connected -> "Terhubung · TLS 1.3" to nexaColors.emerald
-        is ConnectionState.Connecting -> "Menyambungkan..." to nexaColors.amber
-        is ConnectionState.Reconnecting -> "Mencoba ulang #${cs.attempt}" to nexaColors.amber
-        is ConnectionState.AuthFailed -> "Gagal otentikasi" to nexaColors.crimson
-        is ConnectionState.Disconnected -> "Terputus" to nexaColors.crimson
+        is ConnectionState.Connected -> "Connected · TLS 1.3" to nexaColors.emerald
+        is ConnectionState.Connecting -> "Connecting..." to nexaColors.amber
+        is ConnectionState.Reconnecting -> "Reconnecting #${cs.attempt}" to nexaColors.amber
+        is ConnectionState.AuthFailed -> "Auth failed" to nexaColors.crimson
+        is ConnectionState.Disconnected -> "Disconnected" to nexaColors.crimson
     }
 
     fun requestTokenPeek() {
@@ -232,30 +228,30 @@ fun SettingsScreen(
         }
         val activity = context.findFragmentActivity()
         if (activity == null) {
-            viewModel.setStatusNotice("Activity biometrik tidak tersedia.")
+            viewModel.setStatusNotice("Biometric prompt is unavailable.")
             return
         }
         BiometricAuthHelper.authenticateGuard(
             activity = activity,
-            title = "Intip Token Jembatan",
-            subtitle = "Token akan terlihat selama 10 detik saja",
+            title = "Reveal Access Token",
+            subtitle = "Token will be visible for 10 seconds",
             onSuccess = { viewModel.startTokenReveal10Seconds() },
-            onError = { err -> viewModel.setStatusNotice("Ditolak: $err") }
+            onError = { err -> viewModel.setStatusNotice("Cancelled: $err") }
         )
     }
 
     fun requestServerEditUnlock() {
         val activity = context.findFragmentActivity()
         if (activity == null) {
-            viewModel.setStatusNotice("Activity biometrik tidak tersedia.")
+            viewModel.setStatusNotice("Biometric prompt is unavailable.")
             return
         }
         BiometricAuthHelper.authenticateGuard(
             activity = activity,
-            title = "Ubah Konfigurasi Server",
-            subtitle = "Verifikasi sidik jari untuk membuka pengaturan server N.E.X.A",
+            title = "Edit Server Configuration",
+            subtitle = "Verify fingerprint to edit N.E.X.A server settings",
             onSuccess = { viewModel.unlockServerEditAfterBiometric() },
-            onError = { err -> viewModel.setStatusNotice("Verifikasi dibatalkan: $err") }
+            onError = { err -> viewModel.setStatusNotice("Verification cancelled: $err") }
         )
     }
 
@@ -268,14 +264,14 @@ fun SettingsScreen(
             if (activity != null) {
                 BiometricAuthHelper.authenticateGuard(
                     activity = activity,
-                    title = "Terapkan Konfigurasi Server",
-                    subtitle = "Konfirmasi sidik jari untuk menyimpan pengaturan koneksi",
+                    title = "Apply Server Configuration",
+                    subtitle = "Confirm fingerprint to save connection settings",
                     onSuccess = { viewModel.saveSettings() },
-                    onError = { err -> viewModel.setStatusNotice("Dibatalkan: $err") }
+                    onError = { err -> viewModel.setStatusNotice("Cancelled: $err") }
                 )
             } else {
                 // Fail-closed: never bypass biometric verification
-                viewModel.setStatusNotice("Biometrik diperlukan untuk menerapkan pengaturan. Buka ulang halaman ini.")
+                viewModel.setStatusNotice("Fingerprint verification is required to save settings.")
             }
         } else {
             viewModel.saveSettings()
@@ -289,7 +285,7 @@ fun SettingsScreen(
                     title = {
                         Column {
                             Text(
-                                text = "Pengaturan",
+                                text = "Settings",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -305,7 +301,7 @@ fun SettingsScreen(
                                         modifier = Modifier.size(11.dp)
                                     )
                                     Text(
-                                        text = "Layar terlindungi",
+                                        text = "Protected screen",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -320,7 +316,7 @@ fun SettingsScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Kembali"
+                                contentDescription = "Back"
                             )
                         }
                     },
@@ -369,7 +365,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, nexaColors.cardBorder)
                             ) {
-                                Text("Batalkan", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Cancel", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Button(
                                 onClick = { requestApplyServerChanges() },
@@ -393,9 +389,9 @@ fun SettingsScreen(
                                 }
                                 Text(
                                     text = if (uiState.enrollmentStatus == "ACTIVE") {
-                                        "Terapkan (Sidik Jari)"
+                                        "Apply (Fingerprint)"
                                     } else {
-                                        "Simpan Koneksi"
+                                        "Save Connection"
                                     },
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -427,7 +423,7 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 1. RINGKASAN (2-second glanceable live status card)
+            // 1. SUMMARY
             // =================================================================
             Column {
                 SettingsGroupCard {
@@ -495,7 +491,7 @@ fun SettingsScreen(
                             )
                         }
                         Text(
-                            text = "Detail",
+                            text = "Details",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -525,14 +521,14 @@ fun SettingsScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "Kunci Keystore Gugur (Sidik Jari OS Berubah)",
+                                    text = "Device key invalidated",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = nexaColors.crimson
                                 )
                             }
                             Text(
-                                text = "Buat ulang pasangan kunci P-256 lalu jalankan nexa-enroll re-pair di server.",
+                                text = "System fingerprints changed. Regenerate the P-256 key and run nexa-enroll re-pair on your server.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -547,7 +543,7 @@ fun SettingsScreen(
                                     contentColor = MaterialTheme.colorScheme.onError
                                 )
                             ) {
-                                Text("Buat Ulang Kunci Hardware", fontWeight = FontWeight.SemiBold)
+                                Text("Regenerate Hardware Key", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -555,12 +551,11 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 2. TAMPILAN (Most frequently customized controls)
+            // 2. APPEARANCE
             // =================================================================
             Column {
-                SettingsGroupHeader(title = "Tampilan")
+                SettingsGroupHeader(title = "Appearance")
                 SettingsGroupCard {
-                    // Single 3-choice Theme Mode segmented control (Sistem | Gelap OLED | Terang)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -568,16 +563,16 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "Mode tampilan",
+                            text = "Theme",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         SettingsSegmentedControl(
                             options = listOf(
-                                ThemeMode.SYSTEM to "Sistem",
-                                ThemeMode.DARK to "Gelap OLED",
-                                ThemeMode.LIGHT to "Terang"
+                                ThemeMode.SYSTEM to "System",
+                                ThemeMode.DARK to "Dark",
+                                ThemeMode.LIGHT to "Light"
                             ),
                             selected = uiState.themeMode,
                             onSelect = { mode ->
@@ -592,7 +587,6 @@ fun SettingsScreen(
 
                     SettingsRowDivider(insetStart = false)
 
-                    // Accent Swatches: 4 clean 38dp circular swatches with consistent single checkmark
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -605,7 +599,7 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Warna aksen",
+                                text = "Accent color",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -633,7 +627,7 @@ fun SettingsScreen(
                                         .clip(RoundedCornerShape(10.dp))
                                         .semantics {
                                             selected = isSelected
-                                            contentDescription = "Aksen ${preset.displayName}"
+                                            contentDescription = "${preset.displayName} accent"
                                         }
                                         .clickable(role = Role.RadioButton) {
                                             if (uiState.hapticEnabled) {
@@ -688,7 +682,6 @@ fun SettingsScreen(
 
                     SettingsRowDivider(insetStart = false)
 
-                    // Terminal Font Size Slider + clean 1-line preview
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -701,7 +694,7 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Ukuran font terminal",
+                                text = "Terminal font size",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -753,15 +746,15 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 3. NOTIFIKASI & UMPAN BALIK
+            // 3. NOTIFICATIONS & FEEDBACK
             // =================================================================
             Column {
-                SettingsGroupHeader(title = "Notifikasi & Umpan Balik")
+                SettingsGroupHeader(title = "Notifications & Feedback")
                 SettingsGroupCard {
                     SettingsListRow(
                         leadingIcon = Icons.Default.Tune,
-                        title = "Getaran haptik",
-                        subtitle = "Umpan balik sentuh pada tombol utama",
+                        title = "Haptic feedback",
+                        subtitle = "Touch vibration on primary actions",
                         trailing = {
                             Switch(
                                 checked = uiState.hapticEnabled,
@@ -779,8 +772,10 @@ fun SettingsScreen(
 
                     SettingsListRow(
                         leadingIcon = Icons.Default.Audiotrack,
-                        title = "Nada notifikasi chat",
-                        subtitle = uiState.chatNotificationSoundLabel,
+                        title = "Chat notification tone",
+                        subtitle = uiState.chatNotificationSoundLabel.let {
+                            if (it == "Default Sistem") "System default" else it
+                        },
                         onClick = { soundPickerLauncher.launch(arrayOf("audio/*")) },
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -790,7 +785,7 @@ fun SettingsScreen(
                                             runCatching { activePreviewRingtone?.stop() }
                                             activePreviewRingtone = null
                                             isPlayingSoundPreview = false
-                                            viewModel.onChatNotificationSoundSelected("", "Default Sistem")
+                                            viewModel.onChatNotificationSoundSelected("", "System default")
                                         },
                                         contentPadding = PaddingValues(horizontal = 8.dp),
                                         modifier = Modifier.heightIn(min = 44.dp)
@@ -818,7 +813,7 @@ fun SettingsScreen(
                                                 activePreviewRingtone = ringtone
                                                 isPlayingSoundPreview = true
                                             } else {
-                                                viewModel.setStatusNotice("Gagal memutar pratinjau nada notifikasi.")
+                                                viewModel.setStatusNotice("Could not play notification tone preview.")
                                             }
                                         }
                                     },
@@ -826,7 +821,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         imageVector = if (isPlayingSoundPreview) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                        contentDescription = if (isPlayingSoundPreview) "Hentikan pratinjau nada" else "Putar pratinjau nada",
+                                        contentDescription = if (isPlayingSoundPreview) "Stop preview" else "Play preview",
                                         tint = if (isPlayingSoundPreview) {
                                             MaterialTheme.colorScheme.primary
                                         } else {
@@ -843,30 +838,30 @@ fun SettingsScreen(
 
                     SettingsListRow(
                         leadingIcon = Icons.Default.Notifications,
-                        title = "Pengaturan notifikasi sistem",
-                        subtitle = "Suara, getar & layar terkunci per kategori",
+                        title = "System notification settings",
+                        subtitle = "Sound, vibration, and lock screen per channel",
                         showChevron = true,
                         onClick = {
                             val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
                                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
                             }
                             runCatching { context.startActivity(intent) }
-                                .onFailure { viewModel.setStatusNotice("Tidak dapat membuka pengaturan notifikasi sistem.") }
+                                .onFailure { viewModel.setStatusNotice("Unable to open system notification settings.") }
                         }
                     )
                 }
             }
 
             // =================================================================
-            // 4. KONEKSI SERVER (View-first; Edit behind BIOMETRIC_STRONG)
+            // 4. SERVER CONNECTION (View-first; Edit behind fingerprint)
             // =================================================================
             Column {
                 val showLockHeaderAction = uiState.isServerEditMode &&
                     uiState.enrollmentStatus == "ACTIVE" &&
                     !uiState.hasUnsavedServerChanges
                 SettingsGroupHeader(
-                    title = "Koneksi Server",
-                    trailingActionLabel = if (showLockHeaderAction) "Selesai" else null,
+                    title = "Server Connection",
+                    trailingActionLabel = if (showLockHeaderAction) "Done" else null,
                     onTrailingAction = if (showLockHeaderAction) {
                         { viewModel.discardServerChanges() }
                     } else null
@@ -875,16 +870,15 @@ fun SettingsScreen(
                     val isTokenVisible = uiState.tokenRevealSecondsLeft > 0
 
                     if (!uiState.isServerEditMode) {
-                        // Clean read-only rows
                         SettingsListRow(
                             leadingIcon = Icons.Default.Public,
-                            title = "Domain server",
+                            title = "Server domain",
                             subtitle = extractDisplayHost(uiState.serverUrl),
                             subtitleMonospace = true,
                             trailing = {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
-                                    contentDescription = "Domain terkunci",
+                                    contentDescription = "Domain locked",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -895,20 +889,20 @@ fun SettingsScreen(
 
                         SettingsListRow(
                             leadingIcon = Icons.Default.Key,
-                            title = "Token jembatan",
+                            title = "Access token",
                             subtitle = if (isTokenVisible) {
-                                uiState.authToken.ifBlank { "Belum diatur" }
+                                uiState.authToken.ifBlank { "Not set" }
                             } else if (uiState.authToken.isNotBlank()) {
                                 "••••••••••••••••"
                             } else {
-                                "Belum diatur"
+                                "Not set"
                             },
                             subtitleMonospace = isTokenVisible || uiState.authToken.isNotBlank(),
                             trailing = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (isTokenVisible) {
                                         Text(
-                                            text = "${uiState.tokenRevealSecondsLeft} dtk",
+                                            text = "${uiState.tokenRevealSecondsLeft}s",
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontFamily = FontFamily.Monospace
                                             ),
@@ -922,7 +916,7 @@ fun SettingsScreen(
                                     ) {
                                         Icon(
                                             imageVector = if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                            contentDescription = if (isTokenVisible) "Sembunyikan token" else "Intip token 10 detik",
+                                            contentDescription = if (isTokenVisible) "Hide token" else "Reveal token for 10s",
                                             tint = if (isTokenVisible) nexaColors.amber else MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -935,15 +929,15 @@ fun SettingsScreen(
 
                         SettingsListRow(
                             leadingIcon = Icons.Default.Lock,
-                            title = "HMAC Secret",
-                            trailingText = if (uiState.hmacSecret.isNotBlank()) "Tersimpan" else "Belum diatur"
+                            title = "HMAC secret",
+                            trailingText = if (uiState.hmacSecret.isNotBlank()) "Saved" else "Not set"
                         )
 
                         SettingsRowDivider(insetStart = true)
 
                         SettingsListRow(
                             leadingIcon = Icons.Default.Refresh,
-                            title = "Uji koneksi",
+                            title = "Test connection",
                             showChevron = true,
                             onClick = { viewModel.testConnection() }
                         )
@@ -952,13 +946,12 @@ fun SettingsScreen(
 
                         SettingsListRow(
                             leadingIcon = Icons.Default.Edit,
-                            title = "Ubah konfigurasi",
-                            subtitle = "Verifikasi sidik jari diperlukan",
+                            title = "Edit configuration",
+                            subtitle = "Fingerprint verification required",
                             showChevron = true,
                             onClick = { requestServerEditUnlock() }
                         )
                     } else {
-                        // Uniform floating-label Edit Mode (unlocked via biometric or initial setup)
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -968,7 +961,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = uiState.serverUrl,
                                 onValueChange = { viewModel.onServerUrlChanged(it) },
-                                label = { Text("Domain Server (WSS)") },
+                                label = { Text("Server domain (WSS)") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
@@ -978,7 +971,7 @@ fun SettingsScreen(
                                 OutlinedTextField(
                                     value = uiState.authToken,
                                     onValueChange = { viewModel.onAuthTokenChanged(it) },
-                                    label = { Text("Token Jembatan (Bearer)") },
+                                    label = { Text("Access token (Bearer)") },
                                     singleLine = true,
                                     visualTransformation = if (isTokenVisible) {
                                         VisualTransformation.None
@@ -992,7 +985,7 @@ fun SettingsScreen(
                                         ) {
                                             Icon(
                                                 imageVector = if (isTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                                contentDescription = if (isTokenVisible) "Sembunyikan token" else "Intip token 10 detik"
+                                                contentDescription = if (isTokenVisible) "Hide token" else "Reveal token for 10s"
                                             )
                                         }
                                     },
@@ -1000,9 +993,9 @@ fun SettingsScreen(
                                 )
                                 Text(
                                     text = if (isTokenVisible) {
-                                        "Token terlihat sementara (${uiState.tokenRevealSecondsLeft} dtk tersisa)"
+                                        "Token visible temporarily (${uiState.tokenRevealSecondsLeft}s left)"
                                     } else {
-                                        "Intip 10 dtk (wajib sidik jari)"
+                                        "Reveal for 10s (fingerprint required)"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isTokenVisible) nexaColors.amber else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1012,7 +1005,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = uiState.hmacSecret,
                                 onValueChange = { viewModel.onHmacSecretChanged(it) },
-                                label = { Text("HMAC Secret") },
+                                label = { Text("HMAC secret") },
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth()
@@ -1023,7 +1016,7 @@ fun SettingsScreen(
 
                         SettingsListRow(
                             leadingIcon = Icons.Default.Refresh,
-                            title = "Uji koneksi",
+                            title = "Test connection",
                             showChevron = true,
                             onClick = { viewModel.testConnection() }
                         )
@@ -1032,14 +1025,14 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 5. KEAMANAN PERANGKAT (Clean summary rows; full SHA-256 in bottom sheet)
+            // 5. DEVICE SECURITY
             // =================================================================
             Column {
-                SettingsGroupHeader(title = "Keamanan Perangkat")
+                SettingsGroupHeader(title = "Device Security")
                 SettingsGroupCard {
                     SettingsListRow(
                         leadingIcon = Icons.Default.Shield,
-                        title = "Identitas & kunci",
+                        title = "Device identity & key",
                         subtitle = "Keystore ${uiState.keySnapshot.securityLevelLabel} · ${formatFingerprintPreview(uiState.keySnapshot.sha256ColonHex)}",
                         subtitleMonospace = true,
                         showChevron = true,
@@ -1050,8 +1043,8 @@ fun SettingsScreen(
 
                     SettingsListRow(
                         leadingIcon = Icons.Default.Fingerprint,
-                        title = "Metode otentikasi",
-                        subtitle = "Sidik jari per penggunaan (BIOMETRIC_STRONG)"
+                        title = "Authentication",
+                        subtitle = "Fingerprint required per sensitive action"
                     )
 
                     SettingsRowDivider(insetStart = true)
@@ -1059,11 +1052,11 @@ fun SettingsScreen(
                     SettingsListRow(
                         leadingIcon = Icons.Default.Terminal,
                         title = if (uiState.enrollmentStatus == "ACTIVE") {
-                            "Panduan daftar ulang (re-pair)"
+                            "Re-pair device"
                         } else {
-                            "Daftarkan perangkat via CLI"
+                            "Pair device via CLI"
                         },
-                        subtitle = "Sinkronisasi kunci melalui nexa-enroll",
+                        subtitle = "Sync hardware key via nexa-enroll",
                         showChevron = true,
                         onClick = {
                             viewModel.clearEnrollError()
@@ -1074,10 +1067,10 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 6. LANJUTAN (Heartbeat compact segmented controls + Kill switch)
+            // 6. ADVANCED
             // =================================================================
             Column {
-                SettingsGroupHeader(title = "Lanjutan")
+                SettingsGroupHeader(title = "Advanced")
                 SettingsGroupCard {
                     Column(
                         modifier = Modifier
@@ -1086,13 +1079,13 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Heartbeat layar menyala",
+                            text = "Heartbeat (screen on)",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         SettingsSegmentedControl(
-                            options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_ON_OPTIONS.map { it to "${it}d" },
+                            options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_ON_OPTIONS.map { it to "${it}s" },
                             selected = uiState.heartbeatScreenOnSec,
                             onSelect = { sec ->
                                 if (uiState.hapticEnabled) {
@@ -1114,13 +1107,13 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Heartbeat layar mati",
+                            text = "Heartbeat (screen off)",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         SettingsSegmentedControl(
-                            options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_OFF_OPTIONS.map { it to "${it}d" },
+                            options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_OFF_OPTIONS.map { it to "${it}s" },
                             selected = uiState.heartbeatScreenOffSec,
                             onSelect = { sec ->
                                 if (uiState.hapticEnabled) {
@@ -1136,7 +1129,7 @@ fun SettingsScreen(
                     SettingsRowDivider(insetStart = false)
 
                     SettingsListRow(
-                        title = "Kill switch terminal",
+                        title = "Server terminal access",
                         subtitle = uiState.killSwitchSubtitle,
                         trailingText = uiState.killSwitchLabel,
                         trailingColor = if (uiState.isKillSwitchActive) {
@@ -1160,11 +1153,11 @@ fun SettingsScreen(
             statusColor = identityStatusColor,
             onCopyDeviceId = {
                 copyToClipboard(context, "NEXA Device ID", uiState.deviceName)
-                viewModel.setStatusNotice("ID perangkat disalin.")
+                viewModel.setStatusNotice("Device ID copied.")
             },
             onCopyFingerprint = {
                 copyToClipboard(context, "NEXA SHA-256 Fingerprint", uiState.keySnapshot.sha256ColonHex)
-                viewModel.setStatusNotice("Sidik jari SHA-256 (32 oktet) disalin.")
+                viewModel.setStatusNotice("SHA-256 fingerprint copied.")
             },
             onRegenerateKey = { viewModel.regenerateHardwareKey() },
             onOpenEnrollDialog = {
@@ -1182,7 +1175,7 @@ fun SettingsScreen(
             onCodeChanged = { enrollCodeInput = it },
             onCopyCommand = { cmd ->
                 copyToClipboard(context, "NEXA Enroll CLI", cmd)
-                viewModel.setStatusNotice("Perintah CLI disalin.")
+                viewModel.setStatusNotice("CLI command copied.")
             },
             onSubmit = { viewModel.submitEnrollmentCode(enrollCodeInput) },
             onDismiss = {
@@ -1204,9 +1197,9 @@ private fun resolveAudioDisplayName(context: Context, uri: Uri): String {
                 }
             }
         }
-        uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { "Audio Kustom" } ?: "Audio Kustom"
+        uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { "Custom tone" } ?: "Custom tone"
     } catch (_: Exception) {
-        "Audio Kustom"
+        "Custom tone"
     }
 }
 

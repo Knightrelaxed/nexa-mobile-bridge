@@ -168,7 +168,7 @@ class ChatRepository @Inject constructor(
         replyTo: ChatReplyTarget? = null
     ): String {
         val clean = content.trim()
-        require(clean.isNotEmpty()) { "Pesan tidak boleh kosong" }
+        require(clean.isNotEmpty()) { "Message cannot be empty" }
 
         val clientMsgId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
@@ -191,7 +191,7 @@ class ChatRepository @Inject constructor(
             _streamState.update {
                 it.copy(
                     avatarState = NexaAvatarState.ALERT,
-                    lastError = "Offline: pesan masuk antrean kirim otomatis."
+                    lastError = "Offline: message queued for auto-send."
                 )
             }
         }
@@ -203,7 +203,7 @@ class ChatRepository @Inject constructor(
      */
     suspend fun sendVoiceMessage(clientMsgId: String, metadata: VoiceNoteMetadata): String {
         val now = System.currentTimeMillis()
-        val label = "Pesan suara (${VoiceNoteWaveform.formatDuration(metadata.durationMs)})"
+        val label = "Voice message (${VoiceNoteWaveform.formatDuration(metadata.durationMs)})"
 
         val userEntity = ChatMessageEntity(
             id = UUID.randomUUID().toString(),
@@ -222,7 +222,7 @@ class ChatRepository @Inject constructor(
             _streamState.update {
                 it.copy(
                     avatarState = NexaAvatarState.ALERT,
-                    lastError = "Offline: pesan suara masuk antrean kirim otomatis."
+                    lastError = "Offline: voice message queued for auto-send."
                 )
             }
         }
@@ -272,7 +272,7 @@ class ChatRepository @Inject constructor(
         webSocketClient.send(payload)
 
         activeStreams.remove(activeId)?.let { session ->
-            session.channel.cancel(CancellationException("Dibatalkan oleh pengguna"))
+            session.channel.cancel(CancellationException("Cancelled by user"))
             session.consumerJob?.cancel()
         }
         _streamState.update {
@@ -360,7 +360,7 @@ class ChatRepository @Inject constructor(
                 if (curr?.actionId == actionId) {
                     curr.copy(
                         isSubmitting = false,
-                        errorBanner = "Koneksi terputus saat mengirim otorisasi. Periksa jaringan dan coba lagi."
+                        errorBanner = "Connection lost while sending approval. Check your network and try again."
                     )
                 } else curr
             }
@@ -426,7 +426,7 @@ class ChatRepository @Inject constructor(
                     id = UUID.randomUUID().toString(),
                     clientMsgId = "stepup-exp-$actionId-${System.currentTimeMillis()}",
                     role = ChatRole.ASSISTANT,
-                    content = "Waktu konfirmasi sidik jari 30 detik untuk aksi #${current.actionId} (${current.formattedAmount} ke ${current.recipientFull}) telah habis. Silakan kirim ulang perintah bila masih ingin melanjutkan.",
+                    content = "The 30-second fingerprint approval for action #${current.actionId} (${current.formattedAmount} to ${current.recipientFull}) expired. Send the request again if you still want to proceed.",
                     timestamp = System.currentTimeMillis(),
                     status = ChatStatus.SENT,
                     intentTag = "FINANCE_STEPUP_EXPIRED"
@@ -492,7 +492,7 @@ class ChatRepository @Inject constructor(
                 _streamState.update {
                     it.copy(
                         avatarState = NexaAvatarState.ALERT,
-                        lastError = "Gagal mengirim pesan setelah $MAX_RETRY_ATTEMPTS percobaan."
+                        lastError = "Failed to send message after $MAX_RETRY_ATTEMPTS attempts."
                     )
                 }
             }
@@ -521,7 +521,7 @@ class ChatRepository @Inject constructor(
                 _streamState.update {
                     it.copy(
                         avatarState = NexaAvatarState.ALERT,
-                        lastError = "Server belum mengonfirmasi pesan setelah $MAX_RETRY_ATTEMPTS percobaan."
+                        lastError = "Server did not acknowledge message after $MAX_RETRY_ATTEMPTS attempts."
                     )
                 }
             } else if (webSocketClient.isConnected()) {
@@ -548,7 +548,7 @@ class ChatRepository @Inject constructor(
             _streamState.update {
                 it.copy(
                     avatarState = NexaAvatarState.ALERT,
-                    lastError = "File rekaman suara tidak ditemukan atau terlalu pendek."
+                    lastError = "Voice recording file is missing or too short."
                 )
             }
             return
@@ -558,7 +558,7 @@ class ChatRepository @Inject constructor(
             _streamState.update {
                 it.copy(
                     avatarState = NexaAvatarState.ALERT,
-                    lastError = "Ukuran file pesan suara melebihi batas pengiriman (1.5 MB)."
+                    lastError = "Voice recording exceeds the 1.5 MB upload limit."
                 )
             }
             return
@@ -572,7 +572,7 @@ class ChatRepository @Inject constructor(
             _streamState.update {
                 it.copy(
                     avatarState = NexaAvatarState.ALERT,
-                    lastError = "Gagal membaca file rekaman suara."
+                    lastError = "Failed to read voice recording file."
                 )
             }
             return
@@ -623,7 +623,7 @@ class ChatRepository @Inject constructor(
                 _streamState.update {
                     it.copy(
                         avatarState = NexaAvatarState.ALERT,
-                        lastError = "Gagal mengirim pesan suara setelah $MAX_RETRY_ATTEMPTS percobaan."
+                        lastError = "Failed to send voice message after $MAX_RETRY_ATTEMPTS attempts."
                     )
                 }
             }
@@ -647,7 +647,7 @@ class ChatRepository @Inject constructor(
                 _streamState.update {
                     it.copy(
                         avatarState = NexaAvatarState.ALERT,
-                        lastError = "Server belum mengonfirmasi pesan suara setelah $MAX_RETRY_ATTEMPTS percobaan."
+                        lastError = "Server did not acknowledge voice message after $MAX_RETRY_ATTEMPTS attempts."
                     )
                 }
             } else if (webSocketClient.isConnected()) {
@@ -776,12 +776,12 @@ class ChatRepository @Inject constructor(
             if (wasUserStopped) {
                 // User explicitly pressed Stop: do not show crimson error or spawn ghost assistant row
                 activeStreams.remove(clientMsgId)?.let { session ->
-                    session.channel.cancel(CancellationException("Dibatalkan oleh pengguna"))
+                    session.channel.cancel(CancellationException("Cancelled by user"))
                 }
                 return
             }
 
-            val errMsg = obj.optString("error", "Stream dibatalkan oleh server.")
+            val errMsg = obj.optString("error", "Stream cancelled by server.")
             val existingSession = activeStreams.remove(clientMsgId)
             existingSession?.channel?.cancel(CancellationException(errMsg))
 
@@ -840,7 +840,7 @@ class ChatRepository @Inject constructor(
     private suspend fun handleChatResumeMiss(obj: JSONObject) {
         val clientMsgId = obj.optString("client_msg_id").takeIf { it.isNotBlank() } ?: return
         activeStreams.remove(clientMsgId)?.let { session ->
-            session.channel.cancel(CancellationException("Buffer server kedaluwarsa"))
+            session.channel.cancel(CancellationException("Server stream buffer expired"))
         }
         val row = chatMessageDao.getByClientMsgIdAndRole(clientMsgId, ChatRole.ASSISTANT)
         if (row != null && row.status == ChatStatus.STREAMING) {
@@ -859,10 +859,10 @@ class ChatRepository @Inject constructor(
         val pending = PendingFinanceStepUp(
             actionId = actionId,
             clientMsgId = obj.optString("client_msg_id", ""),
-            actionLabel = obj.optString("action_label", "Transfer Dana"),
+            actionLabel = obj.optString("action_label", "Fund Transfer"),
             amount = obj.optLong("amount", 0L),
             formattedAmount = obj.optString("formatted_amount", "Rp 0"),
-            recipientFull = obj.optString("recipient_full", "Penerima"),
+            recipientFull = obj.optString("recipient_full", "Recipient"),
             bank = obj.optString("bank", "Bank"),
             acctLast4 = obj.optString("acct_last4", "0000"),
             whitelisted = obj.optBoolean("whitelisted", false),

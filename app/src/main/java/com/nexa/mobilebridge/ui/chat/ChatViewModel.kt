@@ -176,9 +176,9 @@ class ChatViewModel @Inject constructor(
     fun selectReplyTarget(message: ChatMessageEntity, resolvedContent: String = message.content) {
         val voiceMeta = VoiceNoteMetadata.fromJson(message.executionMetadata)
         val preview = if (voiceMeta != null) {
-            "Pesan suara (${VoiceNoteWaveform.formatDuration(voiceMeta.durationMs)})"
+            "Voice message (${VoiceNoteWaveform.formatDuration(voiceMeta.durationMs)})"
         } else {
-            ChatReplyMetadata.sanitizePreview(resolvedContent).ifBlank { "Pesan" }
+            ChatReplyMetadata.sanitizePreview(resolvedContent).ifBlank { "Message" }
         }
         _replyTarget.value = ChatReplyTarget(
             messageId = message.id,
@@ -234,7 +234,7 @@ class ChatViewModel @Inject constructor(
     fun startVoiceRecording(): Boolean {
         if (isFinalizingVoice || _voiceRecordingState.value.phase != VoiceRecordingPhase.IDLE) return false
         if (chatRepository.isLiveCallActive()) {
-            showVoiceHint("Mikrofon sedang dipakai Panggilan Suara")
+            showVoiceHint("Microphone is in use by Voice Call")
             return false
         }
 
@@ -244,7 +244,7 @@ class ChatViewModel @Inject constructor(
         val clientMsgId = UUID.randomUUID().toString()
         val started = voiceNoteRecorder.start(clientMsgId)
         if (!started) {
-            showVoiceHint("Gagal mengakses mikrofon perangkat")
+            showVoiceHint("Unable to access microphone")
             return false
         }
 
@@ -326,7 +326,7 @@ class ChatViewModel @Inject constructor(
         if (!autoStoppedAtLimit && elapsedMs < MIN_VOICE_DURATION_MS) {
             voiceNoteRecorder.cancelAndDelete()
             _voiceRecordingState.value = VoiceRecordingUiState(phase = VoiceRecordingPhase.IDLE)
-            showVoiceHint("Tahan untuk merekam")
+            showVoiceHint("Hold to record")
             return
         }
 
@@ -345,7 +345,7 @@ class ChatViewModel @Inject constructor(
                     voiceNoteRecorder.stopAndFinalize()
                 }
                 if (recorded == null) {
-                    showVoiceHint("Gagal menyimpan rekaman suara")
+                    showVoiceHint("Failed to save voice recording")
                     return@launch
                 }
                 if (_replyTarget.value?.messageId == reply?.messageId) {
@@ -411,7 +411,7 @@ class ChatViewModel @Inject constructor(
     fun copyToClipboard(text: String) {
         if (text.isBlank()) return
         val clipboard = appContext.getSystemService(ClipboardManager::class.java)
-        clipboard?.setPrimaryClip(ClipData.newPlainText("Pesan N.E.X.A", text))
+        clipboard?.setPrimaryClip(ClipData.newPlainText("N.E.X.A Message", text))
     }
 
     fun copySelected() {
@@ -488,7 +488,7 @@ class ChatViewModel @Inject constructor(
             Log.e(TAG, "Finance Step-Up canonical_hash mismatch for actionId=${stepUp.actionId}")
             chatRepository.setStepUpError(
                 stepUp.actionId,
-                "Hash integritas transaksi tidak cocok dengan detail di layar. Otorisasi dibatalkan demi keamanan."
+                "Transaction integrity check failed. Approval was cancelled for your safety."
             )
             return
         }
@@ -496,7 +496,7 @@ class ChatViewModel @Inject constructor(
         if (!BiometricAuthHelper.isStrongBiometricAvailable(activity)) {
             chatRepository.setStepUpError(
                 stepUp.actionId,
-                "Sensor sidik jari kuat (BIOMETRIC_STRONG) belum aktif di perangkat ini."
+                "Strong fingerprint unlock is not enabled on this device."
             )
             return
         }
@@ -509,13 +509,13 @@ class ChatViewModel @Inject constructor(
             }
             chatRepository.setStepUpError(
                 stepUp.actionId,
-                "Kunci perangkat gugur karena perubahan sidik jari Android. Buka Pengaturan -> Panduan Daftar Ulang (nexa-enroll re-pair)."
+                "Device key was invalidated after a fingerprint change. Open Settings to re-pair this device."
             )
             return
         } catch (e: Exception) {
             chatRepository.setStepUpError(
                 stepUp.actionId,
-                "Gagal menyiapkan kunci Android Keystore: ${e.message}"
+                "Failed to prepare hardware key: ${e.message}"
             )
             return
         }
@@ -529,9 +529,9 @@ class ChatViewModel @Inject constructor(
         cancelActiveBiometricPrompt()
         activeBiometricPrompt = BiometricAuthHelper.authenticateAndSign(
             activity = activity,
-            title = "Konfirmasi ${stepUp.formattedAmount}",
+            title = "Approve ${stepUp.formattedAmount}",
             subtitle = "${stepUp.recipientFull} (${stepUp.bank} •••• ${stepUp.acctLast4})",
-            negativeButtonText = "Batalkan",
+            negativeButtonText = "Cancel",
             signature = signature,
             payloadToSign = payloadToSign,
             onSigned = { sigDerBytes ->
@@ -562,7 +562,7 @@ class ChatViewModel @Inject constructor(
     fun reportStepUpMissingActivity(actionId: String) {
         chatRepository.setStepUpError(
             actionId,
-            "Activity biometrik tidak tersedia. Buka ulang layar chat lalu ulangi konfirmasi sidik jari."
+            "Unable to open fingerprint prompt. Reopen Chat and try again."
         )
     }
 

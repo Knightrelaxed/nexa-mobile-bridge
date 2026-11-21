@@ -42,7 +42,7 @@ class ThemeModeTest {
         val latest = NexaBridgeService.commandHistory.value.first()
 
         assertEquals("FINANCE_AUTH_VERIFY", latest.action)
-        assertEquals("[Disamarkan]", latest.summary)
+        assertEquals("[Redacted]", latest.summary)
         assertTrue(latest.isSensitive)
         assertTrue(latest.isSuccess)
         assertEquals(42L, latest.durationMs)

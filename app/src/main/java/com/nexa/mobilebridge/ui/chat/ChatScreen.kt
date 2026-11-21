@@ -209,9 +209,9 @@ fun ChatScreen(
     ) { granted ->
         hasMicPermission = granted
         if (!granted) {
-            viewModel.showVoiceHint("Izin mikrofon diperlukan untuk merekam pesan suara")
+            viewModel.showVoiceHint("Microphone permission is required to record voice notes")
         } else {
-            viewModel.showVoiceHint("Tahan ikon mikrofon untuk mulai merekam")
+            viewModel.showVoiceHint("Hold mic to record")
         }
     }
     val listState = rememberLazyListState()
@@ -449,7 +449,7 @@ fun ChatScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Tutup peringatan",
+                            contentDescription = "Dismiss alert",
                             tint = nexaColors.crimson,
                             modifier = Modifier.size(18.dp)
                         )
@@ -654,7 +654,7 @@ fun ChatScreen(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Lompat ke pesan terbaru",
+                                contentDescription = "Jump to latest message",
                                 tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(22.dp)
                             )
@@ -985,7 +985,7 @@ private fun SwipeToReplyContainer(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Reply,
-                        contentDescription = "Balas pesan",
+                        contentDescription = "Reply to message",
                         tint = iconTint,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1063,11 +1063,11 @@ private fun UserChatBubble(
             .onGloballyPositioned { coords -> bubbleWindowPos = coords.positionInWindow() }
             .semantics {
                 customActions = listOf(
-                    CustomAccessibilityAction("Opsi pesan") {
+                    CustomAccessibilityAction("Message options") {
                         latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
                         true
                     },
-                    CustomAccessibilityAction("Pilih pesan") {
+                    CustomAccessibilityAction("Select message") {
                         latestOnLongPressBubble()
                         true
                     }
@@ -1210,7 +1210,7 @@ private fun UserChatBubble(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "Gagal terkirim",
+                    text = "Failed to send",
                     style = MaterialTheme.typography.labelSmall,
                     color = nexaColors.crimson
                 )
@@ -1229,12 +1229,12 @@ private fun UserChatBubble(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = "Kirim ulang pesan",
+                            contentDescription = "Retry sending message",
                             tint = nexaColors.crimson,
                             modifier = Modifier.size(14.dp)
                         )
                         Text(
-                            text = "Kirim ulang",
+                            text = "Retry",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = nexaColors.crimson
@@ -1270,10 +1270,10 @@ private fun UserBubbleTimestampMeta(
         else -> metaColor
     }
     val statusDescription = when (status) {
-        ChatStatus.SENDING -> "Mengirim"
-        ChatStatus.FAILED -> "Gagal terkirim"
-        ChatStatus.INTERRUPTED -> "Terputus"
-        else -> "Terkirim"
+        ChatStatus.SENDING -> "Sending"
+        ChatStatus.FAILED -> "Failed"
+        ChatStatus.INTERRUPTED -> "Interrupted"
+        else -> "Sent"
     }
 
     Row(
@@ -1397,7 +1397,7 @@ private fun ReplyPreviewStrip(
                 verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 Text(
-                    text = "Membalas $senderName",
+                    text = "Replying to $senderName",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -1430,7 +1430,7 @@ private fun ReplyPreviewStrip(
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Batalkan balasan",
+                    contentDescription = "Cancel reply",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
@@ -1500,7 +1500,7 @@ private fun UserVoiceNoteContent(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Jeda pesan suara" else "Putar pesan suara",
+                    contentDescription = if (isPlaying) "Pause voice message" else "Play voice message",
                     tint = nexaColors.onPrimaryButtonFill,
                     modifier = Modifier.size(22.dp)
                 )
@@ -1620,11 +1620,11 @@ private fun AssistantChatBubble(
             .onGloballyPositioned { coords -> bubbleWindowPos = coords.positionInWindow() }
             .semantics {
                 customActions = listOf(
-                    CustomAccessibilityAction("Opsi pesan") {
+                    CustomAccessibilityAction("Message options") {
                         latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
                         true
                     },
-                    CustomAccessibilityAction("Pilih pesan") {
+                    CustomAccessibilityAction("Select message") {
                         latestOnLongPressBubble()
                         true
                     }
@@ -1671,7 +1671,7 @@ private fun AssistantChatBubble(
             ) {
                 if (displayContent.isEmpty() && isStreaming) {
                     Text(
-                        text = "N.E.X.A sedang menyusun jawaban...",
+                        text = "Thinking...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1684,7 +1684,7 @@ private fun AssistantChatBubble(
 
                 if (message.status == ChatStatus.INTERRUPTED && !isStreaming) {
                     Text(
-                        text = "Aliran terputus (checkpoint tersimpan)",
+                        text = "Response interrupted",
                         style = MaterialTheme.typography.labelSmall,
                         color = nexaColors.amber
                     )
@@ -2027,7 +2027,7 @@ private fun ChatInputBar(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
-                            contentDescription = "Geser ke atas untuk kunci rekaman",
+                            contentDescription = "Slide up to lock recording",
                             tint = lockTint,
                             modifier = Modifier.size(16.dp)
                         )
@@ -2133,7 +2133,7 @@ private fun ChatInputBar(
                                         decorationBox = { innerTextField ->
                                             if (draftText.isEmpty()) {
                                                 Text(
-                                                    text = "Tanya atau perintahkan N.E.X.A...",
+                                                    text = "Message N.E.X.A...",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     maxLines = 1,
@@ -2158,7 +2158,7 @@ private fun ChatInputBar(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.OpenInFull,
-                                                contentDescription = "Perluas kolom ketik",
+                                                contentDescription = "Expand composer",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.size(18.dp)
                                             )
@@ -2232,7 +2232,7 @@ private fun ChatInputBar(
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
                                     if (!resolved) {
-                                        // Match the visual "Lepas untuk batal" prompt shown past 65% cancel progress
+                                        // Match the visual "Release to cancel" prompt shown past 65% cancel progress
                                         if (accumX <= -(cancelThresholdPx * 0.65f)) {
                                             latestOnCancelVoiceRecording()
                                         } else {
@@ -2306,9 +2306,9 @@ private fun ChatInputBar(
                                                 InputActionMode.MIC -> Icons.Default.Mic
                                             },
                                             contentDescription = when (mode) {
-                                                InputActionMode.STOP -> "Hentikan"
-                                                InputActionMode.SEND -> "Kirim pesan"
-                                                InputActionMode.MIC -> "Tahan untuk merekam pesan suara"
+                                                InputActionMode.STOP -> "Stop response"
+                                                InputActionMode.SEND -> "Send message"
+                                                InputActionMode.MIC -> "Hold to record voice message"
                                             },
                                             tint = iconTint,
                                             modifier = Modifier.size(21.dp)
@@ -2376,7 +2376,7 @@ private fun HoldingVoiceRecordingStrip(
             }
 
             Text(
-                text = if (cancelProgress > 0.65f) "Lepas untuk batal" else "< Geser untuk batal",
+                text = if (cancelProgress > 0.65f) "Release to cancel" else "< Slide to cancel",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (cancelProgress > 0.65f) nexaColors.crimson else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -2424,7 +2424,7 @@ private fun LockedVoiceRecordingBar(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Default.Delete,
-                    contentDescription = "Batalkan rekaman suara",
+                    contentDescription = "Discard voice recording",
                     tint = nexaColors.crimson,
                     modifier = Modifier.size(21.dp)
                 )
@@ -2500,7 +2500,7 @@ private fun LockedVoiceRecordingBar(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Kirim pesan suara",
+                    contentDescription = "Send voice message",
                     tint = nexaColors.onPrimaryButtonFill,
                     modifier = Modifier.size(21.dp)
                 )
@@ -2554,13 +2554,13 @@ private fun ChatExpandedComposerOverlay(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = "Tulis Pesan Panjang",
+                        text = "Compose",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "${draftText.length} karakter",
+                        text = "${draftText.length} characters",
                         style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2572,7 +2572,7 @@ private fun ChatExpandedComposerOverlay(
                 ) {
                     Icon(
                         imageVector = Icons.Default.CloseFullscreen,
-                        contentDescription = "Kecilkan kolom ketik",
+                        contentDescription = "Collapse composer",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -2627,7 +2627,7 @@ private fun ChatExpandedComposerOverlay(
                         decorationBox = { innerTextField ->
                             if (draftText.isEmpty()) {
                                 Text(
-                                    text = "Tanya atau perintahkan N.E.X.A...",
+                                    text = "Message N.E.X.A...",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -2658,7 +2658,7 @@ private fun ChatExpandedComposerOverlay(
                             modifier = Modifier.padding(horizontal = 12.dp)
                         ) {
                             Text(
-                                text = "Kosongkan",
+                                text = "Clear",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2688,7 +2688,7 @@ private fun ChatExpandedComposerOverlay(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = if (isStreaming) Icons.Default.Stop else Icons.AutoMirrored.Filled.Send,
-                            contentDescription = if (isStreaming) "Hentikan" else "Kirim pesan",
+                            contentDescription = if (isStreaming) "Stop response" else "Send message",
                             tint = if (isStreaming || canSend) {
                                 nexaColors.onPrimaryButtonFill
                             } else {
@@ -2708,13 +2708,13 @@ private fun ChatEmptyWelcomeState(
     onQuickPrompt: (String) -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
-    // RD-M4: Uniform full-width safe read-only quick prompts (no accidental financial transfer on tap)
+    // Safe read-only quick prompts (no accidental financial transfer on tap)
     val suggestions = remember {
         listOf(
-            "Status baterai & perangkat saat ini",
-            "Ringkasan pengeluaran hari ini",
-            "Cek jadwal agenda hari ini",
-            "Cek status layanan & kesehatan server"
+            "Check battery & device status",
+            "Today's spending summary",
+            "Check today's schedule",
+            "Check server health & services"
         )
     }
 
@@ -2735,13 +2735,13 @@ private fun ChatEmptyWelcomeState(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "N.E.X.A AI Control Center",
+                    text = "N.E.X.A",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Percakapan tersimpan lokal (offline-first). Setiap aksi transfer keuangan dilindungi verifikasi sidik jari Android Keystore (Step-Up Biometrik).",
+                    text = "Ready for your schedule, finances, and device control. Sensitive actions always require fingerprint approval.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

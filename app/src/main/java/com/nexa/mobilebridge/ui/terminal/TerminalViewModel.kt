@@ -130,16 +130,16 @@ class TerminalViewModel @Inject constructor(
 
                 if (cfg.enrollmentStatus != "ACTIVE") {
                     val msg = if (cfg.enrollmentStatus == "INVALIDATED") {
-                        "Kunci perangkat gugur karena sidik jari baru ditambahkan. Buka Pengaturan -> Panduan Daftar Ulang (nexa-enroll re-pair)."
+                        "Device key was invalidated after a new fingerprint was added. Open Settings to re-pair this device."
                     } else {
-                        "Perangkat belum terdaftar untuk Terminal Inspeksi. Buka Pengaturan & Keamanan lalu daftar dengan CLI nexa-enroll."
+                        "Device is not paired for Remote Terminal. Open Settings to pair this device."
                     }
                     sidecarTerminalClient.setError(msg)
                     return@launch
                 }
 
                 if (activity == null) {
-                    sidecarTerminalClient.setError("Activity tidak tersedia untuk menampilkan BiometricPrompt.")
+                    sidecarTerminalClient.setError("Unable to open fingerprint prompt right now.")
                     return@launch
                 }
 
@@ -159,11 +159,11 @@ class TerminalViewModel @Inject constructor(
                         scope = "term",
                         resumeSid = candidateSid,
                         promptTitle = if (candidateSid.isNotBlank()) {
-                            "Pulihkan Sesi Terminal"
+                            "Resume Terminal Session"
                         } else {
-                            "Buka Terminal Inspeksi VPS"
+                            "Open Remote Terminal"
                         },
-                        promptSubtitle = "Verifikasi sidik jari untuk tiket Ed25519 (scope=term)"
+                        promptSubtitle = "Verify fingerprint to start your terminal session"
                     )
                 ) {
                     is TicketOutcome.Success -> {

@@ -230,7 +230,7 @@ class SidecarTerminalClient @Inject constructor(
                 stopHeartbeat()
                 val curr = _sessionState.value
                 if (curr.status == TerminalSessionStatus.ACTIVE || curr.status == TerminalSessionStatus.PAUSED_SCREEN_OFF) {
-                    markDetached("Koneksi terminal terputus ($code). Ketuk Pulihkan Sesi sebelum masa tenggang habis.")
+                    markDetached("Terminal disconnected ($code). Tap Resume before the grace period ends.")
                 }
             }
 
@@ -261,7 +261,7 @@ class SidecarTerminalClient @Inject constructor(
                             it.copy(
                                 status = TerminalSessionStatus.DISABLED_BY_SERVER,
                                 activeSid = null,
-                                errorMessage = "Terminal dinonaktifkan di server (kill switch OFF)."
+                                errorMessage = "Remote terminal is disabled on the server."
                             )
                         }
                     }
@@ -269,7 +269,7 @@ class SidecarTerminalClient @Inject constructor(
                         _sessionState.update {
                             it.copy(
                                 status = TerminalSessionStatus.ERROR,
-                                errorMessage = "Tiket terminal ditolak atau kedaluwarsa (HTTP 401)."
+                                errorMessage = "Terminal session ticket expired or rejected (HTTP 401)."
                             )
                         }
                     }
@@ -277,7 +277,7 @@ class SidecarTerminalClient @Inject constructor(
                         _sessionState.update {
                             it.copy(
                                 status = TerminalSessionStatus.ERROR,
-                                errorMessage = "Daemon sidecar nexa-term belum aktif di server (HTTP $code)."
+                                errorMessage = "Terminal service is unavailable on server (HTTP $code)."
                             )
                         }
                     }
@@ -287,13 +287,13 @@ class SidecarTerminalClient @Inject constructor(
                             curr.activeSid != null &&
                             (curr.status == TerminalSessionStatus.ACTIVE || curr.status == TerminalSessionStatus.PAUSED_SCREEN_OFF)
                         if (wasLiveSession) {
-                            markDetached("Koneksi terputus (${t.message ?: "jaringan"}). Sesi tetap hidup selama 120 detik.")
+                            markDetached("Connection lost (${t.message ?: "network"}). Session stays alive for 120s.")
                         } else {
                             _sessionState.update {
                                 it.copy(
                                     status = TerminalSessionStatus.ERROR,
                                     activeSid = if (!isResume) null else it.activeSid,
-                                    errorMessage = "Gagal terhubung ke /io/term: ${t.message ?: "kesalahan jaringan"}"
+                                    errorMessage = "Failed to connect to terminal: ${t.message ?: "network error"}"
                                 )
                             }
                         }
@@ -462,7 +462,7 @@ class SidecarTerminalClient @Inject constructor(
                 val msg = if (payload.size > 1) {
                     String(payload, 1, payload.size - 1, Charsets.UTF_8)
                 } else {
-                    "Kesalahan terminal (#$code)"
+                    "Terminal error (#$code)"
                 }
                 if (code == 5) { // ERR_FEATURE_OFF
                     receivedOffset.set(0L)
@@ -471,7 +471,7 @@ class SidecarTerminalClient @Inject constructor(
                             status = TerminalSessionStatus.DISABLED_BY_SERVER,
                             activeSid = null,
                             receivedOffset = 0L,
-                            errorMessage = "Terminal dinonaktifkan di server."
+                            errorMessage = "Remote terminal is disabled on the server."
                         )
                     }
                 } else if (code == 7 && msg.startsWith("OFFSET_RESET:")) {
@@ -493,7 +493,7 @@ class SidecarTerminalClient @Inject constructor(
                             status = TerminalSessionStatus.ERROR,
                             activeSid = null,
                             receivedOffset = 0L,
-                            errorMessage = "Sesi sebelumnya sudah berakhir ($msg). Mulai sesi baru."
+                            errorMessage = "Previous session expired ($msg). Start a new session."
                         )
                     }
                 } else {
@@ -512,10 +512,10 @@ class SidecarTerminalClient @Inject constructor(
                 stopHeartbeat()
                 receivedOffset.set(0L)
                 val notice = when (reason) {
-                    3 -> "Batas durasi sesi 4 jam tercapai. Lakukan otentikasi sidik jari ulang."
-                    5 -> "Server sidecar sedang dihentikan atau dimulai ulang."
-                    6 -> "Masa tenggang resume 120 detik berakhir. Proses bash telah dibersihkan."
-                    else -> "Sesi terminal ditutup oleh server."
+                    3 -> "4-hour session limit reached. Verify fingerprint to start a new session."
+                    5 -> "Server terminal service is restarting."
+                    6 -> "120s reconnect window expired. The shell session was closed."
+                    else -> "Terminal session closed by server."
                 }
                 _sessionState.value = TerminalSessionState(
                     status = TerminalSessionStatus.DISCONNECTED,

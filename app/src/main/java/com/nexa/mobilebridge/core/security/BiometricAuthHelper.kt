@@ -25,18 +25,18 @@ object BiometricAuthHelper {
         activity: FragmentActivity,
         title: String,
         subtitle: String,
-        negativeButtonText: String = "Batalkan",
+        negativeButtonText: String = "Cancel",
         signature: Signature,
         payloadToSign: ByteArray,
         onSigned: (derSignatureBytes: ByteArray) -> Unit,
         onError: (code: Int, message: String) -> Unit
     ): BiometricPrompt? {
         if (activity.isFinishing || activity.isDestroyed) {
-            onError(-2, "Aktivitas sudah ditutup sebelum verifikasi biometrik dimulai.")
+            onError(-2, "Screen closed before biometric verification started.")
             return null
         }
         if (!isStrongBiometricAvailable(activity)) {
-            onError(-3, "Sidik jari kuat (BIOMETRIC_STRONG) tidak tersedia atau belum terdaftar di Android.")
+            onError(-3, "Fingerprint authentication is not set up on this device.")
             return null
         }
 
@@ -50,7 +50,7 @@ object BiometricAuthHelper {
                     val signedBytes = unlockedSig.sign()
                     onSigned(signedBytes)
                 } catch (e: Exception) {
-                    onError(-1, "Penandatanganan kriptografi gagal: ${e.message}")
+                    onError(-1, "Signing failed: ${e.message}")
                 }
             }
 
@@ -75,7 +75,7 @@ object BiometricAuthHelper {
             prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
             prompt
         } catch (e: Exception) {
-            onError(-4, "Gagal membuka dialog biometrik: ${e.message}")
+            onError(-4, "Failed to open biometric prompt: ${e.message}")
             null
         }
     }
@@ -87,16 +87,16 @@ object BiometricAuthHelper {
         activity: FragmentActivity,
         title: String,
         subtitle: String,
-        negativeButtonText: String = "Batal",
+        negativeButtonText: String = "Cancel",
         onSuccess: () -> Unit,
         onError: (message: String) -> Unit
     ): BiometricPrompt? {
         if (activity.isFinishing || activity.isDestroyed) {
-            onError("Aktivitas sedang ditutup.")
+            onError("Screen is closing.")
             return null
         }
         if (!isStrongBiometricAvailable(activity)) {
-            onError("Sidik jari kuat (BIOMETRIC_STRONG) tidak tersedia di perangkat ini.")
+            onError("Fingerprint authentication is not available on this device.")
             return null
         }
         val executor = ContextCompat.getMainExecutor(activity)
@@ -122,7 +122,7 @@ object BiometricAuthHelper {
             prompt.authenticate(promptInfo)
             prompt
         } catch (e: Exception) {
-            onError("Gagal membuka dialog biometrik: ${e.message}")
+            onError("Failed to open biometric prompt: ${e.message}")
             null
         }
     }

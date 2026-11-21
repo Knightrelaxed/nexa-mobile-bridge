@@ -47,7 +47,7 @@ import com.nexa.mobilebridge.theme.LocalNexaColors
 
 internal fun formatFingerprintPreview(colonHex: String): String {
     val clean = colonHex.trim()
-    if (clean.isEmpty()) return "Belum tersedia"
+    if (clean.isEmpty()) return "Not available"
     val octets = clean.split(":").filter { it.isNotBlank() }
     return if (octets.size > 4) {
         octets.take(4).joinToString(":") + "..."
@@ -58,7 +58,7 @@ internal fun formatFingerprintPreview(colonHex: String): String {
 
 internal fun extractDisplayHost(wsUrl: String): String {
     val trimmed = wsUrl.trim()
-    if (trimmed.isEmpty()) return "Belum diatur"
+    if (trimmed.isEmpty()) return "Not set"
     return trimmed
         .removePrefix("wss://")
         .removePrefix("ws://")
@@ -375,7 +375,7 @@ internal fun SettingsNoticeBanner(
             )
             Spacer(modifier = Modifier.width(8.dp))
             TextButton(onClick = onDismiss) {
-                Text("Tutup", style = MaterialTheme.typography.labelMedium)
+                Text("Dismiss", style = MaterialTheme.typography.labelMedium)
             }
         }
     }

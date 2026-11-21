@@ -299,9 +299,9 @@ private fun StickyModifierKeyButton(
         StickyModifierMode.IDLE -> MaterialTheme.colorScheme.onSurface
     }
     val modeDesc = when (mode) {
-        StickyModifierMode.IDLE -> "$label tidak aktif"
-        StickyModifierMode.ONCE -> "$label aktif sekali"
-        StickyModifierMode.LOCKED -> "$label terkunci"
+        StickyModifierMode.IDLE -> "$label off"
+        StickyModifierMode.ONCE -> "$label once"
+        StickyModifierMode.LOCKED -> "$label locked"
     }
 
     Surface(

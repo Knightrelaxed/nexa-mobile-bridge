@@ -122,7 +122,7 @@ class DeviceKeystoreManager @Inject constructor() {
             Log.w(TAG, "Keystore key permanently invalidated (new biometric enrolled)")
             DeviceKeySnapshot(
                 state = KeystoreKeyState.INVALIDATED,
-                errorMessage = "Kunci perangkat gugur karena sidik jari baru ditambahkan di Android. Jalankan daftar ulang (nexa-enroll re-pair)."
+                errorMessage = "Device key was invalidated after a new fingerprint was added. Re-pair this device in Settings."
             )
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
@@ -133,9 +133,9 @@ class DeviceKeystoreManager @Inject constructor() {
             DeviceKeySnapshot(
                 state = if (isNoBio) KeystoreKeyState.BIOMETRIC_NOT_ENROLLED else KeystoreKeyState.ERROR,
                 errorMessage = if (isNoBio) {
-                    "Aktifkan sidik jari pada Pengaturan Android terlebih dahulu untuk membuat kunci hardware."
+                    "Enable fingerprint unlock in Android Settings first to create a hardware key."
                 } else {
-                    "Gagal mengakses Android Keystore: $msg"
+                    "Failed to access Android Keystore: $msg"
                 }
             )
         }
@@ -153,7 +153,7 @@ class DeviceKeystoreManager @Inject constructor() {
             Log.e(TAG, "Failed to regenerate Keystore keypair: ${e.message}")
             DeviceKeySnapshot(
                 state = KeystoreKeyState.ERROR,
-                errorMessage = "Gagal membuat ulang kunci Keystore: ${e.message}"
+                errorMessage = "Failed to regenerate hardware key: ${e.message}"
             )
         }
     }
@@ -167,7 +167,7 @@ class DeviceKeystoreManager @Inject constructor() {
     fun prepareSignatureForBiometric(): Signature {
         val ks = loadKeyStore()
         if (!ks.containsAlias(KEY_ALIAS)) {
-            throw IllegalStateException("Kunci perangkat belum dibuat atau belum didaftarkan. Buka Pengaturan -> Pendaftaran Perangkat.")
+            throw IllegalStateException("Device key is not paired yet. Open Settings to pair this device.")
         }
         val privateKey = ks.getKey(KEY_ALIAS, null) as? PrivateKey
             ?: throw IllegalStateException("Keystore private key missing for alias $KEY_ALIAS")
@@ -184,7 +184,7 @@ class DeviceKeystoreManager @Inject constructor() {
                 KeyProperties.SECURITY_LEVEL_STRONGBOX -> "StrongBox"
                 KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "TEE (Hardware)"
                 KeyProperties.SECURITY_LEVEL_SOFTWARE -> "Software"
-                KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE -> "Hardware Aman"
+                KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE -> "Secure Hardware"
                 else -> "Hardware Keystore"
             }
         } catch (_: Exception) {
@@ -194,7 +194,7 @@ class DeviceKeystoreManager @Inject constructor() {
 
     private fun inspectExistingKey(ks: KeyStore): DeviceKeySnapshot {
         val cert = ks.getCertificate(KEY_ALIAS)
-            ?: return DeviceKeySnapshot(KeystoreKeyState.ERROR, errorMessage = "Sertifikat kunci tidak ditemukan.")
+            ?: return DeviceKeySnapshot(KeystoreKeyState.ERROR, errorMessage = "Key certificate not found.")
         val spkiDer = cert.publicKey.encoded
         val spkiB64 = Base64.encodeToString(spkiDer, Base64.NO_WRAP)
         val shaHex = computeSha256ColonHex(spkiDer)
@@ -202,7 +202,7 @@ class DeviceKeystoreManager @Inject constructor() {
 
         // Probe private key validity so KeyPermanentlyInvalidatedException is surfaced immediately
         val privateKey = ks.getKey(KEY_ALIAS, null) as? PrivateKey
-            ?: return DeviceKeySnapshot(KeystoreKeyState.ERROR, errorMessage = "Kunci privat tidak ditemukan.")
+            ?: return DeviceKeySnapshot(KeystoreKeyState.ERROR, errorMessage = "Private key not found.")
         Signature.getInstance("SHA256withECDSA").initSign(privateKey)
         val secLevel = resolveKeySecurityLevelLabel(privateKey)
 

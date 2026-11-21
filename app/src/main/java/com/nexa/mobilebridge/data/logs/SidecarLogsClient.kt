@@ -195,9 +195,9 @@ class SidecarLogsClient @Inject constructor(
 
                 _status.value = LogStreamStatus.ERROR
                 _errorMessage.value = when (code) {
-                    401, 403 -> "Tiket log ditolak atau kedaluwarsa (HTTP $code). Ketuk Sambung Ulang untuk biometrik baru."
-                    502, 503 -> "Daemon sidecar nexa-log belum aktif di server (HTTP $code)."
-                    else -> "Koneksi /io/logs terputus: ${t.message ?: "kesalahan jaringan"}"
+                    401, 403 -> "Log session ticket expired or rejected (HTTP $code). Tap Reconnect to verify again."
+                    502, 503 -> "Log service is unavailable on server (HTTP $code)."
+                    else -> "Log stream disconnected: ${t.message ?: "network error"}"
                 }
             }
         }
@@ -350,17 +350,17 @@ class SidecarLogsClient @Inject constructor(
                 val msg = if (payload.size > 1) {
                     String(payload, 1, payload.size - 1, Charsets.UTF_8)
                 } else {
-                    "Kesalahan protokol log (#$code)"
+                    "Log protocol error (#$code)"
                 }
                 _status.value = LogStreamStatus.ERROR
-                _errorMessage.value = "Server menolak aliran log (ERR #$code): $msg"
+                _errorMessage.value = "Server rejected log stream (ERR #$code): $msg"
             }
 
             (ch == LogBinaryProtocol.CH_LOGS || ch == LogBinaryProtocol.CH_CONTROL) && op == LogBinaryProtocol.OP_CLOSE -> {
                 val reason = if (payload.isNotEmpty()) (payload[0].toInt() and 0xFF) else 0
                 _status.value = LogStreamStatus.IDLE_DISCONNECTED
                 if (reason == LogBinaryProtocol.CLOSE_IDLE) {
-                    _errorMessage.value = "Aliran log ditutup otomatis oleh server karena dijeda lebih dari 5 menit."
+                    _errorMessage.value = "Log stream closed automatically after being paused for over 5 minutes."
                 }
             }
         }
