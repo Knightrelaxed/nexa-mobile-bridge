@@ -68,6 +68,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -75,6 +77,7 @@ import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -357,14 +360,27 @@ fun ChatScreen(
                     state = listState,
                     reverseLayout = true,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.Top
                 ) {
                     items(
                         count = pagedItems.itemCount,
                         key = pagedItems.itemKey { it.id }
                     ) { index ->
                         val msg = pagedItems[index] ?: return@items
+                        val aboveRole = if (index + 1 < pagedItems.itemCount) {
+                            pagedItems.peek(index + 1)?.role
+                        } else {
+                            null
+                        }
+                        val belowRole = if (index - 1 >= 0) {
+                            pagedItems.peek(index - 1)?.role
+                        } else {
+                            null
+                        }
+                        val topGap = if (aboveRole == msg.role) 1.5.dp else 4.dp
+                        val bottomGap = if (belowRole == msg.role) 1.5.dp else 2.5.dp
+                        val formattedMsgTime = timeFormat.format(Date(msg.timestamp))
                         val isLiveStreamingRow =
                             msg.id == streamState.activeAssistantRowId && streamState.streamingText.isNotEmpty()
                         val effectiveContent = if (isLiveStreamingRow) {
@@ -388,6 +404,8 @@ fun ChatScreen(
                             isSelected = isSelected,
                             isSelectionMode = selectionState.isActive,
                             swipeEnabled = !selectionState.isActive,
+                            topPadding = topGap,
+                            bottomPadding = bottomGap,
                             onTriggerHaptic = { triggerHapticTick() },
                             onSwipeReply = {
                                 viewModel.selectReplyTarget(msg, effectiveContent)
@@ -402,7 +420,7 @@ fun ChatScreen(
                             if (msg.role == ChatRole.USER) {
                                 UserChatBubble(
                                     message = msg,
-                                    formattedTime = timeFormat.format(Date(msg.timestamp)),
+                                    formattedTime = formattedMsgTime,
                                     playbackState = voicePlaybackState,
                                     isSelected = isSelected,
                                     isSelectionMode = selectionState.isActive,
@@ -455,6 +473,7 @@ fun ChatScreen(
                             } else {
                                 AssistantChatBubble(
                                     message = msg,
+                                    formattedTime = formattedMsgTime,
                                     displayContent = effectiveContent,
                                     isStreaming = msg.status == ChatStatus.STREAMING || isLiveStreamingRow,
                                     isSelected = isSelected,
@@ -654,6 +673,8 @@ private fun SwipeToReplyContainer(
     isSelected: Boolean,
     isSelectionMode: Boolean,
     swipeEnabled: Boolean,
+    topPadding: androidx.compose.ui.unit.Dp,
+    bottomPadding: androidx.compose.ui.unit.Dp,
     onTriggerHaptic: () -> Unit,
     onSwipeReply: () -> Unit,
     onRowTapInSelectionMode: () -> Unit,
@@ -747,10 +768,15 @@ private fun SwipeToReplyContainer(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = highlightAlpha))
             .then(dragModifier)
             .then(selectionRowClickModifier)
+            .padding(
+                start = 12.dp,
+                end = 12.dp,
+                top = topPadding,
+                bottom = bottomPadding
+            )
     ) {
         if (swipeEnabled && abs(currentOffset) > 4f) {
             val iconAlignment = if (currentOffset > 0f) Alignment.CenterStart else Alignment.CenterEnd
@@ -795,7 +821,7 @@ private fun SwipeToReplyContainer(
         }
 
         Row(
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(currentOffset.roundToInt(), 0) }
@@ -807,7 +833,7 @@ private fun SwipeToReplyContainer(
             ) {
                 SelectionCheckCircle(
                     isSelected = isSelected,
-                    modifier = Modifier.padding(start = 2.dp, end = 8.dp)
+                    modifier = Modifier.padding(end = 10.dp, bottom = 6.dp)
                 )
             }
 
@@ -858,13 +884,6 @@ private fun UserChatBubble(
     val replyTarget = remember(message.executionMetadata) {
         ChatReplyMetadata.fromJson(message.executionMetadata)
     }
-    val statusText = when (message.status) {
-        ChatStatus.SENDING -> "Mengirim..."
-        ChatStatus.SENT -> "Terkirim"
-        ChatStatus.INTERRUPTED -> "Terputus"
-        ChatStatus.FAILED -> "Gagal terkirim"
-        else -> "Terkirim"
-    }
 
     val gestureModifier = if (isInteractive) {
         Modifier
@@ -913,7 +932,7 @@ private fun UserChatBubble(
             ),
             border = bubbleBorder,
             modifier = Modifier
-                .widthIn(max = 320.dp)
+                .widthIn(max = 312.dp)
                 .then(gestureModifier)
         ) {
             Column {
@@ -947,6 +966,8 @@ private fun UserChatBubble(
                         isPlaying = isPlaying,
                         progress = progress,
                         durationLabel = displayTime,
+                        formattedTime = formattedTime,
+                        status = message.status,
                         isSelectionMode = isSelectionMode,
                         isInteractive = isInteractive,
                         onToggleSelect = {
@@ -957,48 +978,79 @@ private fun UserChatBubble(
                         onSeek = { frac -> onSeekVoice(voiceMeta.audioPath, voiceMeta.durationMs, frac) }
                     )
                 } else {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(
-                            start = 14.dp,
-                            end = 14.dp,
-                            top = if (replyTarget != null) 8.dp else 11.dp,
-                            bottom = 11.dp
-                        )
-                    )
+                    val isShortSingleLine = replyTarget == null &&
+                        !message.content.contains('\n') &&
+                        message.content.length <= 24
+
+                    if (isShortSingleLine) {
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(
+                                start = 12.dp,
+                                end = 10.dp,
+                                top = 8.dp,
+                                bottom = 7.dp
+                            )
+                        ) {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            UserBubbleTimestampMeta(
+                                formattedTime = formattedTime,
+                                status = message.status,
+                                modifier = Modifier.padding(bottom = 1.dp)
+                            )
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.padding(
+                                start = 12.dp,
+                                end = 12.dp,
+                                top = if (replyTarget != null) 6.dp else 8.dp,
+                                bottom = 6.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            UserBubbleTimestampMeta(
+                                formattedTime = formattedTime,
+                                status = message.status,
+                                modifier = Modifier.align(Alignment.End)
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "$formattedTime • $statusText",
-                style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
-                color = if (message.status == ChatStatus.FAILED) {
-                    nexaColors.crimson
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
-
-            if (message.status == ChatStatus.FAILED) {
+        if (message.status == ChatStatus.FAILED) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Gagal terkirim",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = nexaColors.crimson
+                )
                 Surface(
                     color = nexaColors.crimson.copy(alpha = 0.14f),
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, nexaColors.crimson.copy(alpha = 0.6f)),
                     modifier = Modifier
-                        .heightIn(min = 48.dp)
+                        .heightIn(min = 38.dp)
                         .clickable(role = Role.Button, onClick = onRetry)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
@@ -1018,6 +1070,55 @@ private fun UserChatBubble(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun UserBubbleTimestampMeta(
+    formattedTime: String,
+    status: String,
+    modifier: Modifier = Modifier
+) {
+    val nexaColors = LocalNexaColors.current
+    val metaColor = if (status == ChatStatus.FAILED) {
+        nexaColors.crimson
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+    }
+    val statusIcon = when (status) {
+        ChatStatus.SENDING -> Icons.Default.Schedule
+        ChatStatus.FAILED, ChatStatus.INTERRUPTED -> Icons.Default.ErrorOutline
+        else -> Icons.Default.DoneAll
+    }
+    val iconTint = when (status) {
+        ChatStatus.SENT -> MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+        ChatStatus.FAILED -> nexaColors.crimson
+        ChatStatus.INTERRUPTED -> nexaColors.amber
+        else -> metaColor
+    }
+    val statusDescription = when (status) {
+        ChatStatus.SENDING -> "Mengirim"
+        ChatStatus.FAILED -> "Gagal terkirim"
+        ChatStatus.INTERRUPTED -> "Terputus"
+        else -> "Terkirim"
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = modifier
+    ) {
+        Text(
+            text = formattedTime,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+            color = metaColor
+        )
+        Icon(
+            imageVector = statusIcon,
+            contentDescription = statusDescription,
+            tint = iconTint,
+            modifier = Modifier.size(13.dp)
+        )
     }
 }
 
@@ -1174,6 +1275,8 @@ private fun UserVoiceNoteContent(
     isPlaying: Boolean,
     progress: Float,
     durationLabel: String,
+    formattedTime: String,
+    status: String,
     isSelectionMode: Boolean,
     isInteractive: Boolean,
     onToggleSelect: () -> Unit,
@@ -1278,19 +1381,29 @@ private fun UserVoiceNoteContent(
             }
 
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(if (isPlaying) activeBarColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                )
-                Text(
-                    text = durationLabel,
-                    style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (isPlaying) activeBarColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                    )
+                    Text(
+                        text = durationLabel,
+                        style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                UserBubbleTimestampMeta(
+                    formattedTime = formattedTime,
+                    status = status
                 )
             }
         }
@@ -1304,6 +1417,7 @@ private fun UserVoiceNoteContent(
 @Composable
 private fun AssistantChatBubble(
     message: ChatMessageEntity,
+    formattedTime: String,
     displayContent: String,
     isStreaming: Boolean,
     isSelected: Boolean,
@@ -1375,12 +1489,12 @@ private fun AssistantChatBubble(
             ),
             border = bubbleBorder,
             modifier = Modifier
-                .widthIn(max = 340.dp)
+                .widthIn(max = 336.dp)
                 .then(gestureModifier)
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (displayContent.isEmpty() && isStreaming) {
                     Text(
@@ -1400,6 +1514,15 @@ private fun AssistantChatBubble(
                         text = "Aliran terputus (checkpoint tersimpan)",
                         style = MaterialTheme.typography.labelSmall,
                         color = nexaColors.amber
+                    )
+                }
+
+                if (!isStreaming || displayContent.isNotEmpty()) {
+                    Text(
+                        text = formattedTime,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        modifier = Modifier.align(Alignment.End)
                     )
                 }
             }
