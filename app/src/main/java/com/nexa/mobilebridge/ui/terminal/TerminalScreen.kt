@@ -191,6 +191,7 @@ fun TerminalScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
     ) {
         // 1. Single Compact Header with Back arrow

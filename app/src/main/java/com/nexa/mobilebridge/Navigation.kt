@@ -3,6 +3,14 @@ package com.nexa.mobilebridge
 import android.content.Intent
 import android.content.res.Configuration
 import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +30,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import androidx.navigationevent.NavigationEvent
 import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.data.chat.ChatVisibilityTracker
 import com.nexa.mobilebridge.ui.call.FakeCallActivity
@@ -35,6 +44,10 @@ import com.nexa.mobilebridge.ui.hud.HudViewModel
 import com.nexa.mobilebridge.ui.logs.LogViewerScreen
 import com.nexa.mobilebridge.ui.settings.SettingsScreen
 import com.nexa.mobilebridge.ui.terminal.TerminalScreen
+
+private const val NAV_FORWARD_DURATION_MS = 280
+private const val NAV_POP_DURATION_MS = 250
+private const val NAV_PREDICTIVE_POP_DURATION_MS = 260
 
 @Composable
 fun MainNavigation(
@@ -92,6 +105,50 @@ fun MainNavigation(
             if (backStack.size > 1) {
                 backStack.removeLastOrNull()
             }
+        },
+        transitionSpec = {
+            slideInHorizontally(
+                animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
+                initialOffsetX = { fullWidth -> fullWidth }
+            ) togetherWith (
+                slideOutHorizontally(
+                    animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
+                    targetOffsetX = { fullWidth -> -fullWidth / 4 }
+                ) + fadeOut(
+                    animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
+                    targetAlpha = 0.82f
+                )
+            )
+        },
+        popTransitionSpec = {
+            (
+                slideInHorizontally(
+                    animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
+                    initialOffsetX = { fullWidth -> -fullWidth / 4 }
+                ) + fadeIn(
+                    animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
+                    initialAlpha = 0.82f
+                )
+            ) togetherWith slideOutHorizontally(
+                animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
+                targetOffsetX = { fullWidth -> fullWidth }
+            )
+        },
+        predictivePopTransitionSpec = { swipeEdge ->
+            // Track thumb direction physically: left-edge swipe slides right; right-edge swipe slides left.
+            val exitDirection = if (swipeEdge == NavigationEvent.EDGE_RIGHT) -1 else 1
+            (
+                slideInHorizontally(
+                    animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
+                    initialOffsetX = { fullWidth -> -exitDirection * (fullWidth / 4) }
+                ) + fadeIn(
+                    animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
+                    initialAlpha = 0.82f
+                )
+            ) togetherWith slideOutHorizontally(
+                animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
+                targetOffsetX = { fullWidth -> exitDirection * fullWidth }
+            )
         },
         entryProvider = entryProvider {
             entry<MainShell> {

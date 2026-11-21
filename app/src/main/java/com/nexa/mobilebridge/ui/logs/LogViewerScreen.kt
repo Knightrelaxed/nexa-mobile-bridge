@@ -218,7 +218,11 @@ fun LogViewerScreen(
 
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
         // 1. Single Unified Header with Back, Search, Pause, Clear, Settings
         LogUnifiedTopHeader(
             status = streamStatus,
