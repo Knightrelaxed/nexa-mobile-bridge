@@ -70,6 +70,7 @@ class NexaWebSocketClient @Inject constructor(
             "CHAT_ACK",
             "CHAT_CHUNK",
             "CHAT_RESUME_MISS",
+            "CHAT_PROACTIVE",
             "ACTION_PENDING",
             "ACTION_RESULT"
         )

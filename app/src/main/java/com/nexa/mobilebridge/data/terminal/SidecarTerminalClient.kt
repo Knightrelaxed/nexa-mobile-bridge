@@ -22,6 +22,7 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -61,6 +62,7 @@ class SidecarTerminalClient @Inject constructor(
     companion object {
         private const val TAG = "SidecarTermClient"
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
+        private const val HEARTBEAT_PONG_TIMEOUT_MS = 35_000L
         private const val MAX_SESSION_AGE_MS = 4 * 3600_000L
         private const val DETACH_GRACE_MS = 120_000L
         private const val MAX_INPUT_CHUNK_BYTES = 4096
@@ -94,6 +96,9 @@ class SidecarTerminalClient @Inject constructor(
     @Volatile
     private var isPausedByScreenOff: Boolean = false
     private val consumedSinceLastCredit = AtomicInteger(0)
+    // Lock-free authoritative byte counter incremented on every OP_DATA (zero StateFlow recomposition storm)
+    private val receivedOffset = AtomicLong(0L)
+    private val lastPongAtMs = AtomicLong(0L)
     @Volatile
     private var lastRows: Int = 24
     @Volatile
@@ -153,6 +158,7 @@ class SidecarTerminalClient @Inject constructor(
 
         if (!isResume && attempt == 0) {
             emulator.reset()
+            receivedOffset.set(0L)
         }
 
         isPausedByScreenOff = false
@@ -160,7 +166,7 @@ class SidecarTerminalClient @Inject constructor(
 
         val now = System.currentTimeMillis()
         val prevState = _sessionState.value
-        val prevOffset = if (isResume) prevState.receivedOffset else 0L
+        val resumeOffset = if (isResume) receivedOffset.get() else 0L
         val expMs = if (isResume && prevState.sessionExpiresAtMs > now) {
             prevState.sessionExpiresAtMs
         } else {
@@ -170,7 +176,7 @@ class SidecarTerminalClient @Inject constructor(
         _sessionState.value = TerminalSessionState(
             status = TerminalSessionStatus.CONNECTING,
             activeSid = sid,
-            receivedOffset = prevOffset,
+            receivedOffset = resumeOffset,
             sessionExpiresAtMs = expMs,
             detachGraceEndsAtMs = 0L,
             errorMessage = null
@@ -189,17 +195,20 @@ class SidecarTerminalClient @Inject constructor(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (!isActiveSocket(webSocket)) return
                 opened.set(true)
-                Log.i(TAG, "Connection B (/io/term) opened (resume=$isResume, sid=$sid)")
+                lastPongAtMs.set(System.currentTimeMillis())
+                val currentOffset = receivedOffset.get()
+                Log.i(TAG, "Connection B (/io/term) opened (resume=$isResume, sid=$sid, offset=$currentOffset)")
                 _sessionState.update {
                     it.copy(
                         status = TerminalSessionStatus.ACTIVE,
+                        receivedOffset = currentOffset,
                         detachGraceEndsAtMs = 0L,
                         errorMessage = null
                     )
                 }
 
                 val initFrame = if (isResume) {
-                    TerminalBinaryProtocol.encodeResumeFrame(sid16, prevOffset)
+                    TerminalBinaryProtocol.encodeResumeFrame(sid16, currentOffset)
                 } else {
                     TerminalBinaryProtocol.encodeOpenFrame(lastRows, lastCols, sid16)
                 }
@@ -212,6 +221,7 @@ class SidecarTerminalClient @Inject constructor(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (!isActiveSocket(webSocket)) return
+                lastPongAtMs.set(System.currentTimeMillis())
                 handleBinaryFrame(bytes.toByteArray())
             }
 
@@ -272,12 +282,17 @@ class SidecarTerminalClient @Inject constructor(
                         }
                     }
                     else -> {
-                        if (_sessionState.value.activeSid != null) {
+                        val curr = _sessionState.value
+                        val wasLiveSession = opened.get() &&
+                            curr.activeSid != null &&
+                            (curr.status == TerminalSessionStatus.ACTIVE || curr.status == TerminalSessionStatus.PAUSED_SCREEN_OFF)
+                        if (wasLiveSession) {
                             markDetached("Koneksi terputus (${t.message ?: "jaringan"}). Sesi tetap hidup selama 120 detik.")
                         } else {
                             _sessionState.update {
                                 it.copy(
                                     status = TerminalSessionStatus.ERROR,
+                                    activeSid = if (!isResume) null else it.activeSid,
                                     errorMessage = "Gagal terhubung ke /io/term: ${t.message ?: "kesalahan jaringan"}"
                                 )
                             }
@@ -360,6 +375,7 @@ class SidecarTerminalClient @Inject constructor(
             retryJob = null
         }
         disconnectSocketOnly(sendClose = true)
+        receivedOffset.set(0L)
         emulator.reset()
         _sessionState.value = TerminalSessionState(status = TerminalSessionStatus.DISCONNECTED)
     }
@@ -369,6 +385,7 @@ class SidecarTerminalClient @Inject constructor(
         _sessionState.update {
             it.copy(
                 status = TerminalSessionStatus.DETACHED_RECONNECTING,
+                receivedOffset = receivedOffset.get(),
                 detachGraceEndsAtMs = now + DETACH_GRACE_MS,
                 errorMessage = msg
             )
@@ -404,12 +421,19 @@ class SidecarTerminalClient @Inject constructor(
 
     private fun startHeartbeat() {
         stopHeartbeat()
+        lastPongAtMs.set(System.currentTimeMillis())
         heartbeatJob = scope.launch {
             val pingBytes = TerminalBinaryProtocol.encodePingFrame().toByteString()
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
                 if (isPausedByScreenOff) break
                 val ws = webSocket ?: break
+                val silentMs = System.currentTimeMillis() - lastPongAtMs.get()
+                if (silentMs > HEARTBEAT_PONG_TIMEOUT_MS) {
+                    Log.w(TAG, "Connection B (/io/term) silent for ${silentMs}ms (> ${HEARTBEAT_PONG_TIMEOUT_MS}ms); cancelling dead socket.")
+                    ws.cancel()
+                    break
+                }
                 if (!ws.send(pingBytes)) break
             }
         }
@@ -423,10 +447,11 @@ class SidecarTerminalClient @Inject constructor(
 
         when {
             ch == LogBinaryProtocol.CH_CONTROL && op == LogBinaryProtocol.OP_PONG -> {
-                // Heartbeat PONG received
+                lastPongAtMs.set(System.currentTimeMillis())
             }
 
             ch >= TerminalBinaryProtocol.CH_TERM && op == LogBinaryProtocol.OP_DATA -> {
+                receivedOffset.addAndGet(payload.size.toLong())
                 emulator.feed(payload)
                 // Avoid mutating StateFlow on every PTY chunk so MainShell/Hud/Settings never suffer recomposition storms
                 onBytesConsumed(payload.size)
@@ -440,16 +465,19 @@ class SidecarTerminalClient @Inject constructor(
                     "Kesalahan terminal (#$code)"
                 }
                 if (code == 5) { // ERR_FEATURE_OFF
+                    receivedOffset.set(0L)
                     _sessionState.update {
                         it.copy(
                             status = TerminalSessionStatus.DISABLED_BY_SERVER,
                             activeSid = null,
+                            receivedOffset = 0L,
                             errorMessage = "Terminal dinonaktifkan di server."
                         )
                     }
                 } else if (code == 7 && msg.startsWith("OFFSET_RESET:")) {
-                    // A-H5 / G-H5: Server ring overflowed during detach; synchronize offset cleanly and accept ANSI redraw
+                    // A-H5 / G-H5 / C1: Server ring overflowed during detach; synchronize exact offset & reset emulator
                     val authoritativeOffset = msg.removePrefix("OFFSET_RESET:").trim().toLongOrNull() ?: 0L
+                    receivedOffset.set(authoritativeOffset)
                     emulator.reset()
                     consumedSinceLastCredit.set(0)
                     _sessionState.update {
@@ -459,6 +487,7 @@ class SidecarTerminalClient @Inject constructor(
                         )
                     }
                 } else if (code == 7) { // ERR_RESUME_FAILED (session expired/missing)
+                    receivedOffset.set(0L)
                     _sessionState.update {
                         it.copy(
                             status = TerminalSessionStatus.ERROR,
@@ -471,6 +500,7 @@ class SidecarTerminalClient @Inject constructor(
                     _sessionState.update {
                         it.copy(
                             status = TerminalSessionStatus.ERROR,
+                            activeSid = if (receivedOffset.get() == 0L) null else it.activeSid,
                             errorMessage = "ERR #$code: $msg"
                         )
                     }
@@ -480,6 +510,7 @@ class SidecarTerminalClient @Inject constructor(
             op == LogBinaryProtocol.OP_CLOSE -> {
                 val reason = if (payload.isNotEmpty()) (payload[0].toInt() and 0xFF) else 0
                 stopHeartbeat()
+                receivedOffset.set(0L)
                 val notice = when (reason) {
                     3 -> "Batas durasi sesi 4 jam tercapai. Lakukan otentikasi sidik jari ulang."
                     5 -> "Server sidecar sedang dihentikan atau dimulai ulang."
@@ -489,6 +520,7 @@ class SidecarTerminalClient @Inject constructor(
                 _sessionState.value = TerminalSessionState(
                     status = TerminalSessionStatus.DISCONNECTED,
                     activeSid = null,
+                    receivedOffset = 0L,
                     errorMessage = notice
                 )
             }

@@ -20,8 +20,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -71,6 +74,13 @@ data class PendingFinanceStepUp(
     val errorBanner: String? = null
 )
 
+data class ProactiveChatMessage(
+    val clientMsgId: String,
+    val kind: String,
+    val priority: String,
+    val content: String
+)
+
 /**
  * Offline-first Chat Repository combining Room + Paging 3 (maxSize=100),
  * per-stream Channel batching, offline send queue, and seq-based CHAT_RESUME
@@ -115,6 +125,9 @@ class ChatRepository @Inject constructor(
 
     private val _pendingStepUp = MutableStateFlow<PendingFinanceStepUp?>(null)
     val pendingStepUp: StateFlow<PendingFinanceStepUp?> = _pendingStepUp.asStateFlow()
+
+    private val _proactiveMessages = MutableSharedFlow<ProactiveChatMessage>(extraBufferCapacity = 32)
+    val proactiveMessages: SharedFlow<ProactiveChatMessage> = _proactiveMessages.asSharedFlow()
 
     init {
         observeIncomingChatEvents()
@@ -649,6 +662,7 @@ class ChatRepository @Inject constructor(
                         "CHAT_ACK" -> handleChatAck(obj)
                         "CHAT_CHUNK" -> handleChatChunk(obj)
                         "CHAT_RESUME_MISS" -> handleChatResumeMiss(obj)
+                        "CHAT_PROACTIVE" -> handleChatProactive(obj)
                         "ACTION_PENDING" -> handleActionPending(obj)
                         "ACTION_RESULT" -> handleActionResult(obj)
                     }
@@ -657,6 +671,43 @@ class ChatRepository @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun handleChatProactive(obj: JSONObject) {
+        val content = obj.optString("content", "").trim()
+        if (content.isEmpty()) return
+        val clientMsgId = obj.optString("client_msg_id", "")
+            .takeIf { it.isNotBlank() }
+            ?: "proactive-${System.currentTimeMillis()}"
+        val kind = obj.optString("kind", "PROACTIVE").ifBlank { "PROACTIVE" }
+        val priority = obj.optString("priority", "P1").ifBlank { "P1" }
+        val ts = obj.optLong("ts", System.currentTimeMillis()).takeIf { it > 0L }
+            ?: System.currentTimeMillis()
+
+        // Deduplicate by client_msg_id so reconnect replays never duplicate proactive bubbles
+        if (chatMessageDao.getByClientMsgIdAndRole(clientMsgId, ChatRole.ASSISTANT) != null) {
+            return
+        }
+
+        chatMessageDao.insertMessage(
+            ChatMessageEntity(
+                id = UUID.randomUUID().toString(),
+                clientMsgId = clientMsgId,
+                role = ChatRole.ASSISTANT,
+                content = content,
+                timestamp = ts,
+                status = ChatStatus.SENT,
+                intentTag = kind
+            )
+        )
+        _proactiveMessages.tryEmit(
+            ProactiveChatMessage(
+                clientMsgId = clientMsgId,
+                kind = kind,
+                priority = priority,
+                content = content
+            )
+        )
     }
 
     private suspend fun handleChatAck(obj: JSONObject) {

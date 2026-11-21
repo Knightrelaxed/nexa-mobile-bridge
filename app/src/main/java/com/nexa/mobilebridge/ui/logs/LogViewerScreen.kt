@@ -1,5 +1,7 @@
 package com.nexa.mobilebridge.ui.logs
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -14,11 +16,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -224,14 +226,13 @@ fun LogViewerScreen(
             }
         )
 
-        Column(
+        // 2. Slim Full-Width Filter Chip Strip (no outer box)
+        Box(
             modifier = Modifier
-                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
-            // 2. Compact 36 dp Filter Chip Row (no outer box): [✓ ALL] [FINANCE] [BRIDGE] [● ERRORS ONLY]
             LogFilterChipBar(
                 activeFilter = activeFilter,
                 onSelectFilter = { preset ->
@@ -239,144 +240,144 @@ fun LogViewerScreen(
                     viewModel.selectFilter(preset)
                 }
             )
+        }
 
-            // 3. Framed Log List & Footer Container matching 03_server_log_monitor_v2.png
-            Surface(
-                color = if (nexaColors.isDark) Color(0xFF0C1118) else MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, nexaColors.cardBorder),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Box(
+        HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.65f))
+
+        // 3. Edge-to-Edge Flat Console Stream (Option A: zero outer frame, zero per-row cards)
+        val streamBg = if (nexaColors.isDark) Color(0xFF0A0F16) else MaterialTheme.colorScheme.background
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(streamBg)
+        ) {
+            when {
+                visibleEntries.isNotEmpty() -> {
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
+                            .fillMaxSize()
+                            .nestedScroll(scrollBreakConnection),
+                        contentPadding = PaddingValues(vertical = 2.dp),
+                        verticalArrangement = Arrangement.Top
                     ) {
-                        when {
-                            visibleEntries.isNotEmpty() -> {
-                                LazyColumn(
-                                    state = listState,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .nestedScroll(scrollBreakConnection),
-                                    contentPadding = PaddingValues(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    items(
-                                        count = visibleEntries.size,
-                                        key = { idx -> visibleEntries[idx].stableId }
-                                    ) { idx ->
-                                        val entry = visibleEntries.getOrNull(idx) ?: return@items
-                                        LogRecordCard(
-                                            entry = entry,
-                                            formattedTime = timeFormat.format(Date(entry.timestampMs))
-                                        )
-                                    }
+                        items(
+                            count = visibleEntries.size,
+                            key = { idx -> visibleEntries[idx].stableId }
+                        ) { idx ->
+                            val entry = visibleEntries.getOrNull(idx) ?: return@items
+                            val formattedTime = timeFormat.format(Date(entry.timestampMs))
+                            FlatLogRow(
+                                entry = entry,
+                                formattedTime = formattedTime,
+                                onCopyRow = {
+                                    triggerHaptic()
+                                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                                    val line = "$formattedTime [${entry.unitName}] [${entry.priorityBadge}] ${entry.message}"
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("Log N.E.X.A", line))
                                 }
-
-                                // Subtle small circular jump-to-bottom arrow (Telegram-style smart auto-hide)
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = showJumpToBottomButton,
-                                    enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
-                                    exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.8f, animationSpec = tween(140)),
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(end = 12.dp, bottom = 12.dp)
-                                ) {
-                                    LogJumpToBottomButton(
-                                        hasUnseenLogs = hasUnseenNewLogs,
-                                        onClick = {
-                                            triggerHaptic()
-                                            hasUnseenNewLogs = false
-                                            lastSeenLatestId = visibleEntries.lastOrNull()?.stableId ?: -1L
-                                            viewModel.setAutoScroll(true)
-                                            coroutineScope.launch {
-                                                val target = visibleEntries.lastIndex
-                                                if (target >= 0) {
-                                                    isProgrammaticJump = true
-                                                    try {
-                                                        listState.animateScrollToItem(target)
-                                                    } finally {
-                                                        isProgrammaticJump = false
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-
-                            streamStatus == LogStreamStatus.CONNECTING || streamStatus == LogStreamStatus.AWAITING_BIOMETRIC -> {
-                                LogStatusOverlay(
-                                    isLoading = true,
-                                    title = if (streamStatus == LogStreamStatus.AWAITING_BIOMETRIC) {
-                                        "Menunggu Verifikasi Sidik Jari"
-                                    } else {
-                                        "Menyambungkan ke /io/logs..."
-                                    },
-                                    subtitle = "Koneksi B on-demand diamankan dengan tiket Ed25519 sekali pakai (TTL 45 detik).",
-                                    actionLabel = null,
-                                    onAction = {}
-                                )
-                            }
-
-                            streamStatus == LogStreamStatus.ERROR -> {
-                                val needsSettings = enrollmentStatus != "ACTIVE"
-                                LogStatusOverlay(
-                                    isLoading = false,
-                                    title = if (needsSettings) "Perangkat Belum Terdaftar" else "Aliran Log Terhenti",
-                                    subtitle = errorMessage ?: "Gagal membuka aliran /io/logs.",
-                                    actionLabel = if (needsSettings) "Buka Pengaturan & Enroll" else "Verifikasi & Sambung Ulang",
-                                    actionIcon = if (needsSettings) Icons.Default.Settings else Icons.Default.Refresh,
-                                    onAction = {
-                                        triggerHaptic()
-                                        if (needsSettings) {
-                                            onOpenSettings()
-                                        } else {
-                                            val activity = context.findActivity() as? FragmentActivity
-                                            viewModel.retryConnection(activity)
-                                        }
-                                    }
-                                )
-                            }
-
-                            else -> {
-                                LogStatusOverlay(
-                                    isLoading = false,
-                                    title = "Buffer Log Kosong (${activeFilter.label})",
-                                    subtitle = if (streamStatus == LogStreamStatus.PAUSED) {
-                                        "Aliran log sedang dijeda (CREDIT ditahan). Ketuk tombol Play di atas untuk melanjutkan."
-                                    } else {
-                                        "Menunggu baris log baru dari journald server..."
-                                    },
-                                    actionLabel = if (streamStatus == LogStreamStatus.IDLE_DISCONNECTED) {
-                                        "Buka Koneksi /io/logs"
-                                    } else null,
-                                    onAction = {
-                                        triggerHaptic()
-                                        val activity = context.findActivity() as? FragmentActivity
-                                        viewModel.retryConnection(activity)
-                                    }
-                                )
-                            }
+                            )
                         }
                     }
 
-                    HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder)
+                    // Subtle small circular jump-to-bottom arrow (Telegram-style smart auto-hide)
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showJumpToBottomButton,
+                        enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
+                        exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.8f, animationSpec = tween(140)),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 12.dp, bottom = 10.dp)
+                    ) {
+                        LogJumpToBottomButton(
+                            hasUnseenLogs = hasUnseenNewLogs,
+                            onClick = {
+                                triggerHaptic()
+                                hasUnseenNewLogs = false
+                                lastSeenLatestId = visibleEntries.lastOrNull()?.stableId ?: -1L
+                                viewModel.setAutoScroll(true)
+                                coroutineScope.launch {
+                                    val target = visibleEntries.lastIndex
+                                    if (target >= 0) {
+                                        isProgrammaticJump = true
+                                        try {
+                                            listState.animateScrollToItem(target)
+                                        } finally {
+                                            isProgrammaticJump = false
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
 
-                    // 4. Accurate Footer matching 03_server_log_monitor_v2.png (Zero hallucinated metrics)
-                    LogAccurateFooter(
-                        bufferCount = totalBufferedCount,
-                        bufferCapacity = viewModel.logBuffer.capacity,
-                        skippedCount = skippedCount,
-                        streamStatus = streamStatus
+                streamStatus == LogStreamStatus.CONNECTING || streamStatus == LogStreamStatus.AWAITING_BIOMETRIC -> {
+                    LogStatusOverlay(
+                        isLoading = true,
+                        title = if (streamStatus == LogStreamStatus.AWAITING_BIOMETRIC) {
+                            "Menunggu Verifikasi Sidik Jari"
+                        } else {
+                            "Menyambungkan ke /io/logs..."
+                        },
+                        subtitle = "Koneksi B on-demand diamankan dengan tiket Ed25519 sekali pakai (TTL 45 detik).",
+                        actionLabel = null,
+                        onAction = {}
+                    )
+                }
+
+                streamStatus == LogStreamStatus.ERROR -> {
+                    val needsSettings = enrollmentStatus != "ACTIVE"
+                    LogStatusOverlay(
+                        isLoading = false,
+                        title = if (needsSettings) "Perangkat Belum Terdaftar" else "Aliran Log Terhenti",
+                        subtitle = errorMessage ?: "Gagal membuka aliran /io/logs.",
+                        actionLabel = if (needsSettings) "Buka Pengaturan & Enroll" else "Verifikasi & Sambung Ulang",
+                        actionIcon = if (needsSettings) Icons.Default.Settings else Icons.Default.Refresh,
+                        onAction = {
+                            triggerHaptic()
+                            if (needsSettings) {
+                                onOpenSettings()
+                            } else {
+                                val activity = context.findActivity() as? FragmentActivity
+                                viewModel.retryConnection(activity)
+                            }
+                        }
+                    )
+                }
+
+                else -> {
+                    LogStatusOverlay(
+                        isLoading = false,
+                        title = "Buffer Log Kosong (${activeFilter.label})",
+                        subtitle = if (streamStatus == LogStreamStatus.PAUSED) {
+                            "Aliran log sedang dijeda (CREDIT ditahan). Ketuk tombol Play di atas untuk melanjutkan."
+                        } else {
+                            "Menunggu baris log baru dari journald server..."
+                        },
+                        actionLabel = if (streamStatus == LogStreamStatus.IDLE_DISCONNECTED) {
+                            "Buka Koneksi /io/logs"
+                        } else null,
+                        onAction = {
+                            triggerHaptic()
+                            val activity = context.findActivity() as? FragmentActivity
+                            viewModel.retryConnection(activity)
+                        }
                     )
                 }
             }
         }
+
+        HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.65f))
+
+        // 4. Compact Single-Line Status Footer (~26 dp)
+        LogAccurateFooter(
+            bufferCount = totalBufferedCount,
+            bufferCapacity = viewModel.logBuffer.capacity,
+            skippedCount = skippedCount,
+            streamStatus = streamStatus
+        )
     }
 }
 
@@ -623,15 +624,15 @@ private fun LogFilterChipBar(
 
             Surface(
                 color = chipBg,
-                shape = RoundedCornerShape(9.dp),
+                shape = RoundedCornerShape(7.dp),
                 border = BorderStroke(1.dp, chipBorder),
                 modifier = Modifier
-                    .height(36.dp)
+                    .height(30.dp)
                     .semantics { selected = isSelected }
                     .clickable(role = Role.Tab) { onSelectFilter(preset) }
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 11.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
@@ -640,7 +641,7 @@ private fun LogFilterChipBar(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
                             tint = textColor,
-                            modifier = Modifier.size(13.dp)
+                            modifier = Modifier.size(12.dp)
                         )
                     } else if (preset == LogFilterPreset.ERRORS_ONLY) {
                         Box(
@@ -652,7 +653,7 @@ private fun LogFilterChipBar(
 
                     Text(
                         text = preset.label,
-                        style = NexaMonoTypography.badge,
+                        style = NexaMonoTypography.badge.copy(fontSize = 11.sp),
                         fontWeight = FontWeight.Bold,
                         color = textColor
                     )
@@ -663,16 +664,16 @@ private fun LogFilterChipBar(
 }
 
 /**
- * Individual Log Record Card matching 03_server_log_monitor_v2.png:
- * - Separate Priority badge slot ([INFO], [WARN], [ERROR], [DEBUG])
- * - Separate Category badge slot ([FINANCE], [BRIDGE], [AUTH], [SYNTHETIC])
- * - Color-coded card background, border, and monospace message text
+ * Flat Console Stream log row (Option A - Datadog / Android Logcat style):
+ * - Edge-to-edge layout with 2.5 dp color-coded left accent bar and hairline 0.5 dp divider
+ * - Calm metadata line for INFO; compact colored badges only for WARN, ERROR, FINANCE, BRIDGE, AUTH, SYNTHETIC
+ * - Tap any row to copy the log line directly to clipboard
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LogRecordCard(
+private fun FlatLogRow(
     entry: LogEntry,
-    formattedTime: String
+    formattedTime: String,
+    onCopyRow: () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
     val isError = entry.prio <= LogBinaryProtocol.PRIO_ERROR
@@ -681,19 +682,20 @@ private fun LogRecordCard(
     val isFinance = (entry.catFlags and LogBinaryProtocol.CAT_FINANCE) != 0
     val isBridge = (entry.catFlags and LogBinaryProtocol.CAT_BRIDGE) != 0
 
-    val cardBg = when {
-        isError && nexaColors.isDark -> Color(0xFF231116)
+    val rowBg = when {
+        isError && nexaColors.isDark -> Color(0xFF210F14)
         isError -> Color(0xFFFEE2E2)
-        isSynthetic && nexaColors.isDark -> Color(0xFF1F180D)
-        isSynthetic -> Color(0xFFFFF3E0)
-        nexaColors.isDark -> Color(0xFF121923)
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        (isSynthetic || isWarn) && nexaColors.isDark -> Color(0xFF1D160B)
+        isSynthetic || isWarn -> Color(0xFFFFF3E0)
+        else -> Color.Transparent
     }
 
-    val cardBorder = when {
-        isError -> nexaColors.crimson.copy(alpha = 0.65f)
-        isSynthetic -> nexaColors.amber.copy(alpha = 0.65f)
-        else -> nexaColors.cardBorder
+    val accentBarColor = when {
+        isError -> nexaColors.crimson
+        isSynthetic || isWarn -> nexaColors.amber
+        isFinance -> nexaColors.emerald
+        isBridge -> MaterialTheme.colorScheme.primary
+        else -> nexaColors.cardBorder.copy(alpha = 0.55f)
     }
 
     val messageColor = when {
@@ -704,132 +706,114 @@ private fun LogRecordCard(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    val unitColor = when (entry.unitId) {
-        LogBinaryProtocol.UNIT_NEXA_SERVER -> nexaColors.violet
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val unitColor = when {
+        isError -> nexaColors.crimson
+        entry.unitId == LogBinaryProtocol.UNIT_NEXA_SERVER -> nexaColors.violet
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
     }
 
-    Surface(
-        color = cardBg,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, cardBorder),
-        modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(rowBg)
+            .clickable(onClick = onCopyRow)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .height(IntrinsicSize.Min)
         ) {
-            // Top Metadata FlowRow: wraps cleanly at large accessibility font scales (U-M3)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                itemVerticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = formattedTime,
-                    style = NexaMonoTypography.codeLine,
-                    color = if (isError) nexaColors.crimson else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Text(
-                    text = "[${entry.unitName}]",
-                    style = NexaMonoTypography.codeLine,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isError) nexaColors.crimson else unitColor
-                )
-
-                // Slot 1: Priority Badge
-                PriorityBadgePill(prioBadge = entry.priorityBadge)
-
-                // Slot 2: Category Badge (Separate Slot)
-                entry.categoryBadge?.let { catBadge ->
-                    CategoryBadgePill(catBadge = catBadge)
-                }
-            }
-
-            // Bottom Log Message Row
-            Text(
-                text = entry.message,
-                style = NexaMonoTypography.codeLine.copy(fontSize = 13.sp, lineHeight = 18.sp),
-                color = messageColor
+            Box(
+                modifier = Modifier
+                    .width(2.5.dp)
+                    .fillMaxHeight()
+                    .background(accentBarColor)
             )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 9.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = formattedTime,
+                        style = NexaMonoTypography.codeLine.copy(fontSize = 10.5.sp),
+                        color = if (isError) nexaColors.crimson else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                    )
+
+                    Text(
+                        text = entry.unitName,
+                        style = NexaMonoTypography.codeLine.copy(fontSize = 10.5.sp),
+                        fontWeight = FontWeight.SemiBold,
+                        color = unitColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    if (isError || isWarn) {
+                        InlineLogTag(
+                            label = entry.priorityBadge,
+                            textColor = if (isError) nexaColors.crimson else nexaColors.amber,
+                            bgColor = if (isError) {
+                                nexaColors.crimson.copy(alpha = 0.16f)
+                            } else {
+                                nexaColors.amber.copy(alpha = 0.16f)
+                            }
+                        )
+                    }
+
+                    entry.categoryBadge?.let { catBadge ->
+                        val catTint = when (catBadge) {
+                            "FINANCE" -> nexaColors.emerald
+                            "BRIDGE" -> MaterialTheme.colorScheme.primary
+                            "SYNTHETIC" -> nexaColors.amber
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        InlineLogTag(
+                            label = catBadge,
+                            textColor = catTint,
+                            bgColor = catTint.copy(alpha = 0.16f)
+                        )
+                    }
+                }
+
+                Text(
+                    text = entry.message,
+                    style = NexaMonoTypography.codeLine.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    color = messageColor
+                )
+            }
         }
-    }
-}
 
-@Composable
-private fun PriorityBadgePill(prioBadge: String) {
-    val nexaColors = LocalNexaColors.current
-    val (bg, border, text) = when (prioBadge) {
-        "ERROR" -> Triple(
-            if (nexaColors.isDark) Color(0xFF33151C) else Color(0xFFFECACA),
-            nexaColors.crimson.copy(alpha = 0.75f),
-            nexaColors.crimson
-        )
-        "WARN" -> Triple(
-            if (nexaColors.isDark) Color(0xFF2C200E) else Color(0xFFFDE68A),
-            nexaColors.amber.copy(alpha = 0.75f),
-            nexaColors.amber
-        )
-        else -> Triple(
-            if (nexaColors.isDark) Color(0xFF1A2433) else MaterialTheme.colorScheme.surfaceVariant,
-            nexaColors.cardBorder,
-            MaterialTheme.colorScheme.onSurface
-        )
-    }
-
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(5.dp),
-        border = BorderStroke(1.dp, border)
-    ) {
-        Text(
-            text = "[$prioBadge]",
-            style = NexaMonoTypography.badge.copy(fontSize = 11.sp),
-            color = text,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = nexaColors.cardBorder.copy(alpha = 0.28f)
         )
     }
 }
 
 @Composable
-private fun CategoryBadgePill(catBadge: String) {
-    val nexaColors = LocalNexaColors.current
-    val (bg, border, text) = when (catBadge) {
-        "FINANCE" -> Triple(
-            if (nexaColors.isDark) Color(0xFF0A291E) else Color(0xFFD9F5E5),
-            nexaColors.emerald.copy(alpha = 0.75f),
-            nexaColors.emerald
-        )
-        "BRIDGE" -> Triple(
-            if (nexaColors.isDark) Color(0xFF082632) else Color(0xFFD6F3F8),
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
-            MaterialTheme.colorScheme.primary
-        )
-        "SYNTHETIC" -> Triple(
-            if (nexaColors.isDark) Color(0xFF2C200E) else Color(0xFFFDE68A),
-            nexaColors.amber.copy(alpha = 0.75f),
-            nexaColors.amber
-        )
-        else -> Triple(
-            if (nexaColors.isDark) Color(0xFF192336) else MaterialTheme.colorScheme.surfaceVariant,
-            nexaColors.cardBorder,
-            MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(5.dp),
-        border = BorderStroke(1.dp, border)
+private fun InlineLogTag(
+    label: String,
+    textColor: Color,
+    bgColor: Color
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(bgColor)
+            .padding(horizontal = 5.dp, vertical = 1.dp)
     ) {
         Text(
-            text = "[$catBadge]",
-            style = NexaMonoTypography.badge.copy(fontSize = 11.sp),
-            color = text,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            text = label,
+            style = NexaMonoTypography.badge.copy(fontSize = 9.5.sp),
+            fontWeight = FontWeight.Bold,
+            color = textColor
         )
     }
 }
@@ -843,38 +827,53 @@ private fun LogAccurateFooter(
 ) {
     val nexaColors = LocalNexaColors.current
     val formattedCap = if (bufferCapacity == 2000) "2.000" else bufferCapacity.toString()
+    val statusLabel = when (streamStatus) {
+        LogStreamStatus.LIVE -> "WSS-SECURE"
+        LogStreamStatus.PAUSED -> "PAUSED"
+        LogStreamStatus.CONNECTING, LogStreamStatus.AWAITING_BIOMETRIC -> "AUTH..."
+        else -> "IDLE"
+    }
+    val statusColor = when (streamStatus) {
+        LogStreamStatus.LIVE -> MaterialTheme.colorScheme.primary
+        LogStreamStatus.PAUSED -> nexaColors.amber
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
             text = buildAnnotatedString {
-                append("Buffer: ")
                 withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)) {
-                    append("$bufferCount / $formattedCap")
+                    append("$bufferCount/$formattedCap")
                 }
-                append(" baris • Dilewati: ")
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = nexaColors.amber)) {
-                    append(skippedCount.toString())
+                append(" baris")
+                if (skippedCount > 0) {
+                    append(" • Lewat ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = nexaColors.amber)) {
+                        append(skippedCount.toString())
+                    }
                 }
-                append(" • Berhenti otomatis saat layar mati")
             },
-            style = NexaMonoTypography.codeLine.copy(fontSize = 11.5.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
 
+        Spacer(modifier = Modifier.width(8.dp))
+
         Text(
-            text = when (streamStatus) {
-                LogStreamStatus.LIVE -> "WSS-SECURE"
-                LogStreamStatus.PAUSED -> "WSS-SECURE • PAUSED (CREDIT=0)"
-                LogStreamStatus.CONNECTING, LogStreamStatus.AWAITING_BIOMETRIC -> "WSS-SECURE • AUTHENTICATING"
-                else -> "WSS-SECURE • ON-DEMAND IDLE"
-            },
-            style = NexaMonoTypography.badge,
-            color = MaterialTheme.colorScheme.primary
+            text = statusLabel,
+            style = NexaMonoTypography.badge.copy(fontSize = 10.5.sp),
+            fontWeight = FontWeight.Bold,
+            color = statusColor
         )
     }
 }

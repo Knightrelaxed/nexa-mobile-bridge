@@ -20,6 +20,7 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -48,6 +49,7 @@ class SidecarLogsClient @Inject constructor(
     companion object {
         private const val TAG = "SidecarLogsClient"
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
+        private const val HEARTBEAT_PONG_TIMEOUT_MS = 35_000L
         private const val DEFAULT_TAIL_LINES = 100
         private const val SIDECAR_RETRY_DELAY_MS = 600L
 
@@ -83,6 +85,7 @@ class SidecarLogsClient @Inject constructor(
     @Volatile
     private var isDisconnectedExplicitly: Boolean = false
     private val consumedSinceLastCredit = AtomicInteger(0)
+    private val lastPongAtMs = AtomicLong(0L)
 
     private val _status = MutableStateFlow(LogStreamStatus.IDLE_DISCONNECTED)
     val status: StateFlow<LogStreamStatus> = _status.asStateFlow()
@@ -140,14 +143,23 @@ class SidecarLogsClient @Inject constructor(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (!isActiveSocket(webSocket)) return
                 opened.set(true)
+                lastPongAtMs.set(System.currentTimeMillis())
                 Log.i(TAG, "Connection B (/io/logs) opened")
                 _status.value = if (isPaused) LogStreamStatus.PAUSED else LogStreamStatus.LIVE
                 sendOpenSubscription(currentFilter)
+                if (isPaused) {
+                    val zeroCredit = LogBinaryProtocol.encodeCreditFrame(
+                        channel = LogBinaryProtocol.CH_LOGS,
+                        bytesCredit = 0
+                    )
+                    webSocket.send(zeroCredit.toByteString())
+                }
                 startHeartbeat()
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (!isActiveSocket(webSocket)) return
+                lastPongAtMs.set(System.currentTimeMillis())
                 handleBinaryFrame(bytes.toByteArray())
             }
 
@@ -155,7 +167,9 @@ class SidecarLogsClient @Inject constructor(
                 if (!isActiveSocket(webSocket)) return
                 Log.i(TAG, "Connection B (/io/logs) closed ($code): $reason")
                 heartbeatJob?.cancel()
-                _status.value = LogStreamStatus.IDLE_DISCONNECTED
+                if (_status.value != LogStreamStatus.ERROR) {
+                    _status.value = LogStreamStatus.IDLE_DISCONNECTED
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -225,13 +239,13 @@ class SidecarLogsClient @Inject constructor(
                     pendingFilterResubscribe = false
                     logBuffer.clear()
                     sendOpenSubscription(currentFilter)
-                } else {
-                    val resumeCredit = LogBinaryProtocol.encodeCreditFrame(
-                        channel = LogBinaryProtocol.CH_LOGS,
-                        bytesCredit = LogBinaryProtocol.INITIAL_LOG_CREDIT_BYTES
-                    )
-                    ws.send(resumeCredit.toByteString())
                 }
+                // C3: Always replenish CREDIT on resume (even when resubscribing filter) so older/new sidecars never deadlock at credit=0
+                val resumeCredit = LogBinaryProtocol.encodeCreditFrame(
+                    channel = LogBinaryProtocol.CH_LOGS,
+                    bytesCredit = LogBinaryProtocol.INITIAL_LOG_CREDIT_BYTES
+                )
+                ws.send(resumeCredit.toByteString())
             }
         }
     }
@@ -291,11 +305,18 @@ class SidecarLogsClient @Inject constructor(
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
+        lastPongAtMs.set(System.currentTimeMillis())
         heartbeatJob = scope.launch {
             val pingBytes = LogBinaryProtocol.encodePingFrame().toByteString()
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
                 val ws = webSocket ?: break
+                val silentMs = System.currentTimeMillis() - lastPongAtMs.get()
+                if (silentMs > HEARTBEAT_PONG_TIMEOUT_MS) {
+                    Log.w(TAG, "Connection B (/io/logs) silent for ${silentMs}ms (> ${HEARTBEAT_PONG_TIMEOUT_MS}ms); cancelling dead socket.")
+                    ws.cancel()
+                    break
+                }
                 if (!ws.send(pingBytes)) break
             }
         }
@@ -309,7 +330,7 @@ class SidecarLogsClient @Inject constructor(
 
         when {
             ch == LogBinaryProtocol.CH_CONTROL && op == LogBinaryProtocol.OP_PONG -> {
-                // Heartbeat PONG received
+                lastPongAtMs.set(System.currentTimeMillis())
             }
 
             ch == LogBinaryProtocol.CH_LOGS && op == LogBinaryProtocol.OP_DATA -> {
