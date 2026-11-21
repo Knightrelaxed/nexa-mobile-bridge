@@ -49,15 +49,28 @@ class LogViewerViewModel @Inject constructor(
     private val _activeFilter = MutableStateFlow(LogFilterPreset.ALL)
     val activeFilter: StateFlow<LogFilterPreset> = _activeFilter.asStateFlow()
 
-    // Compute log snapshot + filter off Main Thread and coalesce bursty batches (~30 fps)
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    // Compute log snapshot + subsystem filter + instant local keyword search off Main Thread (~30 fps)
     val logSnapshot: StateFlow<LogSnapshotState> = flow {
         combine(
             sidecarLogsClient.logBuffer.version,
-            _activeFilter
-        ) { _, filter ->
+            _activeFilter,
+            _searchQuery
+        ) { _, filter, rawQuery ->
             val all = sidecarLogsClient.logBuffer.snapshot()
+            val q = rawQuery.trim()
+            val filtered = all.filter { entry ->
+                if (!entry.matchesFilter(filter)) return@filter false
+                if (q.isEmpty()) return@filter true
+                entry.message.contains(q, ignoreCase = true) ||
+                    entry.unitName.contains(q, ignoreCase = true) ||
+                    entry.priorityBadge.contains(q, ignoreCase = true) ||
+                    (entry.categoryBadge?.contains(q, ignoreCase = true) == true)
+            }
             LogSnapshotState(
-                visibleEntries = all.filter { it.matchesFilter(filter) },
+                visibleEntries = filtered,
                 totalBufferedCount = all.size
             )
         }.flowOn(Dispatchers.Default).conflate().collect { snap ->
@@ -153,6 +166,7 @@ class LogViewerViewModel @Inject constructor(
         startupJob?.cancel()
         startupJob = null
         isSessionActiveOrStarting.set(false)
+        _searchQuery.value = ""
         sidecarLogsClient.disconnectAndClear()
     }
 
@@ -168,6 +182,14 @@ class LogViewerViewModel @Inject constructor(
         _activeFilter.value = preset
         _autoScrollEnabled.value = true
         sidecarLogsClient.updateFilterSubscription(preset)
+    }
+
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    fun clearSearchQuery() {
+        _searchQuery.value = ""
     }
 
     /**

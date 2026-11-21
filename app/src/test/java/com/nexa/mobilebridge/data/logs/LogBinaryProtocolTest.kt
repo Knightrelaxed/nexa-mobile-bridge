@@ -148,7 +148,8 @@ class LogBinaryProtocolTest {
             message = "[NEXA-AUTH] ACTION_REJECTED recipient not whitelisted"
         )
         assertEquals("FINANCE", stepUpEntry.categoryBadge)
-        assertTrue(stepUpEntry.matchesFilter(LogFilterPreset.FINANCE))
+        assertTrue(stepUpEntry.matchesFilter(LogFilterPreset.CORE))
+        assertTrue(stepUpEntry.matchesFilter(LogFilterPreset.AUTH))
         assertTrue(stepUpEntry.matchesFilter(LogFilterPreset.ERRORS_ONLY))
         assertFalse(stepUpEntry.matchesFilter(LogFilterPreset.BRIDGE))
 
@@ -160,8 +161,22 @@ class LogBinaryProtocolTest {
             timestampMs = 1763620503000L,
             message = "[FINANCE] Recovery resend failed"
         )
-        assertTrue(warnEntry.matchesFilter(LogFilterPreset.FINANCE))
+        assertTrue(warnEntry.matchesFilter(LogFilterPreset.CORE))
         assertFalse(warnEntry.matchesFilter(LogFilterPreset.ERRORS_ONLY))
+        assertFalse(warnEntry.matchesFilter(LogFilterPreset.AUTH))
+
+        val coreEntry = LogEntry(
+            stableId = 4L,
+            prio = LogBinaryProtocol.PRIO_INFO,
+            unitId = LogBinaryProtocol.UNIT_NEXA_SERVER,
+            catFlags = LogBinaryProtocol.CAT_CORE,
+            timestampMs = 1763620505000L,
+            message = "[ROUTER] Calendar & Gmail tools dispatched"
+        )
+        assertEquals("CORE", coreEntry.categoryBadge)
+        assertTrue(coreEntry.matchesFilter(LogFilterPreset.CORE))
+        assertFalse(coreEntry.matchesFilter(LogFilterPreset.BRIDGE))
+        assertFalse(coreEntry.matchesFilter(LogFilterPreset.AUTH))
 
         val badUnit = LogEntry(
             stableId = 3L,

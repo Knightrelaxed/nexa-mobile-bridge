@@ -10,9 +10,10 @@ enum class LogFilterPreset(
     val catMask: Int
 ) {
     ALL("ALL", 0x0F, LogBinaryProtocol.PRIO_DEBUG, LogBinaryProtocol.CAT_NONE),
-    FINANCE("FINANCE", 0x0F, LogBinaryProtocol.PRIO_DEBUG, LogBinaryProtocol.CAT_FINANCE),
+    ERRORS_ONLY("ERRORS", 0x0F, LogBinaryProtocol.PRIO_ERROR, LogBinaryProtocol.CAT_NONE),
+    CORE("CORE", 0x0F, LogBinaryProtocol.PRIO_DEBUG, LogBinaryProtocol.CAT_CORE_GROUP),
     BRIDGE("BRIDGE", 0x0F, LogBinaryProtocol.PRIO_DEBUG, LogBinaryProtocol.CAT_BRIDGE),
-    ERRORS_ONLY("ERRORS ONLY", 0x0F, LogBinaryProtocol.PRIO_ERROR, LogBinaryProtocol.CAT_NONE)
+    AUTH("AUTH", 0x0F, LogBinaryProtocol.PRIO_DEBUG, LogBinaryProtocol.CAT_AUTH)
 }
 
 data class ParsedLogRecord(
@@ -86,6 +87,8 @@ object LogBinaryProtocol {
     const val CAT_FINANCE: Int = 0x01
     const val CAT_BRIDGE: Int = 0x02
     const val CAT_AUTH: Int = 0x04
+    const val CAT_CORE: Int = 0x08
+    const val CAT_CORE_GROUP: Int = CAT_CORE or CAT_FINANCE
     const val CAT_SYNTHETIC: Int = 0x80
 
     const val RECORD_HEADER_BYTES: Int = 13
@@ -110,11 +113,12 @@ object LogBinaryProtocol {
     }
 
     /**
-     * Separate category slot badge from priority slot badge (Stitch Blueprint v2 Slide 3 / PRD §12.1).
+     * Separate category slot badge from priority slot badge.
      */
     fun categoryBadgeFor(catFlags: Int): String? = when {
         (catFlags and CAT_SYNTHETIC) != 0 -> "SYNTHETIC"
         (catFlags and CAT_FINANCE) != 0 -> "FINANCE"
+        (catFlags and CAT_CORE) != 0 -> "CORE"
         (catFlags and CAT_BRIDGE) != 0 -> "BRIDGE"
         (catFlags and CAT_AUTH) != 0 -> "AUTH"
         else -> null

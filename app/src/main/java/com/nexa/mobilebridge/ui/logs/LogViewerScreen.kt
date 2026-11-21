@@ -5,10 +5,12 @@ import android.content.ClipboardManager
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,14 +35,17 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -131,9 +137,11 @@ fun LogViewerScreen(
     val streamStatus by viewModel.streamStatus.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val activeFilter by viewModel.activeFilter.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val autoScroll by viewModel.autoScrollEnabled.collectAsStateWithLifecycle()
     val enrollmentStatus by viewModel.enrollmentStatus.collectAsStateWithLifecycle()
     val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
+    var isSearchExpanded by remember { mutableStateOf(false) }
 
     // FR-LOG-03 / PRD §13: Start stream on ON_START; close stream & clear buffer on ON_STOP
     LifecycleStartEffect(Unit) {
@@ -207,9 +215,19 @@ fun LogViewerScreen(
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 1. Single Unified Header matching 03_server_log_monitor_v2.png (No double top bar!)
+        // 1. Single Unified Header with Search, Pause, Clear, Settings
         LogUnifiedTopHeader(
             status = streamStatus,
+            isSearchActive = isSearchExpanded || searchQuery.isNotEmpty(),
+            onToggleSearch = {
+                triggerHaptic()
+                if (isSearchExpanded) {
+                    isSearchExpanded = false
+                    viewModel.clearSearchQuery()
+                } else {
+                    isSearchExpanded = true
+                }
+            },
             onTogglePause = {
                 triggerHaptic()
                 viewModel.togglePause()
@@ -226,20 +244,45 @@ fun LogViewerScreen(
             }
         )
 
-        // 2. Slim Full-Width Filter Chip Strip (no outer box)
-        Box(
+        // 2. Slim Full-Width Filter Chip Strip (Opsi A: ALL | ERRORS | CORE | BRIDGE | AUTH)
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
-            LogFilterChipBar(
-                activeFilter = activeFilter,
-                onSelectFilter = { preset ->
-                    triggerHaptic()
-                    viewModel.selectFilter(preset)
-                }
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                LogFilterChipBar(
+                    activeFilter = activeFilter,
+                    onSelectFilter = { preset ->
+                        triggerHaptic()
+                        viewModel.selectFilter(preset)
+                    }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = isSearchExpanded || searchQuery.isNotEmpty(),
+                enter = expandVertically(tween(150)) + fadeIn(tween(150)),
+                exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
+            ) {
+                LogLocalSearchBar(
+                    query = searchQuery,
+                    matchCount = visibleEntries.size,
+                    onQueryChange = { viewModel.updateSearchQuery(it) },
+                    onClearOrClose = {
+                        triggerHaptic()
+                        if (searchQuery.isNotEmpty()) {
+                            viewModel.clearSearchQuery()
+                        } else {
+                            isSearchExpanded = false
+                        }
+                    }
+                )
+            }
         }
 
         HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.65f))
@@ -347,6 +390,20 @@ fun LogViewerScreen(
                     )
                 }
 
+                searchQuery.isNotBlank() -> {
+                    LogStatusOverlay(
+                        isLoading = false,
+                        title = "Tidak Ada Log yang Cocok",
+                        subtitle = "Kata kunci \"$searchQuery\" tidak ditemukan pada filter ${activeFilter.label} ($totalBufferedCount baris di buffer).",
+                        actionLabel = "Reset Pencarian",
+                        actionIcon = Icons.Default.Close,
+                        onAction = {
+                            triggerHaptic()
+                            viewModel.clearSearchQuery()
+                        }
+                    )
+                }
+
                 else -> {
                     LogStatusOverlay(
                         isLoading = false,
@@ -354,7 +411,7 @@ fun LogViewerScreen(
                         subtitle = if (streamStatus == LogStreamStatus.PAUSED) {
                             "Aliran log sedang dijeda (CREDIT ditahan). Ketuk tombol Play di atas untuk melanjutkan."
                         } else {
-                            "Menunggu baris log baru dari journald server..."
+                            "Menunggu baris log baru dari server..."
                         },
                         actionLabel = if (streamStatus == LogStreamStatus.IDLE_DISCONNECTED) {
                             "Buka Koneksi /io/logs"
@@ -388,6 +445,8 @@ fun LogViewerScreen(
 @Composable
 private fun LogUnifiedTopHeader(
     status: LogStreamStatus,
+    isSearchActive: Boolean,
+    onToggleSearch: () -> Unit,
     onTogglePause: () -> Unit,
     onClearBuffer: () -> Unit,
     onOpenSettings: () -> Unit
@@ -416,7 +475,7 @@ private fun LogUnifiedTopHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    .padding(start = 12.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -467,6 +526,13 @@ private fun LogUnifiedTopHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     LogSquareIconButton(
+                        icon = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = if (isSearchActive) "Tutup pencarian log" else "Cari kata kunci log",
+                        isActive = isSearchActive,
+                        activeColor = MaterialTheme.colorScheme.primary,
+                        onClick = onToggleSearch
+                    )
+                    LogSquareIconButton(
                         icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                         contentDescription = if (isPaused) "Lanjutkan aliran log" else "Jeda aliran log (tahan CREDIT)",
                         isActive = isPaused,
@@ -491,6 +557,96 @@ private fun LogUnifiedTopHeader(
             }
 
             HorizontalDivider(thickness = 1.dp, color = nexaColors.cardBorder.copy(alpha = 0.7f))
+        }
+    }
+}
+
+@Composable
+private fun LogLocalSearchBar(
+    query: String,
+    matchCount: Int,
+    onQueryChange: (String) -> Unit,
+    onClearOrClose: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    val inputBg = if (nexaColors.isDark) Color(0xFF111824) else MaterialTheme.colorScheme.surfaceVariant
+    val borderColor = if (query.isNotEmpty()) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+    } else {
+        nexaColors.cardBorder
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
+    ) {
+        Surface(
+            color = inputBg,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, borderColor),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (query.isEmpty()) {
+                        Text(
+                            text = "Cari: finance, calendar, gmail, docs, task...",
+                            style = NexaMonoTypography.codeLine.copy(fontSize = 11.5.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        textStyle = NexaMonoTypography.codeLine.copy(
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                if (query.isNotEmpty()) {
+                    Text(
+                        text = "$matchCount",
+                        style = NexaMonoTypography.badge.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = if (query.isNotEmpty()) "Hapus kata kunci" else "Tutup pencarian",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clickable(role = Role.Button, onClick = onClearOrClose)
+                )
+            }
         }
     }
 }
@@ -568,25 +724,25 @@ private fun LogSquareIconButton(
     val border = if (isActive) activeColor else nexaColors.cardBorder
     val tint = if (isActive) activeColor else MaterialTheme.colorScheme.onSurfaceVariant
 
-    // 44 dp transparent hit target around crisp 36 dp visual button (comfortable thumb tap without bulk)
+    // 40 dp hit target around crisp 34 dp visual button (4 header actions fit comfortably on 360 dp phones)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(44.dp)
+            .size(40.dp)
             .clickable(role = Role.Button, onClick = onClick)
     ) {
         Surface(
             color = bg,
             shape = RoundedCornerShape(9.dp),
             border = BorderStroke(1.dp, border),
-            modifier = Modifier.size(36.dp)
+            modifier = Modifier.size(34.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = icon,
                     contentDescription = contentDescription,
                     tint = tint,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                 )
             }
         }
@@ -680,7 +836,9 @@ private fun FlatLogRow(
     val isWarn = entry.prio == LogBinaryProtocol.PRIO_WARN
     val isSynthetic = entry.isSynthetic
     val isFinance = (entry.catFlags and LogBinaryProtocol.CAT_FINANCE) != 0
+    val isCore = (entry.catFlags and LogBinaryProtocol.CAT_CORE) != 0
     val isBridge = (entry.catFlags and LogBinaryProtocol.CAT_BRIDGE) != 0
+    val isAuth = (entry.catFlags and LogBinaryProtocol.CAT_AUTH) != 0
 
     val rowBg = when {
         isError && nexaColors.isDark -> Color(0xFF210F14)
@@ -694,6 +852,8 @@ private fun FlatLogRow(
         isError -> nexaColors.crimson
         isSynthetic || isWarn -> nexaColors.amber
         isFinance -> nexaColors.emerald
+        isCore -> nexaColors.violet
+        isAuth -> nexaColors.amber
         isBridge -> MaterialTheme.colorScheme.primary
         else -> nexaColors.cardBorder.copy(alpha = 0.55f)
     }
@@ -770,8 +930,9 @@ private fun FlatLogRow(
                     entry.categoryBadge?.let { catBadge ->
                         val catTint = when (catBadge) {
                             "FINANCE" -> nexaColors.emerald
+                            "CORE" -> nexaColors.violet
                             "BRIDGE" -> MaterialTheme.colorScheme.primary
-                            "SYNTHETIC" -> nexaColors.amber
+                            "AUTH", "SYNTHETIC" -> nexaColors.amber
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
                         InlineLogTag(
