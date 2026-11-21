@@ -1,5 +1,6 @@
 package com.nexa.mobilebridge.ui.settings
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nexa.mobilebridge.NexaBridgeService
@@ -16,14 +17,25 @@ import com.nexa.mobilebridge.data.local.ThemeMode
 import com.nexa.mobilebridge.data.terminal.SidecarTerminalClient
 import com.nexa.mobilebridge.data.terminal.TerminalSessionStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+
+sealed class ConnectionTestState {
+    data object Idle : ConnectionTestState()
+    data class Testing(val detail: String = "Checking server reachability...") : ConnectionTestState()
+    data class Success(val latencyMs: Long, val detail: String) : ConnectionTestState()
+    data class Failed(val badge: String, val detail: String) : ConnectionTestState()
+}
 
 data class SettingsUiState(
     val deviceName: String = "samsung-a33-tuan",
@@ -56,7 +68,8 @@ data class SettingsUiState(
     val isEnrolling: Boolean = false,
     val enrollError: String? = null,
     val lastEnrollSuccessTick: Int = 0,
-    val statusNotice: String? = null
+    val statusNotice: String? = null,
+    val connectionTestState: ConnectionTestState = ConnectionTestState.Idle
 ) {
     val hasUnsavedServerChanges: Boolean
         get() = serverUrl.trim() != savedServerUrl.trim() ||
@@ -77,6 +90,7 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     private var tokenRevealJob: Job? = null
+    private var connectionTestJob: Job? = null
 
     init {
         loadInitialState()
@@ -169,15 +183,15 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun onServerUrlChanged(url: String) {
-        _uiState.update { it.copy(serverUrl = url, isSaved = false) }
+        _uiState.update { it.copy(serverUrl = url, isSaved = false, connectionTestState = ConnectionTestState.Idle) }
     }
 
     fun onAuthTokenChanged(token: String) {
-        _uiState.update { it.copy(authToken = token, isSaved = false) }
+        _uiState.update { it.copy(authToken = token, isSaved = false, connectionTestState = ConnectionTestState.Idle) }
     }
 
     fun onHmacSecretChanged(secret: String) {
-        _uiState.update { it.copy(hmacSecret = secret, isSaved = false) }
+        _uiState.update { it.copy(hmacSecret = secret, isSaved = false, connectionTestState = ConnectionTestState.Idle) }
     }
 
     fun onThemeModeSelected(mode: ThemeMode) {
@@ -260,6 +274,8 @@ class SettingsViewModel @Inject constructor(
 
     fun onLeaveSettings() {
         hideTokenImmediately()
+        connectionTestJob?.cancel()
+        connectionTestJob = null
         _uiState.update { curr ->
             val editableByDefault = curr.enrollmentStatus != "ACTIVE"
             curr.copy(
@@ -269,7 +285,8 @@ class SettingsViewModel @Inject constructor(
                 isDomainUnlocked = editableByDefault,
                 isServerEditMode = editableByDefault,
                 statusNotice = null,
-                enrollError = null
+                enrollError = null,
+                connectionTestState = ConnectionTestState.Idle
             )
         }
     }
@@ -286,6 +303,8 @@ class SettingsViewModel @Inject constructor(
 
     fun discardServerChanges() {
         hideTokenImmediately()
+        connectionTestJob?.cancel()
+        connectionTestJob = null
         _uiState.update { curr ->
             val editableByDefault = curr.enrollmentStatus != "ACTIVE"
             curr.copy(
@@ -294,7 +313,8 @@ class SettingsViewModel @Inject constructor(
                 hmacSecret = curr.savedHmacSecret,
                 isDomainUnlocked = editableByDefault,
                 isServerEditMode = editableByDefault,
-                statusNotice = null
+                statusNotice = null,
+                connectionTestState = ConnectionTestState.Idle
             )
         }
     }
@@ -387,7 +407,8 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun testConnection() {
-        viewModelScope.launch {
+        if (connectionTestJob?.isActive == true) return
+        connectionTestJob = viewModelScope.launch {
             val state = _uiState.value
             val stored = dataStore.getConfig()
             val hasUnverifiedCredentialEdits = state.enrollmentStatus == "ACTIVE" &&
@@ -396,16 +417,118 @@ class SettingsViewModel @Inject constructor(
                     state.hmacSecret != stored.hmacSecret)
             if (hasUnverifiedCredentialEdits) {
                 _uiState.update {
-                    it.copy(statusNotice = "Save your changes with fingerprint first before testing.")
+                    it.copy(
+                        connectionTestState = ConnectionTestState.Failed(
+                            badge = "Unsaved",
+                            detail = "Save your changes with fingerprint first before testing."
+                        )
+                    )
                 }
                 return@launch
             }
-            val targetUrl = stored.serverUrl.trim()
-            if (targetUrl.isNotBlank()) {
-                webSocketClient.setHmacSecret(stored.hmacSecret)
-                webSocketClient.forceReconnect(targetUrl, stored.authToken)
-                _uiState.update { it.copy(statusNotice = "Testing connection to $targetUrl...") }
+
+            val useDraftCreds = state.enrollmentStatus != "ACTIVE"
+            val targetUrl = (if (useDraftCreds) state.serverUrl else stored.serverUrl).trim()
+            val targetToken = if (useDraftCreds) state.authToken else stored.authToken
+            val targetSecret = if (useDraftCreds) state.hmacSecret else stored.hmacSecret
+
+            if (targetUrl.isBlank()) {
+                _uiState.update {
+                    it.copy(
+                        connectionTestState = ConnectionTestState.Failed(
+                            badge = "No URL",
+                            detail = "Enter a WebSocket URL (wss://...) first."
+                        )
+                    )
+                }
+                return@launch
             }
+            if (!targetUrl.startsWith("wss://", ignoreCase = true) && !targetUrl.startsWith("ws://", ignoreCase = true)) {
+                _uiState.update {
+                    it.copy(
+                        connectionTestState = ConnectionTestState.Failed(
+                            badge = "Invalid URL",
+                            detail = "Server URL must start with wss:// or ws://."
+                        )
+                    )
+                }
+                return@launch
+            }
+
+            // Mode A: If already connected on saved credentials, run a non-disruptive live PING/PONG probe.
+            val canLivePing = !useDraftCreds && webSocketClient.isConnected()
+            if (canLivePing) {
+                _uiState.update {
+                    it.copy(connectionTestState = ConnectionTestState.Testing("Pinging live bridge..."))
+                }
+                val pingMs = webSocketClient.pingRoundTripMs(timeoutMs = 5_000L)
+                if (pingMs != null) {
+                    _uiState.update {
+                        it.copy(
+                            connectionTestState = ConnectionTestState.Success(
+                                latencyMs = pingMs,
+                                detail = "Reachable · Live ping verified"
+                            )
+                        )
+                    }
+                    return@launch
+                }
+                _uiState.update {
+                    it.copy(connectionTestState = ConnectionTestState.Testing("No pong reply · Reconnecting..."))
+                }
+            } else {
+                _uiState.update {
+                    it.copy(connectionTestState = ConnectionTestState.Testing("Connecting to server..."))
+                }
+            }
+
+            // Mode B: Perform a fresh WebSocket handshake and await the actual outcome (max 8s).
+            val startedAtMs = SystemClock.elapsedRealtime()
+            val outcomeWaiter = CompletableDeferred<ConnectionState>()
+            val collectorJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                webSocketClient.connectionState.drop(1).collect { nextState ->
+                    when (nextState) {
+                        is ConnectionState.Connected,
+                        is ConnectionState.AuthFailed,
+                        is ConnectionState.Disconnected -> outcomeWaiter.complete(nextState)
+                        is ConnectionState.Connecting,
+                        is ConnectionState.Reconnecting -> Unit
+                    }
+                }
+            }
+
+            val outcome = try {
+                webSocketClient.setHmacSecret(targetSecret)
+                webSocketClient.forceReconnect(targetUrl, targetToken)
+                withTimeoutOrNull(8_000L) { outcomeWaiter.await() }
+            } finally {
+                collectorJob.cancel()
+            }
+
+            val elapsedMs = (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(1L)
+            val finalTestState = when (outcome) {
+                is ConnectionState.Connected -> ConnectionTestState.Success(
+                    latencyMs = elapsedMs,
+                    detail = "Connected · TLS handshake verified"
+                )
+                is ConnectionState.AuthFailed -> ConnectionTestState.Failed(
+                    badge = "Auth failed",
+                    detail = outcome.reason.ifBlank { "Server rejected authentication." }
+                )
+                is ConnectionState.Disconnected -> ConnectionTestState.Failed(
+                    badge = "Failed",
+                    detail = outcome.reason?.takeIf { it.isNotBlank() } ?: "Unable to reach server."
+                )
+                null -> ConnectionTestState.Failed(
+                    badge = "Timed out",
+                    detail = "No response from server within 8s."
+                )
+                else -> ConnectionTestState.Failed(
+                    badge = "Failed",
+                    detail = "Connection attempt did not complete."
+                )
+            }
+            _uiState.update { it.copy(connectionTestState = finalTestState) }
         }
     }
 
@@ -433,7 +556,8 @@ class SettingsViewModel @Inject constructor(
                     isSaved = true,
                     isDomainUnlocked = editableByDefault,
                     isServerEditMode = editableByDefault,
-                    statusNotice = "Server settings saved and reconnecting."
+                    statusNotice = "Server settings saved and reconnecting.",
+                    connectionTestState = ConnectionTestState.Idle
                 )
             }
             onSaved()

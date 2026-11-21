@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -883,11 +884,14 @@ fun SettingsScreen(
 
                         SettingsRowDivider(insetStart = true)
 
-                        SettingsListRow(
-                            leadingIcon = Icons.Default.Refresh,
-                            title = "Test connection",
-                            showChevron = true,
-                            onClick = { viewModel.testConnection() }
+                        TestConnectionRow(
+                            state = uiState.connectionTestState,
+                            onTest = {
+                                if (uiState.hapticEnabled) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                viewModel.testConnection()
+                            }
                         )
 
                         SettingsRowDivider(insetStart = true)
@@ -962,11 +966,14 @@ fun SettingsScreen(
 
                         SettingsRowDivider(insetStart = false)
 
-                        SettingsListRow(
-                            leadingIcon = Icons.Default.Refresh,
-                            title = "Test connection",
-                            showChevron = true,
-                            onClick = { viewModel.testConnection() }
+                        TestConnectionRow(
+                            state = uiState.connectionTestState,
+                            onTest = {
+                                if (uiState.hapticEnabled) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                viewModel.testConnection()
+                            }
                         )
                     }
                 }
@@ -1224,6 +1231,81 @@ fun SettingsScreen(
             }
         )
     }
+}
+
+@Composable
+private fun TestConnectionRow(
+    state: ConnectionTestState,
+    onTest: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    val isTesting = state is ConnectionTestState.Testing
+
+    val leadingTint = when (state) {
+        is ConnectionTestState.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
+        is ConnectionTestState.Testing -> MaterialTheme.colorScheme.primary
+        is ConnectionTestState.Success -> nexaColors.emerald
+        is ConnectionTestState.Failed -> nexaColors.crimson
+    }
+    val subtitleText = when (state) {
+        is ConnectionTestState.Idle -> "Verify server reachability and latency"
+        is ConnectionTestState.Testing -> state.detail
+        is ConnectionTestState.Success -> state.detail
+        is ConnectionTestState.Failed -> state.detail
+    }
+    val subtitleColor = when (state) {
+        is ConnectionTestState.Failed -> nexaColors.crimson
+        is ConnectionTestState.Success -> nexaColors.emerald
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    SettingsListRow(
+        leadingIcon = Icons.Default.Refresh,
+        leadingTint = leadingTint,
+        title = "Test connection",
+        subtitle = subtitleText,
+        subtitleColor = subtitleColor,
+        showChevron = false,
+        onClick = if (isTesting) null else onTest,
+        trailing = {
+            when (state) {
+                is ConnectionTestState.Idle -> {
+                    Text(
+                        text = "Run",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                is ConnectionTestState.Testing -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                is ConnectionTestState.Success -> {
+                    Text(
+                        text = "${state.latencyMs} ms",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                        color = nexaColors.emerald
+                    )
+                }
+                is ConnectionTestState.Failed -> {
+                    Text(
+                        text = state.badge,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = nexaColors.crimson
+                    )
+                }
+            }
+        }
+    )
 }
 
 private fun resolveAudioDisplayName(context: Context, uri: Uri): String {

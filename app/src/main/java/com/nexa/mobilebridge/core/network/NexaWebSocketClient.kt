@@ -2,12 +2,15 @@ package com.nexa.mobilebridge.core.network
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import com.nexa.mobilebridge.core.security.HmacVerifier
 import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.protocol.NexaCommand
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -101,6 +105,9 @@ class NexaWebSocketClient @Inject constructor(
 
     private val _incomingChatEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val incomingChatEvents: SharedFlow<String> = _incomingChatEvents.asSharedFlow()
+
+    private val _pongEvents = MutableSharedFlow<Long>(extraBufferCapacity = 16)
+    val pongEvents: SharedFlow<Long> = _pongEvents.asSharedFlow()
 
     // A-H1: Guard socket assignment & identity checks with wsLock + @Volatile
     private val wsLock = Any()
@@ -206,8 +213,8 @@ class NexaWebSocketClient @Inject constructor(
 
         val trimmedUrl = targetUrl.trim()
         if (!trimmedUrl.startsWith("wss://", ignoreCase = true) && !trimmedUrl.startsWith("ws://", ignoreCase = true)) {
-            Log.e(TAG, "URL WebSocket tidak valid (harus wss:// atau ws://): $trimmedUrl")
-            _connectionState.value = ConnectionState.Disconnected("URL WebSocket tidak valid")
+            Log.e(TAG, "Invalid WebSocket URL (must start with wss:// or ws://): $trimmedUrl")
+            _connectionState.value = ConnectionState.Disconnected("Invalid WebSocket URL")
             return
         }
 
@@ -220,7 +227,7 @@ class NexaWebSocketClient @Inject constructor(
                 .build()
         } catch (e: IllegalArgumentException) {
             Log.e(TAG, "Malformed WebSocket URL: ${e.message}")
-            _connectionState.value = ConnectionState.Disconnected("URL server tidak valid")
+            _connectionState.value = ConnectionState.Disconnected("Malformed server URL")
             return
         }
 
@@ -299,7 +306,9 @@ class NexaWebSocketClient @Inject constructor(
 
                 // 2. Hardware-Backed Auth / Enrollment / Ticket JSON Events (Connection A - FR-AUTH-01..05)
                 if (msgType in AUTH_EVENT_TYPES) {
-                    if (msgType != "PONG") {
+                    if (msgType == "PONG") {
+                        _pongEvents.tryEmit(System.currentTimeMillis())
+                    } else {
                         if (!_incomingAuthEvents.tryEmit(text)) {
                             authDispatchChannel.trySend(text)
                         }
@@ -354,9 +363,9 @@ class NexaWebSocketClient @Inject constructor(
                 }
                 val httpCode = response?.code
                 if (httpCode == 401 || httpCode == 403) {
-                    Log.e(TAG, "Autentikasi WebSocket ditolak (HTTP $httpCode). Menghentikan retry otomatis.")
+                    Log.e(TAG, "WebSocket authentication rejected (HTTP $httpCode). Stopping auto-retry.")
                     orchestrator.stop()
-                    _connectionState.value = ConnectionState.AuthFailed("Autentikasi ditolak server (HTTP $httpCode)")
+                    _connectionState.value = ConnectionState.AuthFailed("Authentication rejected by server (HTTP $httpCode)")
                     return
                 }
                 Log.e(TAG, "WebSocket Gagal: ${t.javaClass.simpleName} (${t.message})")
@@ -400,6 +409,31 @@ class NexaWebSocketClient @Inject constructor(
             oldWs?.cancel()
         } catch (_: Exception) {}
         _connectionState.value = ConnectionState.Disconnected("Disconnected by user")
+    }
+
+    /**
+     * Measures live WebSocket round-trip latency via application-level PING/PONG without disconnecting.
+     * Returns round-trip latency in ms if PONG arrives within [timeoutMs], or null if not connected or timed out.
+     */
+    suspend fun pingRoundTripMs(timeoutMs: Long = 5_000L): Long? {
+        if (_connectionState.value !is ConnectionState.Connected) return null
+        val pongWaiter = CompletableDeferred<Long>()
+        val sentAtMs = SystemClock.elapsedRealtime()
+        val collectorJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            pongEvents.collect {
+                val rtt = (SystemClock.elapsedRealtime() - sentAtMs).coerceAtLeast(1L)
+                pongWaiter.complete(rtt)
+            }
+        }
+        return try {
+            if (!send("""{"type":"PING","ts":${System.currentTimeMillis()}}""")) {
+                null
+            } else {
+                withTimeoutOrNull(timeoutMs) { pongWaiter.await() }
+            }
+        } finally {
+            collectorJob.cancel()
+        }
     }
 
     fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
