@@ -214,6 +214,10 @@ fun NexaVisorBadge(
             saccadeX.animateTo(0f, tween(160))
             return@LaunchedEffect
         }
+        if (visualState == NexaVisorVisualState.LISTENING) {
+            // Re-center horizontal gaze immediately when focusing on Tuan's input box
+            saccadeX.animateTo(0f, tween(180, easing = FastOutSlowInEasing))
+        }
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
                 val waitMs = Random.nextLong(3_400L, 5_600L)
@@ -316,7 +320,7 @@ fun NexaVisorBadge(
 
     val targetLeftW = when (visualState) {
         NexaVisorVisualState.IDLE -> 9.2f
-        NexaVisorVisualState.LISTENING -> 9.4f - (voiceBoost * 0.8f)
+        NexaVisorVisualState.LISTENING -> 9.8f - (voiceBoost * 1.2f)
         NexaVisorVisualState.THINKING -> 13.6f
         NexaVisorVisualState.STREAMING -> 9.2f - (talkBoost * 1.0f)
         NexaVisorVisualState.STEP_UP -> 9.6f
@@ -326,7 +330,7 @@ fun NexaVisorBadge(
     }
     val targetLeftH = when (visualState) {
         NexaVisorVisualState.IDLE -> 13.4f
-        NexaVisorVisualState.LISTENING -> 13.8f + (voiceBoost * 3.6f)
+        NexaVisorVisualState.LISTENING -> 10.6f + (voiceBoost * 5.4f)
         NexaVisorVisualState.THINKING -> 4.6f
         NexaVisorVisualState.STREAMING -> 12.4f + (talkBoost * 4.4f)
         NexaVisorVisualState.STEP_UP -> 14.0f
@@ -345,7 +349,7 @@ fun NexaVisorBadge(
     val targetLeftRot = if (visualState == NexaVisorVisualState.ERROR) -10f else 0f
     val targetRightRot = if (visualState == NexaVisorVisualState.ERROR) 8f else 0f
     val targetOffsetY = when (visualState) {
-        NexaVisorVisualState.LISTENING -> 2.1f - (voiceBoost * 0.6f)
+        NexaVisorVisualState.LISTENING -> 5.2f - (voiceBoost * 4.2f)
         NexaVisorVisualState.THINKING,
         NexaVisorVisualState.RECONNECTING,
         NexaVisorVisualState.OFFLINE -> 0.8f
@@ -353,6 +357,10 @@ fun NexaVisorBadge(
         NexaVisorVisualState.ERROR -> 0.4f
         NexaVisorVisualState.IDLE,
         NexaVisorVisualState.STEP_UP -> 0f
+    }
+    val targetEyeSpacing = when (visualState) {
+        NexaVisorVisualState.LISTENING -> 7.7f + (voiceBoost * 0.7f)
+        else -> 8.4f
     }
     val targetPupilR = if (visualState == NexaVisorVisualState.ERROR) 1.75f else 0f
 
@@ -367,6 +375,7 @@ fun NexaVisorBadge(
     val leftRot by animateFloatAsState(targetLeftRot, morphSpring, label = "miniLRot")
     val rightRot by animateFloatAsState(targetRightRot, morphSpring, label = "miniRRot")
     val offsetY by animateFloatAsState(targetOffsetY, if (activeElastic) fastTween else morphSpring, label = "miniOY")
+    val eyeSpacing by animateFloatAsState(targetEyeSpacing, if (activeElastic) fastTween else morphSpring, label = "miniSpacing")
     val pupilR by animateFloatAsState(targetPupilR, morphSpring, label = "miniPR")
 
     val targetCoreColor = when (visualState) {
@@ -381,6 +390,7 @@ fun NexaVisorBadge(
     }
     val targetGlowAlpha = when (visualState) {
         NexaVisorVisualState.OFFLINE -> 0.16f
+        NexaVisorVisualState.LISTENING -> 0.36f
         NexaVisorVisualState.STREAMING -> 0.34f
         NexaVisorVisualState.RECONNECTING -> 0.38f
         else -> 0.28f
@@ -398,6 +408,7 @@ fun NexaVisorBadge(
 
     val restingBorder = if (nexaColors.isDark) nexaColors.cardBorder else Color(0xFF233041)
     val targetBorderColor = when (visualState) {
+        NexaVisorVisualState.LISTENING -> VisorColorCyan.copy(alpha = 0.42f)
         NexaVisorVisualState.STEP_UP -> VisorColorAmber.copy(alpha = (0.45f + pulseAlpha.value * 0.50f).coerceIn(0f, 1f))
         NexaVisorVisualState.THINKING -> VisorColorAmber.copy(alpha = 0.50f)
         NexaVisorVisualState.ERROR -> VisorColorCoral.copy(alpha = 0.65f)
@@ -448,7 +459,7 @@ fun NexaVisorBadge(
             val scale = minOf(size.width / 48.dp.toPx(), size.height / 38.dp.toPx()).coerceAtLeast(0.5f)
             val centerX = size.width / 2f
             val centerY = size.height / 2f + (offsetY.dp.toPx() * scale)
-            val spacing = 8.4.dp.toPx() * scale
+            val spacing = eyeSpacing.dp.toPx() * scale
             val saccadePx = saccadeX.value.dp.toPx() * scale
             val leftCenterX = centerX - spacing + saccadePx
             val rightCenterX = centerX + spacing + saccadePx
