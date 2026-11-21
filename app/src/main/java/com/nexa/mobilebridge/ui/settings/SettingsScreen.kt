@@ -135,8 +135,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onNavigateBack: () -> Unit
 ) {
-    // FR-SEC-06 / Audit A7: Protect Settings screen against screenshots and recents preview
-    SecureScreenEffect()
+    // Otomatis aktif FLAG_SECURE pada build release; tetap bebas screenshot saat debug/testing.
+    SecureScreenEffect(allowInDebugBuild = true)
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val nexaColors = LocalNexaColors.current
