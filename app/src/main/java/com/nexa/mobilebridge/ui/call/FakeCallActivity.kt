@@ -212,16 +212,46 @@ class FakeCallActivity : ComponentActivity() {
     @Volatile
     private var pendingStateEntryTime: Long = 0L
 
+    // Idempotent guard so graceful farewell audio drain runs once and HUD watchdog never resets DISCONNECTING
+    @Volatile
+    private var isEndingGracefully: Boolean = false
+
     // Track how many times user has rejected (sent to server for importance evaluation)
     private var rejectionCount = 0
+
+    private fun finishCallAfterAudioDrain(source: String) {
+        runOnUiThread {
+            hudState.value = LiveVoiceHudState.DISCONNECTING
+            pendingStateEntryTime = 0L
+            if (isEndingGracefully) return@runOnUiThread
+            isEndingGracefully = true
+
+            // Mute uplink mic immediately so ambient noise or echo cannot interrupt farewell drain
+            NexaBridgeService.enableCallMicrophone(false)
+            voiceStreamHandler.setMicrophoneMuted(true)
+            Log.i(TAG, "Graceful call end ($source): waiting for farewell audio playback to finish cleanly")
+
+            lifecycleScope.launch(Dispatchers.Main) {
+                var waitLoops = 0
+                // Up to 10s (200 * 50ms) so fast-streamed multi-second farewell audio finishes every syllable
+                while (voiceStreamHandler.isPlayingAudio() && waitLoops < 200) {
+                    kotlinx.coroutines.delay(50)
+                    waitLoops++
+                }
+                kotlinx.coroutines.delay(350) // Natural silence tail before closing UI
+                voiceStreamHandler.stopStreaming()
+                callState.value = CallState.FINISHED
+            }
+        }
+    }
 
     // Zero-IPC Direct Live Call Event Listener (Direct background path to avoid Main Thread Binder stalls)
     private val liveCallEventListener = object : LiveCallEventListener {
         override fun onAudioPlay(pcmChunk: String) {
             voiceStreamHandler.enqueueAudioChunk(pcmChunk)
-            if (hudState.value != LiveVoiceHudState.SPEAKING && hudState.value != LiveVoiceHudState.DISCONNECTING) {
+            if (hudState.value != LiveVoiceHudState.SPEAKING && hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
                 runOnUiThread {
-                    if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                    if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
                         hudState.value = LiveVoiceHudState.SPEAKING
                     }
                     pendingStateEntryTime = 0L
@@ -230,16 +260,24 @@ class FakeCallActivity : ComponentActivity() {
         }
 
         override fun onAudioInterrupted() {
+            if (hudState.value == LiveVoiceHudState.DISCONNECTING || isEndingGracefully) {
+                Log.i(TAG, "Ignoring audio interrupt while draining farewell speech")
+                return
+            }
             voiceStreamHandler.flushOutputBuffer()
             runOnUiThread {
-                hudState.value = LiveVoiceHudState.LISTENING
+                if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
+                    hudState.value = LiveVoiceHudState.LISTENING
+                }
                 pendingStateEntryTime = 0L
             }
         }
 
         override fun onLiveReady() {
             runOnUiThread {
-                hudState.value = LiveVoiceHudState.LISTENING
+                if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
+                    hudState.value = LiveVoiceHudState.LISTENING
+                }
                 pendingStateEntryTime = 0L
             }
         }
@@ -253,27 +291,33 @@ class FakeCallActivity : ComponentActivity() {
                             pendingStateEntryTime = 0L
                         }
                         "THINKING" -> {
-                            hudState.value = LiveVoiceHudState.LISTENING
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
+                                hudState.value = LiveVoiceHudState.LISTENING
+                            }
                             pendingStateEntryTime = 0L
                         }
                         "PROCESSING" -> {
-                            hudState.value = LiveVoiceHudState.PROCESSING
-                            pendingStateEntryTime = System.currentTimeMillis()
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
+                                hudState.value = LiveVoiceHudState.PROCESSING
+                                pendingStateEntryTime = System.currentTimeMillis()
+                            }
                         }
                         "SPEAKING" -> {
-                            if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
                                 hudState.value = LiveVoiceHudState.SPEAKING
                             }
                             pendingStateEntryTime = 0L
                         }
                         "LISTENING" -> {
-                            if (hudState.value != LiveVoiceHudState.DISCONNECTING) {
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
                                 hudState.value = LiveVoiceHudState.LISTENING
                             }
                             pendingStateEntryTime = 0L
                         }
                         "RECONNECTING" -> {
-                            hudState.value = LiveVoiceHudState.RECONNECTING
+                            if (hudState.value != LiveVoiceHudState.DISCONNECTING && !isEndingGracefully) {
+                                hudState.value = LiveVoiceHudState.RECONNECTING
+                            }
                             pendingStateEntryTime = 0L
                         }
                     }
@@ -290,17 +334,8 @@ class FakeCallActivity : ComponentActivity() {
 
         override fun onCallReplyComplete(replyText: String?) {
             runOnUiThread {
-                if (hudState.value == LiveVoiceHudState.DISCONNECTING) {
-                    callScope.launch {
-                        var waitLoops = 0
-                        while (voiceStreamHandler.isPlayingAudio() && waitLoops < 60) {
-                            kotlinx.coroutines.delay(50)
-                            waitLoops++
-                        }
-                        kotlinx.coroutines.delay(300)
-                        voiceStreamHandler.stopStreaming()
-                        callState.value = CallState.FINISHED
-                    }
+                if (hudState.value == LiveVoiceHudState.DISCONNECTING || isEndingGracefully) {
+                    finishCallAfterAudioDrain("LIVE_CALL_REPLY_COMPLETE")
                 } else if (hudState.value == LiveVoiceHudState.SPEAKING) {
                     hudState.value = LiveVoiceHudState.LISTENING
                     pendingStateEntryTime = 0L
@@ -311,6 +346,7 @@ class FakeCallActivity : ComponentActivity() {
         override fun onCallError(error: String?) {
             Log.e(TAG, "Live call error received: $error")
             runOnUiThread {
+                if (isEndingGracefully) return@runOnUiThread
                 if (!error.isNullOrBlank()) {
                     assistantMessage.value = error
                 }
@@ -337,18 +373,7 @@ class FakeCallActivity : ComponentActivity() {
                 Log.i(TAG, "PiP RemoteAction: End Call triggered")
                 handleReject()
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_REPLY_COMPLETE" || intent?.action == "com.nexa.mobilebridge.END_CALL") {
-                Log.i(TAG, "End Call signal received — waiting for farewell audio playback to finish cleanly")
-                hudState.value = LiveVoiceHudState.DISCONNECTING
-                lifecycleScope.launch(Dispatchers.Main) {
-                    var waitLoops = 0
-                    while (voiceStreamHandler.isPlayingAudio() && waitLoops < 60) {
-                        kotlinx.coroutines.delay(50)
-                        waitLoops++
-                    }
-                    kotlinx.coroutines.delay(300) // Natural silence tail before closing UI
-                    voiceStreamHandler.stopStreaming()
-                    callState.value = CallState.FINISHED
-                }
+                finishCallAfterAudioDrain("BROADCAST_${intent.action}")
             } else if (intent?.action == "com.nexa.mobilebridge.CALL_LIVE_EVENT") {
                 // If direct listener is already attached, skip broadcast processing to prevent double handling & UI lag
                 if (NexaBridgeService.activeWebSocketClient?.liveCallListener != null) return
@@ -854,8 +879,10 @@ class FakeCallActivity : ComponentActivity() {
                         }
                     } else {
                         disconnectedStartTime = 0L
-                        if (currentHud == LiveVoiceHudState.RECONNECTING) {
-                            // WebSocket just reconnected — fall back to listening
+                        if (currentHud == LiveVoiceHudState.DISCONNECTING || isEndingGracefully) {
+                            // Never overwrite DISCONNECTING while draining farewell audio
+                        } else if (currentHud == LiveVoiceHudState.RECONNECTING) {
+                            // WebSocket just reconnected: fall back to listening
                             hudState.value = LiveVoiceHudState.LISTENING
                             pendingStateEntryTime = 0L
                         } else if (isSpeaking) {
@@ -863,7 +890,7 @@ class FakeCallActivity : ComponentActivity() {
                             hudState.value = LiveVoiceHudState.SPEAKING
                             pendingStateEntryTime = 0L
                         } else if (currentHud == LiveVoiceHudState.SPEAKING && !isSpeaking) {
-                            // Nexa just finished speaking — mic returns to listening
+                            // Nexa just finished speaking: mic returns to listening
                             hudState.value = LiveVoiceHudState.LISTENING
                             pendingStateEntryTime = 0L
                         } else if (currentHud == LiveVoiceHudState.THINKING && entryTime > 0L && now - entryTime > 7000) {
