@@ -711,8 +711,10 @@ class ChatRepository @Inject constructor(
             ?: "proactive-${System.currentTimeMillis()}"
         val kind = obj.optString("kind", "PROACTIVE").ifBlank { "PROACTIVE" }
         val priority = obj.optString("priority", "P1").ifBlank { "P1" }
-        val ts = obj.optLong("ts", System.currentTimeMillis()).takeIf { it > 0L }
+        val caughtUp = obj.optBoolean("caught_up", false)
+        val rawTs = obj.optLong("ts", System.currentTimeMillis()).takeIf { it > 0L }
             ?: System.currentTimeMillis()
+        val ts = if (caughtUp) rawTs else maxOf(rawTs, System.currentTimeMillis())
 
         // Deduplicate by client_msg_id so reconnect replays never duplicate proactive bubbles
         if (chatMessageDao.getByClientMsgIdAndRole(clientMsgId, ChatRole.ASSISTANT) != null) {

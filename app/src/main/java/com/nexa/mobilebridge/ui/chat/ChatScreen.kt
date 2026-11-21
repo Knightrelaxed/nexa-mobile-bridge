@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -70,6 +71,7 @@ import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -88,6 +90,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -97,6 +100,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -212,6 +217,46 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    val headMessage = if (pagedItems.itemCount > 0) pagedItems.peek(0) else null
+    val headMessageId = headMessage?.id
+    val headMessageRole = headMessage?.role
+
+    var lastSeenHeadId by remember { mutableStateOf<String?>(null) }
+    var isPinnedToBottom by remember { mutableStateOf(true) }
+    var pendingForceScroll by remember { mutableStateOf(false) }
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
+    var unreadWhileScrolledUp by remember { mutableIntStateOf(0) }
+
+    val showScrollToBottomButton by remember {
+        derivedStateOf {
+            pagedItems.itemCount > 0 &&
+                (listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > 180)
+        }
+    }
+
+    suspend fun scrollToLatest(animated: Boolean) {
+        if (pagedItems.itemCount <= 0) return
+        isProgrammaticScroll = true
+        try {
+            if (animated && listState.firstVisibleItemIndex <= 12) {
+                listState.animateScrollToItem(0, 0)
+            } else {
+                listState.scrollToItem(0, 0)
+            }
+        } finally {
+            isProgrammaticScroll = false
+        }
+    }
+
+    fun requestScrollToLatestOnSend() {
+        pendingForceScroll = true
+        isPinnedToBottom = true
+        unreadWhileScrolledUp = 0
+        if (pagedItems.itemCount > 0 && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)) {
+            coroutineScope.launch { scrollToLatest(animated = true) }
+        }
+    }
+
     BackHandler(enabled = activeMenuAnchor != null || selectionState.isActive) {
         if (activeMenuAnchor != null) {
             activeMenuAnchor = null
@@ -235,6 +280,84 @@ fun ChatScreen(
         }
     }
 
+    // Track whether the user manually scrolled away from the latest message.
+    // Ignores Compose key-anchor shifts (0 -> 1) on new inserts because isScrollInProgress is false.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+        }.collect { (scrolling, index, offset) ->
+            if (index == 0 && offset <= 48) {
+                isPinnedToBottom = true
+                unreadWhileScrolledUp = 0
+            } else if (scrolling && !isProgrammaticScroll && (index >= 1 || offset > 96)) {
+                isPinnedToBottom = false
+            }
+        }
+    }
+
+    // Auto-scroll to latest ONLY AFTER Room + Paging 3 emits the new head row into LazyColumn.
+    // Waiting 1 frame (withFrameNanos) lets LazyColumn finish key-anchor shift (0 -> 1) first so scrollToItem(0) is never a no-op.
+    LaunchedEffect(headMessageId) {
+        val currentHead = headMessageId ?: return@LaunchedEffect
+        val previousHead = lastSeenHeadId
+        lastSeenHeadId = currentHead
+
+        if (previousHead == null) {
+            if (pendingForceScroll) {
+                withFrameNanos { }
+                scrollToLatest(animated = false)
+                pendingForceScroll = false
+            }
+            return@LaunchedEffect
+        }
+
+        if (currentHead != previousHead) {
+            val shouldFollow = pendingForceScroll ||
+                headMessageRole == ChatRole.USER ||
+                isPinnedToBottom
+
+            if (shouldFollow) {
+                withFrameNanos { }
+                if (!listState.isScrollInProgress || isProgrammaticScroll) {
+                    isPinnedToBottom = true
+                    unreadWhileScrolledUp = 0
+                    scrollToLatest(animated = true)
+                }
+                pendingForceScroll = false
+            } else {
+                unreadWhileScrolledUp = (unreadWhileScrolledUp + 1).coerceAtMost(99)
+            }
+        }
+    }
+
+    // Keep the bottom of an actively growing streamed reply visible while pinned to bottom
+    LaunchedEffect(streamState.activeAssistantRowId, streamState.streamingText.length) {
+        if (isPinnedToBottom &&
+            !listState.isScrollInProgress &&
+            streamState.activeAssistantRowId != null &&
+            pagedItems.itemCount > 0 &&
+            (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)
+        ) {
+            scrollToLatest(animated = false)
+        }
+    }
+
+    // Keep latest message visible above the keyboard when focusing input while pinned to bottom
+    LaunchedEffect(isInputFocused) {
+        if (isInputFocused && isPinnedToBottom && pagedItems.itemCount > 0) {
+            withFrameNanos { }
+            if (!listState.isScrollInProgress &&
+                (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)
+            ) {
+                scrollToLatest(animated = true)
+            }
+        }
+    }
+
     LaunchedEffect(isInputFocused, draftText, pendingStepUp, isExpandedComposer) {
         viewModel.setInputListening(
             pendingStepUp == null && (isInputFocused || isExpandedComposer || draftText.isNotBlank())
@@ -255,12 +378,6 @@ fun ChatScreen(
             if (keepAwake) {
                 view.keepScreenOn = false
             }
-        }
-    }
-
-    LaunchedEffect(streamState.activeClientMsgId) {
-        if (streamState.activeClientMsgId != null && pagedItems.itemCount > 0) {
-            listState.animateScrollToItem(0)
         }
     }
 
@@ -351,8 +468,8 @@ fun ChatScreen(
                 ChatEmptyWelcomeState(
                     onQuickPrompt = { prompt ->
                         triggerHapticTick()
+                        requestScrollToLatestOnSend()
                         viewModel.sendMessage(prompt)
-                        coroutineScope.launch { listState.animateScrollToItem(0) }
                     }
                 )
             } else {
@@ -460,6 +577,7 @@ fun ChatScreen(
                                         for (i in 0 until pagedItems.itemCount) {
                                             if (pagedItems.peek(i)?.id == targetId) {
                                                 highlightedMessageId = targetId
+                                                isPinnedToBottom = (i == 0)
                                                 coroutineScope.launch { listState.animateScrollToItem(i) }
                                                 break
                                             }
@@ -504,6 +622,61 @@ fun ChatScreen(
                                     }
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            // Floating "Jump to Latest" button when user scrolls up into chat history
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showScrollToBottomButton && !isExpandedComposer,
+                enter = fadeIn(tween(140)) + scaleIn(initialScale = 0.82f, animationSpec = tween(140)),
+                exit = fadeOut(tween(110)) + scaleOut(targetScale = 0.82f, animationSpec = tween(110)),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 14.dp, bottom = 12.dp)
+            ) {
+                Box(contentAlignment = Alignment.TopEnd) {
+                    Surface(
+                        color = if (nexaColors.isDark) Color(0xFF15202E) else MaterialTheme.colorScheme.surface,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, nexaColors.cardBorder),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clickable(role = Role.Button) {
+                                triggerHapticTick()
+                                isPinnedToBottom = true
+                                unreadWhileScrolledUp = 0
+                                coroutineScope.launch { scrollToLatest(animated = true) }
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Lompat ke pesan terbaru",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    if (unreadWhileScrolledUp > 0) {
+                        val badgeLabel = if (unreadWhileScrolledUp > 99) "99+" else unreadWhileScrolledUp.toString()
+                        Box(
+                            modifier = Modifier
+                                .offset(x = 3.dp, y = (-5).dp)
+                                .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
+                                .background(color = MaterialTheme.colorScheme.primary, shape = CircleShape)
+                                .padding(horizontal = 5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = badgeLabel,
+                                color = nexaColors.onPrimaryButtonFill,
+                                fontSize = 10.sp,
+                                lineHeight = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -568,8 +741,8 @@ fun ChatScreen(
                 },
                 onFinishVoiceRecording = {
                     triggerHapticConfirm()
+                    requestScrollToLatestOnSend()
                     viewModel.finishAndSendVoiceRecording()
-                    coroutineScope.launch { listState.animateScrollToItem(0) }
                 },
                 onSend = {
                     val text = draftText.trim()
@@ -577,8 +750,8 @@ fun ChatScreen(
                         triggerHapticTick()
                         draftText = ""
                         isExpandedComposer = false
+                        requestScrollToLatestOnSend()
                         viewModel.sendMessage(text)
-                        coroutineScope.launch { listState.animateScrollToItem(0) }
                     }
                 },
                 onStopStream = {
@@ -614,8 +787,8 @@ fun ChatScreen(
                         triggerHapticTick()
                         draftText = ""
                         isExpandedComposer = false
+                        requestScrollToLatestOnSend()
                         viewModel.sendMessage(text)
-                        coroutineScope.launch { listState.animateScrollToItem(0) }
                     }
                 },
                 onStopStream = {
