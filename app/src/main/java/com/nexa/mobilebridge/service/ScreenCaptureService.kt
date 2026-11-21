@@ -106,6 +106,7 @@ class ScreenCaptureService : Service() {
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
+    @Volatile
     private var imageReader: ImageReader? = null
     private var captureJob: Job? = null
 
@@ -127,6 +128,15 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Always satisfy Android 12-16 foreground contract before any early stopSelf() return
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        if (hasMicPermission) {
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+
         if (intent?.action == ACTION_STOP_SCREEN_SHARE) {
             stopSelf()
             return START_NOT_STICKY
@@ -139,37 +149,23 @@ class ScreenCaptureService : Service() {
 
         commandId = intent?.getStringExtra(EXTRA_COMMAND_ID) ?: ""
 
+        try {
+            startForeground(NOTIFICATION_ID, buildOngoingNotification(), serviceType)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enter foreground for ScreenCaptureService: ${e.message}", e)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (isRunning && virtualDisplay != null) {
             Log.i(TAG, "ScreenCaptureService already running, updated commandId=$commandId")
-            return START_STICKY
+            return START_NOT_STICKY
         }
 
         if (resultCode != Activity.RESULT_OK || resultData == null) {
             Log.e(TAG, "Cannot start ScreenCaptureService: Invalid resultCode=$resultCode or resultData is null")
             stopSelf()
             return START_NOT_STICKY
-        }
-
-        // 1. Mandatory Android 14+ Foreground Service start BEFORE calling getMediaProjection()
-        // Coupled with FOREGROUND_SERVICE_TYPE_MICROPHONE so AudioRecord is not silenced when FakeCallActivity moves to back.
-        val notification = buildOngoingNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val hasMicPermission = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-
-            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMicPermission) {
-                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
-
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                serviceType
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
         }
 
         isRunning = true
@@ -210,7 +206,12 @@ class ScreenCaptureService : Service() {
             Log.e(TAG, "Error showing floating overlay: ${e.message}", e)
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "ScreenCaptureService foreground timeout reached (fgsType=$fgsType). Stopping cleanly.")
+        stopSelf()
     }
 
     private fun setupVirtualDisplay() {

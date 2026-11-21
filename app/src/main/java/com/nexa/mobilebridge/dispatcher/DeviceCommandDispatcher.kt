@@ -20,17 +20,12 @@ import com.nexa.mobilebridge.protocol.NexaCommand
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class DeviceCommandDispatcher @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     private val flashlightHandler = FlashlightHandler(context)
     private val volumeHandler = VolumeHandler(context)
@@ -48,6 +43,7 @@ class DeviceCommandDispatcher @Inject constructor(
     private val fakeCallHandler = com.nexa.mobilebridge.dispatcher.handler.FakeCallHandler(context, audioPlayerHandler)
     private val geofenceHandler = com.nexa.mobilebridge.dispatcher.handler.GeofenceHandler(context, com.nexa.mobilebridge.core.sensor.GeofenceManager(context))
     private val lightSensorHandler = com.nexa.mobilebridge.dispatcher.handler.LightSensorHandler(context)
+    private val overlayHandler = OverlayHandler(context)
 
     suspend fun dispatch(command: NexaCommand): CommandResult = withContext(Dispatchers.Default) {
         try {
@@ -69,7 +65,7 @@ class DeviceCommandDispatcher @Inject constructor(
                 NexaActions.SPEAK_TEXT         -> ttsHandler.execute(command)
                 NexaActions.TAKE_PHOTO         -> cameraHandler.execute(command)
                 NexaActions.TAKE_SCREENSHOT    -> screenshotHandler.execute(command)
-                NexaActions.SHOW_OVERLAY_MSG   -> OverlayHandler(context).execute(command)
+                NexaActions.SHOW_OVERLAY_MSG   -> overlayHandler.execute(command)
 
                 // Dynamic Geofencing Actions
                 NexaActions.SET_GEOFENCE       -> geofenceHandler.executeSet(command)
@@ -104,66 +100,24 @@ class DeviceCommandDispatcher @Inject constructor(
         }
     }
 
-    private fun executeDumpHierarchy(command: NexaCommand): CommandResult {
-        val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            ?: return CommandResult.failure(command.command_id, "Nexa Accessibility Service is disabled.")
-        val jsonTree = service.dumpUiHierarchy()
-        return CommandResult.success(
+    private fun deprecatedAccessibilityCommand(command: NexaCommand): CommandResult {
+        return CommandResult.failure(
             command.command_id,
-            "UI Hierarchy dumped successfully.",
-            buildJsonObject { put("nodes", jsonTree) }
+            "Command ${command.action} is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."
         )
     }
 
-    private fun executeAccessibilityClick(command: NexaCommand): CommandResult {
-        val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            ?: return CommandResult.failure(command.command_id, "Nexa Accessibility Service is disabled.")
+    private fun executeDumpHierarchy(command: NexaCommand): CommandResult =
+        deprecatedAccessibilityCommand(command)
 
-        val target = (command.params?.get("target") as? JsonPrimitive)?.content
-        val x = (command.params?.get("x") as? JsonPrimitive)?.content?.toFloatOrNull()
-        val y = (command.params?.get("y") as? JsonPrimitive)?.content?.toFloatOrNull()
+    private fun executeAccessibilityClick(command: NexaCommand): CommandResult =
+        deprecatedAccessibilityCommand(command)
 
-        if (target != null) {
-            val success = service.clickNode(target)
-            return if (success) CommandResult.success(command.command_id, "Clicked node: $target")
-            else CommandResult.failure(command.command_id, "Node not found or not clickable: $target")
-        } else if (x != null && y != null) {
-            var result: CommandResult? = null
-            val latch = CountDownLatch(1)
-            service.clickCoordinates(x, y) { success, err ->
-                result = if (success) CommandResult.success(command.command_id, "Clicked at ($x, $y)")
-                else CommandResult.failure(command.command_id, "Click failed: $err")
-                latch.countDown()
-            }
-            latch.await(3, TimeUnit.SECONDS)
-            return result ?: CommandResult.failure(command.command_id, "Click gesture timeout.")
-        } else {
-            return CommandResult.failure(command.command_id, "Provide 'target' (ID/Text) or ('x', 'y') coordinates.")
-        }
-    }
+    private fun executeAccessibilityInput(command: NexaCommand): CommandResult =
+        deprecatedAccessibilityCommand(command)
 
-    private fun executeAccessibilityInput(command: NexaCommand): CommandResult {
-        val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            ?: return CommandResult.failure(command.command_id, "Nexa Accessibility Service is disabled.")
-
-        val text = (command.params?.get("text") as? JsonPrimitive)?.content
-            ?: return CommandResult.failure(command.command_id, "Missing required parameter 'text'.")
-        val target = (command.params?.get("target") as? JsonPrimitive)?.content
-
-        val success = service.inputText(text, target)
-        return if (success) CommandResult.success(command.command_id, "Input text set successfully.")
-        else CommandResult.failure(command.command_id, "Failed to set input text on focused/target field.")
-    }
-
-    private fun executeAccessibilityScroll(command: NexaCommand): CommandResult {
-        val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            ?: return CommandResult.failure(command.command_id, "Nexa Accessibility Service is disabled.")
-
-        val direction = (command.params?.get("direction") as? JsonPrimitive)?.content ?: "FORWARD"
-        val success = service.scroll(direction)
-        return if (success) CommandResult.success(command.command_id, "Scroll $direction executed.")
-        else CommandResult.failure(command.command_id, "Failed to scroll $direction.")
-    }
+    private fun executeAccessibilityScroll(command: NexaCommand): CommandResult =
+        deprecatedAccessibilityCommand(command)
 
     private fun executeEndCall(command: NexaCommand): CommandResult {
         return try {

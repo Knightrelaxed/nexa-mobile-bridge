@@ -9,6 +9,8 @@ import com.nexa.mobilebridge.protocol.NexaCommand
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -17,11 +19,14 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,26 +41,41 @@ interface LiveCallEventListener {
 
 @Singleton
 class NexaWebSocketClient @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
     private val json: Json,
 ) {
     private val TAG = "NexaWS"
 
     companion object {
+        private val CALL_EVENT_TYPES = setOf(
+            "CALL_AUDIO_PLAY",
+            "CALL_AUDIO_INTERRUPTED",
+            "CALL_LIVE_READY",
+            "CALL_STATUS_UPDATE",
+            "CALL_REPLY_COMPLETE",
+            "CALL_ERROR"
+        )
+
+        private val AUTH_EVENT_TYPES = setOf(
+            "CHALLENGE",
+            "TICKET",
+            "AUTH_ERR",
+            "ENROLL_OK",
+            "ENROLL_ERR",
+            "PONG"
+        )
+
+        private val CHAT_EVENT_TYPES = setOf(
+            "CHAT_ACK",
+            "CHAT_CHUNK",
+            "CHAT_RESUME_MISS",
+            "ACTION_PENDING",
+            "ACTION_RESULT"
+        )
+
         fun fastExtractPcmChunk(text: String): String? {
             val key = "\"pcm_chunk\":"
-            val idx = text.indexOf(key)
-            if (idx == -1) return null
-            val quoteStart = text.indexOf('"', idx + key.length)
-            if (quoteStart == -1) return null
-            val quoteEnd = text.indexOf('"', quoteStart + 1)
-            if (quoteEnd == -1) return null
-            return text.substring(quoteStart + 1, quoteEnd)
-        }
-
-        fun fastExtractField(text: String, fieldName: String): String? {
-            val key = "\"$fieldName\":"
             val idx = text.indexOf(key)
             if (idx == -1) return null
             val quoteStart = text.indexOf('"', idx + key.length)
@@ -75,21 +95,55 @@ class NexaWebSocketClient @Inject constructor(
     private val _incomingCommands = MutableSharedFlow<NexaCommand>(extraBufferCapacity = 64)
     val incomingCommands: SharedFlow<NexaCommand> = _incomingCommands.asSharedFlow()
 
-    private var webSocket: WebSocket? = null
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val _incomingAuthEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val incomingAuthEvents: SharedFlow<String> = _incomingAuthEvents.asSharedFlow()
 
+    private val _incomingChatEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
+    val incomingChatEvents: SharedFlow<String> = _incomingChatEvents.asSharedFlow()
+
+    // A-H1: Guard socket assignment & identity checks with wsLock + @Volatile
+    private val wsLock = Any()
+    @Volatile
+    private var webSocket: WebSocket? = null
+
+    // A-C2: SupervisorJob prevents child failure from cancelling the entire WS scope
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // A-C2: Strict FIFO single-consumer channels preserve exact wire order for CHAT_CHUNK seq 1..N & STREAM_FINAL
+    private val chatDispatchChannel = Channel<String>(capacity = 512)
+    private val authDispatchChannel = Channel<String>(capacity = 128)
+    private val cmdDispatchChannel = Channel<NexaCommand>(capacity = 128)
+
+    @Volatile
     private var currentUrl: String = ""
+    @Volatile
     private var currentToken: String = ""
+    @Volatile
     private var hmacSecret: String = ""
 
-    // ─────────────────────────────────────────────
-    // ReconnectOrchestrator — delegasi semua logika retry ke sini
-    // ─────────────────────────────────────────────
+    init {
+        scope.launch {
+            for (raw in chatDispatchChannel) {
+                _incomingChatEvents.emit(raw)
+            }
+        }
+        scope.launch {
+            for (raw in authDispatchChannel) {
+                _incomingAuthEvents.emit(raw)
+            }
+        }
+        scope.launch {
+            for (cmd in cmdDispatchChannel) {
+                _incomingCommands.emit(cmd)
+            }
+        }
+    }
+
     private val orchestrator: ReconnectOrchestrator by lazy {
         ReconnectOrchestrator(scope) { initiateConnection() }
     }
 
-    /** SharedFlow kegagalan fase — di-subscribe oleh NexaBridgeService untuk notifikasi & TTS. */
+    /** SharedFlow kegagalan fase yang di-subscribe oleh NexaBridgeService untuk notifikasi & TTS. */
     val phaseFailureEvents: SharedFlow<PhaseFailureEvent>
         get() = orchestrator.phaseFailureEvents
 
@@ -100,150 +154,191 @@ class NexaWebSocketClient @Inject constructor(
     fun forceReconnect(url: String = currentUrl, token: String = currentToken) {
         if (url.isNotBlank()) currentUrl = url
         if (token.isNotBlank()) currentToken = token
-        Log.i(TAG, "forceReconnect dipanggil — mereset orchestrator dan memulai koneksi baru.")
-        // Reset orchestrator membatalkan jeda tidur fase dan mengembalikan ke Fase 1 Percobaan 0
+        Log.i(TAG, "forceReconnect dipanggil: mereset orchestrator dan memulai koneksi baru.")
         orchestrator.reset()
         initiateConnection()
     }
 
-    /**
-     * Dipanggil saat jaringan terputus (NetworkCallback.onLost).
-     * Membatalkan socket lama yang menggantung dan mengupdate state secara instan.
-     */
     fun onNetworkLost() {
-        Log.w(TAG, "onNetworkLost: Membatalkan socket aktif karena jaringan terputus.")
+        Log.w(TAG, "onNetworkLost: Membatalkan socket aktif dan menjeda retry karena jaringan terputus.")
+        orchestrator.stop()
+        val oldWs = synchronized(wsLock) {
+            val prev = webSocket
+            webSocket = null
+            prev
+        }
         try {
-            webSocket?.cancel()
+            oldWs?.cancel()
         } catch (e: Exception) {
             Log.w(TAG, "Error cancelling webSocket on network lost: ${e.message}")
         }
-        webSocket = null
         _connectionState.value = ConnectionState.Disconnected("Jaringan terputus")
     }
 
     fun connect(url: String, token: String) {
         if (_connectionState.value is ConnectionState.Connected) return
-
         currentUrl = url
         currentToken = token
-        // Reset orchestrator agar sesi koneksi baru bisa berjalan
         orchestrator.reset()
         initiateConnection()
     }
 
+    private fun isActiveSocket(candidate: WebSocket): Boolean =
+        synchronized(wsLock) { webSocket === candidate }
+
     private fun initiateConnection() {
         if (orchestrator.isStopped) return
-        if (currentUrl.isBlank()) return
+        val targetUrl = currentUrl
+        val targetToken = currentToken
+        if (targetUrl.isBlank()) return
 
-        // 1. Explicitly cancel previous socket instance to prevent ghost socket race conditions
+        val prevWs = synchronized(wsLock) {
+            val prev = webSocket
+            webSocket = null
+            prev
+        }
         try {
-            webSocket?.cancel()
+            prevWs?.cancel()
         } catch (e: Exception) {
             Log.w(TAG, "Error cancelling previous webSocket: ${e.message}")
         }
-        webSocket = null
+
+        val trimmedUrl = targetUrl.trim()
+        if (!trimmedUrl.startsWith("wss://", ignoreCase = true) && !trimmedUrl.startsWith("ws://", ignoreCase = true)) {
+            Log.e(TAG, "URL WebSocket tidak valid (harus wss:// atau ws://): $trimmedUrl")
+            _connectionState.value = ConnectionState.Disconnected("URL WebSocket tidak valid")
+            return
+        }
 
         _connectionState.value = ConnectionState.Connecting
 
-        val request = Request.Builder()
-            .url(currentUrl)
-            .addHeader("Authorization", "Bearer $currentToken")
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(trimmedUrl)
+                .addHeader("Authorization", "Bearer $targetToken")
+                .build()
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "Malformed WebSocket URL: ${e.message}")
+            _connectionState.value = ConnectionState.Disconnected("URL server tidak valid")
+            return
+        }
 
         val listener = object : WebSocketListener() {
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
-                Log.i(TAG, " WebSocket Terbuka")
+                if (!isActiveSocket(webSocket)) return
+                Log.i(TAG, "WebSocket Terbuka")
                 orchestrator.onConnectionSuccess()
                 _connectionState.value = ConnectionState.Connected
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
+                if (!isActiveSocket(webSocket)) return
 
-                // 1. Zero-IPC Direct Path for Live Voice Stream Events
-                val currentListener = liveCallListener
-                if (currentListener != null) {
-                    if (text.contains("CALL_AUDIO_PLAY")) {
+                // A-C3 / A-H11: Fast-path ONLY for actual top-level CALL_AUDIO_PLAY frames;
+                // otherwise parse top-level JSON "type" strictly so AI chat replies mentioning "CALL_ERROR" are never hijacked.
+                val trimmed = text.trimStart()
+                if (trimmed.startsWith("{\"type\":\"CALL_AUDIO_PLAY\"") ||
+                    trimmed.startsWith("{\"type\": \"CALL_AUDIO_PLAY\"")
+                ) {
+                    val listenerNow = liveCallListener
+                    if (listenerNow != null) {
                         val pcm = fastExtractPcmChunk(text)
-                        if (pcm != null) {
-                            currentListener.onAudioPlay(pcm)
-                        }
-                        return
-                    } else if (text.contains("CALL_AUDIO_INTERRUPTED")) {
-                        currentListener.onAudioInterrupted()
-                        return
-                    } else if (text.contains("CALL_LIVE_READY")) {
-                        currentListener.onLiveReady()
-                        return
-                    } else if (text.contains("CALL_STATUS_UPDATE")) {
-                        try {
-                            val jsonObject = org.json.JSONObject(text)
-                            val status = if (jsonObject.has("status")) jsonObject.optString("status") else null
-                            val txt = if (jsonObject.has("text")) jsonObject.optString("text") else null
-                            val userTr = if (jsonObject.has("user_transcript")) jsonObject.optString("user_transcript") else null
-                            currentListener.onStatusUpdate(status, txt, userTr)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to parse CALL_STATUS_UPDATE: ${e.message}")
-                        }
-                        return
-                    } else if (text.contains("CALL_REPLY_COMPLETE")) {
-                        try {
-                            val jsonObject = org.json.JSONObject(text)
-                            val replyText = if (jsonObject.has("reply_text")) jsonObject.optString("reply_text") else null
-                            currentListener.onCallReplyComplete(replyText)
-                        } catch (e: Exception) {
-                            currentListener.onCallReplyComplete(null)
-                        }
-                        return
-                    } else if (text.contains("CALL_ERROR")) {
-                        try {
-                            val jsonObject = org.json.JSONObject(text)
-                            val err = if (jsonObject.has("error")) jsonObject.optString("error") else if (jsonObject.has("message")) jsonObject.optString("message") else null
-                            currentListener.onCallError(err)
-                        } catch (e: Exception) {
-                            currentListener.onCallError(null)
-                        }
-                        return
+                        if (pcm != null) listenerNow.onAudioPlay(pcm)
+                    } else {
+                        broadcastCallLiveEvent(text)
                     }
-                }
-
-                // Fallback broadcast path if no direct listener registered
-                if (text.contains("CALL_AUDIO_PLAY") || text.contains("CALL_AUDIO_INTERRUPTED") || text.contains("CALL_LIVE_READY") || text.contains("CALL_STATUS_UPDATE") || text.contains("CALL_REPLY_COMPLETE") || text.contains("CALL_ERROR")) {
-                    val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
-                        putExtra("raw_json", text)
-                        setPackage(context.packageName)
-                    }
-                    context.sendBroadcast(intent)
                     return
                 }
 
+                val jsonObj = try {
+                    JSONObject(text)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Gagal mem-parse pesan JSON masuk: ${e.message}")
+                    return
+                }
+                val msgType = jsonObj.optString("type", "")
+
+                // 1. Live Voice Call Events routed strictly by exact top-level type
+                if (msgType in CALL_EVENT_TYPES) {
+                    val currentListener = liveCallListener
+                    if (currentListener != null) {
+                        when (msgType) {
+                            "CALL_AUDIO_PLAY" -> {
+                                val pcm = jsonObj.optString("pcm_chunk", "").takeIf { it.isNotEmpty() }
+                                    ?: fastExtractPcmChunk(text)
+                                if (pcm != null) currentListener.onAudioPlay(pcm)
+                            }
+                            "CALL_AUDIO_INTERRUPTED" -> currentListener.onAudioInterrupted()
+                            "CALL_LIVE_READY" -> currentListener.onLiveReady()
+                            "CALL_STATUS_UPDATE" -> {
+                                val status = if (jsonObj.has("status") && !jsonObj.isNull("status")) jsonObj.optString("status") else null
+                                val txt = if (jsonObj.has("text") && !jsonObj.isNull("text")) jsonObj.optString("text") else null
+                                val userTr = if (jsonObj.has("user_transcript") && !jsonObj.isNull("user_transcript")) jsonObj.optString("user_transcript") else null
+                                currentListener.onStatusUpdate(status, txt, userTr)
+                            }
+                            "CALL_REPLY_COMPLETE" -> {
+                                val replyText = if (jsonObj.has("reply_text") && !jsonObj.isNull("reply_text")) jsonObj.optString("reply_text") else null
+                                currentListener.onCallReplyComplete(replyText)
+                            }
+                            "CALL_ERROR" -> {
+                                val err = when {
+                                    jsonObj.has("error") && !jsonObj.isNull("error") -> jsonObj.optString("error")
+                                    jsonObj.has("message") && !jsonObj.isNull("message") -> jsonObj.optString("message")
+                                    else -> null
+                                }
+                                currentListener.onCallError(err)
+                            }
+                        }
+                    } else {
+                        broadcastCallLiveEvent(text)
+                    }
+                    return
+                }
+
+                // 2. Hardware-Backed Auth / Enrollment / Ticket JSON Events (Connection A - FR-AUTH-01..05)
+                if (msgType in AUTH_EVENT_TYPES) {
+                    if (msgType != "PONG") {
+                        if (!_incomingAuthEvents.tryEmit(text)) {
+                            authDispatchChannel.trySend(text)
+                        }
+                    }
+                    return
+                }
+
+                // 3. Native AI Chat & Finance Step-Up JSON Events (strict FIFO ordering, A-C2)
+                if (msgType in CHAT_EVENT_TYPES) {
+                    chatDispatchChannel.trySend(text)
+                    return
+                }
+
+                // 4. Device Control Commands (EXECUTE_COMMAND)
                 try {
                     val command = json.decodeFromString<NexaCommand>(text)
-
-                    // Verifikasi HMAC jika signature hadir (GodMode)
-                    if (command.signature != null && hmacSecret.isNotBlank()) {
-                        val level = command.params?.get("level")
-                            ?.toString()?.toIntOrNull() ?: 3
-                        val isValid = HmacVerifier.verify(
-                            command.timestamp, level, command.signature, hmacSecret
+                    val secret = hmacSecret
+                    if (secret.isNotBlank()) {
+                        val level = command.params?.get("level")?.jsonPrimitive?.intOrNull ?: 3
+                        val isValid = HmacVerifier.verifyCommand(
+                            commandId = command.command_id,
+                            action = command.action,
+                            timestamp = command.timestamp,
+                            level = level,
+                            receivedSignature = command.signature,
+                            secret = secret
                         )
                         if (!isValid) {
-                            Log.e(TAG, " HMAC signature tidak valid: ${command.command_id}")
+                            Log.e(TAG, "HMAC signature ditolak (fail-closed): ${command.command_id}")
                             return
                         }
                     }
-
-                    scope.launch { _incomingCommands.emit(command) }
-
+                    cmdDispatchChannel.trySend(command)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Gagal mem-parse pesan masuk: ${e.message}")
+                    Log.e(TAG, "Gagal mem-parse NexaCommand masuk: ${e.message}")
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (webSocket !== this@NexaWebSocketClient.webSocket) return // Ignore stale socket
+                if (!isActiveSocket(webSocket)) return
                 Log.i(TAG, "WebSocket Ditutup ($code): $reason")
                 _connectionState.value = ConnectionState.Disconnected(reason)
                 if (!orchestrator.isStopped) {
@@ -252,18 +347,35 @@ class NexaWebSocketClient @Inject constructor(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (webSocket !== this@NexaWebSocketClient.webSocket) {
+                if (!isActiveSocket(webSocket)) {
                     Log.d(TAG, "Mengabaikan onFailure dari socket usang: ${t.message}")
                     return
                 }
-                Log.e(TAG, " WebSocket Gagal: ${t.javaClass.simpleName} — ${t.message}")
+                val httpCode = response?.code
+                if (httpCode == 401 || httpCode == 403) {
+                    Log.e(TAG, "Autentikasi WebSocket ditolak (HTTP $httpCode). Menghentikan retry otomatis.")
+                    orchestrator.stop()
+                    _connectionState.value = ConnectionState.AuthFailed("Autentikasi ditolak server (HTTP $httpCode)")
+                    return
+                }
+                Log.e(TAG, "WebSocket Gagal: ${t.javaClass.simpleName} (${t.message})")
                 _connectionState.value = ConnectionState.Disconnected(t.message)
-                // Delegasikan ke orchestrator untuk menentukan kapan dan apakah harus reconnect
                 orchestrator.onConnectionFailed(t)
             }
         }
 
-        webSocket = okHttpClient.newWebSocket(request, listener)
+        // A-H1: Assign webSocket inside wsLock so fast onOpen/onFailure never sees stale null reference
+        synchronized(wsLock) {
+            webSocket = okHttpClient.newWebSocket(request, listener)
+        }
+    }
+
+    private fun broadcastCallLiveEvent(text: String) {
+        val intent = Intent("com.nexa.mobilebridge.CALL_LIVE_EVENT").apply {
+            putExtra("raw_json", text)
+            setPackage(context.packageName)
+        }
+        context.sendBroadcast(intent)
     }
 
     fun send(payload: String): Boolean {
@@ -271,32 +383,30 @@ class NexaWebSocketClient @Inject constructor(
         return if (ws != null && _connectionState.value is ConnectionState.Connected) {
             ws.send(payload)
         } else {
-            Log.w(TAG, "Tidak bisa kirim — WebSocket tidak terkoneksi.")
+            Log.w(TAG, "Tidak bisa kirim: WebSocket tidak terkoneksi.")
             false
         }
     }
 
     fun disconnect() {
         orchestrator.stop()
+        val oldWs = synchronized(wsLock) {
+            val prev = webSocket
+            webSocket = null
+            prev
+        }
         try {
-            webSocket?.cancel()
+            oldWs?.cancel()
         } catch (_: Exception) {}
-        webSocket = null
         _connectionState.value = ConnectionState.Disconnected("Disconnected by user")
     }
 
-    /** Mengembalikan true jika WebSocket saat ini dalam status Connected. */
     fun isConnected(): Boolean = _connectionState.value is ConnectionState.Connected
 
     fun getQueueSize(): Long = webSocket?.queueSize() ?: 0L
 
-    /**
-     * Mereset ReconnectOrchestrator ke fase 1 tanpa mengubah konfigurasi koneksi.
-     * Digunakan oleh NetworkWatcher saat jaringan kembali tersedia — agar
-     * orchestrator tidak melanjutkan delay fase yang sedang berjalan.
-     */
     fun resetOrchestrator() {
         orchestrator.reset()
-        Log.i(TAG, " Orchestrator direset oleh NetworkWatcher.")
+        Log.i(TAG, "Orchestrator direset oleh NetworkWatcher.")
     }
 }

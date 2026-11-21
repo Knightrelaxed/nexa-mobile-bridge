@@ -1,5 +1,6 @@
 package com.nexa.mobilebridge
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,33 +9,38 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.nexa.mobilebridge.core.context.ContextEngine
 import com.nexa.mobilebridge.core.network.NexaWebSocketClient
 import com.nexa.mobilebridge.core.network.PhaseFailureEvent
 import com.nexa.mobilebridge.core.network.ReconnectErrorType
+import com.nexa.mobilebridge.core.power.BridgePowerLockManager
+import com.nexa.mobilebridge.core.security.SecretKeyStoreCipher
 import com.nexa.mobilebridge.core.sensor.GeofenceManager
 import com.nexa.mobilebridge.core.sensor.SensorObserverManager
+import com.nexa.mobilebridge.core.usage.AppUsageTracker
+import com.nexa.mobilebridge.data.local.NexaPreferencesDataStore
 import com.nexa.mobilebridge.dispatcher.DeviceCommandDispatcher
 import com.nexa.mobilebridge.dispatcher.handler.BatteryHandler
 import com.nexa.mobilebridge.protocol.CommandResult
 import com.nexa.mobilebridge.protocol.ContextReport
 import com.nexa.mobilebridge.protocol.NexaCommand
+import com.nexa.mobilebridge.protocol.ResultStatus
 import com.nexa.mobilebridge.protocol.TelemetryReport
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -43,15 +49,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import java.util.Locale
-import android.content.pm.ServiceInfo
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -59,33 +68,83 @@ class NexaBridgeService : Service() {
 
     companion object {
         const val NOTIF_SERVICE_ID = 1001
+
         /** Weak reference to the active WebSocket client for sending call events from Activities. */
-        @Volatile var activeWebSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient? = null
-        @Volatile private var activeJson: kotlinx.serialization.json.Json? = null
+        @Volatile var activeWebSocketClient: NexaWebSocketClient? = null
+        @Volatile private var activeJson: Json? = null
         @Volatile var instance: NexaBridgeService? = null
+
+        private val _isServiceRunning = MutableStateFlow(false)
+        val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
+
+        private val _isPowerLockActive = MutableStateFlow(false)
+        val isPowerLockActive: StateFlow<Boolean> = _isPowerLockActive.asStateFlow()
+
+        private val _latestTelemetry = MutableStateFlow<TelemetryReport?>(null)
+        val latestTelemetry: StateFlow<TelemetryReport?> = _latestTelemetry.asStateFlow()
+
+        private val _commandHistory = MutableStateFlow<List<CommandHistoryRecord>>(emptyList())
+        val commandHistory: StateFlow<List<CommandHistoryRecord>> = _commandHistory.asStateFlow()
+
+        internal fun recordCommandResult(
+            command: NexaCommand,
+            result: CommandResult,
+            durationMs: Long
+        ) {
+            val upper = command.action.uppercase()
+            val isSensitive = upper.contains("FINANCE") ||
+                upper.contains("AUTH") ||
+                upper.contains("OTP") ||
+                upper.contains("CLIPBOARD") ||
+                upper.contains("BANK")
+
+            val summary = when {
+                isSensitive -> "[Disamarkan]"
+                result.status == ResultStatus.SUCCESS -> summarizeResultMessage(result.message)
+                else -> "Gagal"
+            }
+
+            val record = CommandHistoryRecord(
+                id = command.command_id,
+                action = command.action,
+                summary = summary,
+                isSuccess = result.status == ResultStatus.SUCCESS,
+                durationMs = durationMs.coerceAtLeast(1L),
+                timestamp = System.currentTimeMillis(),
+                isSensitive = isSensitive
+            )
+            _commandHistory.update { curr -> (listOf(record) + curr).take(20) }
+        }
+
+        private fun summarizeResultMessage(message: String): String {
+            val clean = message.trim()
+            if (clean.isEmpty()) return "Selesai"
+            return if (clean.length <= 18) clean else clean.take(15) + "..."
+        }
 
         /**
          * Dynamically promote or demote this foreground service with FOREGROUND_SERVICE_TYPE_MICROPHONE.
-         * Ensures Android 14+ background mic recording is allowed during active calls even if the activity is moved to back.
+         * Also acquires/releases the on-demand call power lock strictly for active voice calls (FR-CORE-04).
          */
         fun enableCallMicrophone(enable: Boolean) {
             val s = instance ?: return
+            if (enable && ContextCompat.checkSelfPermission(s, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                Log.w("NexaBridge", "Skipping MICROPHONE FGS promotion: RECORD_AUDIO permission missing.")
+                return
+            }
+            val prevMicState = s.isCallMicActive
+            s.isCallMicActive = enable
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val notif = s.buildServiceNotification()
-                    val types = if (enable) {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                    } else {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    }
-                    s.startForeground(NOTIF_SERVICE_ID, notif, types)
-                    Log.i("NexaBridge", "Foreground service microphone state updated: enable=$enable")
-                }
+                val notif = s.buildServiceNotification()
+                val types = s.resolveForegroundServiceTypes()
+                s.startForeground(NOTIF_SERVICE_ID, notif, types)
+                s.powerLockManager?.setCallLock(enable)
+                Log.i("NexaBridge", "Foreground service microphone state updated: enable=$enable")
             } catch (e: Exception) {
-                Log.w("NexaBridge", "Failed to update FGS microphone state: ${e.message}")
+                // Roll back state and power lock so failed promotion never leaks 30-min WakeLock/WifiLock
+                s.isCallMicActive = prevMicState
+                s.powerLockManager?.setCallLock(prevMicState)
+                Log.w("NexaBridge", "Failed to update FGS microphone state (rolled back): ${e.message}")
             }
         }
 
@@ -94,7 +153,6 @@ class NexaBridgeService : Service() {
         /**
          * Send a raw JSON payload to the N.E.X.A server via the active WebSocket connection.
          * Safe to call from any thread or Activity (e.g., FakeCallActivity).
-         * Returns true if the message was enqueued successfully.
          */
         fun sendEvent(payload: String): Boolean {
             return activeWebSocketClient?.send(payload) ?: false
@@ -108,46 +166,53 @@ class NexaBridgeService : Service() {
             activeWebSocketClient?.forceReconnect()
         }
 
-        fun encodeJson(): kotlinx.serialization.json.Json? = activeJson
+        fun encodeJson(): Json? = activeJson
     }
 
-    @Inject lateinit var webSocketClient: com.nexa.mobilebridge.core.network.NexaWebSocketClient
+    @Inject lateinit var webSocketClient: NexaWebSocketClient
     @Inject lateinit var dispatcher: DeviceCommandDispatcher
     @Inject lateinit var dataStore: DataStore<Preferences>
     @Inject lateinit var json: Json
 
     private var serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var wakeLock: PowerManager.WakeLock? = null
+    private var powerLockManager: BridgePowerLockManager? = null
 
-    // ─── Notification Channels ────────────────────────────────────
-    // Kanal layanan (persistensi foreground) — prioritas rendah agar tidak mengganggu
+    // Notification Channels
     private val CHANNEL_SERVICE_ID = "nexa_bridge_channel_01"
-    // Kanal alert kegagalan koneksi — prioritas tinggi agar muncul sebagai heads-up
-    private val CHANNEL_ALERT_ID   = "nexa_bridge_alert_01"
-    // private val NOTIF_SERVICE_ID in companion
-    private val NOTIF_ALERT_ID     = 1002
+    private val CHANNEL_ALERT_ID = "nexa_bridge_alert_01"
+    private val NOTIF_ALERT_ID = 1002
 
-    // ─── Alert TTS ────────────────────────────────────────────────
-    // Instance TextToSpeech khusus untuk narasi kegagalan koneksi.
-    // Menggunakan volume media AKTIF SAAT ITU tanpa memaksa perubahan volume.
+    // Alert TTS
     private var alertTts: TextToSpeech? = null
+    @Volatile
     private var alertTtsReady = false
 
+    @Volatile
+    private var isCallMicActive = false
     private var isServiceStarted = false
     private var sensorObserverManager: SensorObserverManager? = null
     private var contextEngine: ContextEngine? = null
     private var geofenceManager: GeofenceManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkDebounceJob: Job? = null
-    private var wifiLock: WifiManager.WifiLock? = null
     private var isScreenReceiverRegistered = false
+
+    private fun resolveForegroundServiceTypes(): Int {
+        // A-H13: Preserve MICROPHONE FGS type across subsequent onStartCommand calls while a live call is active
+        return if (isCallMicActive) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+    }
 
     private val screenStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            // Sesuai instruksi Tuan Faqih: Status layar tidur/bangun tidak dikirim terus-menerus ke WebSocket,
-            // melainkan cukup dikirim jika diminta secara on-demand oleh Nexa Server (GET_SCREEN_STATUS).
             val action = intent?.action ?: return
-            Log.d("NexaBridge", "📱 Screen broadcast received: $action (on-demand only, not pushed to WS)")
+            Log.d("NexaBridge", "Screen broadcast received: $action (on-demand only, not pushed to WS)")
         }
     }
 
@@ -161,7 +226,7 @@ class NexaBridgeService : Service() {
             }
             registerReceiver(screenStateReceiver, filter)
             isScreenReceiverRegistered = true
-            Log.i("NexaBridge", " ScreenStateReceiver registered successfully")
+            Log.i("NexaBridge", "ScreenStateReceiver registered successfully")
         } catch (e: Exception) {
             Log.e("NexaBridge", "Failed to register ScreenStateReceiver: ${e.message}")
         }
@@ -172,7 +237,7 @@ class NexaBridgeService : Service() {
             try {
                 unregisterReceiver(screenStateReceiver)
                 isScreenReceiverRegistered = false
-                Log.i("NexaBridge", " ScreenStateReceiver unregistered")
+                Log.i("NexaBridge", "ScreenStateReceiver unregistered")
             } catch (e: Exception) {
                 Log.w("NexaBridge", "Error unregistering ScreenStateReceiver: ${e.message}")
             }
@@ -190,45 +255,40 @@ class NexaBridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // Buat ulang scope setiap kali service dimulai agar coroutine sebelumnya
-        // yang mungkin sudah dibatalkan tidak mempengaruhi sesi baru.
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         createNotificationChannels()
-        acquireWakeLock()
-        acquireWifiLock()
+
+        // FR-CORE-04: On-demand power lock manager (NO permanent WakeLock/WifiLock held on startup)
+        powerLockManager = BridgePowerLockManager.create(this).also { manager ->
+            serviceScope.launch {
+                manager.isLocked.collect { locked ->
+                    _isPowerLockActive.value = locked
+                }
+            }
+        }
+
         initAlertTts()
         registerScreenStateReceiver()
-        // Expose WebSocket client to companion object for cross-component access
         activeWebSocketClient = webSocketClient
         activeJson = json
         instance = this
+        _isServiceRunning.value = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             val notification = buildServiceNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                startForeground(NOTIF_SERVICE_ID, notification, types)
-            } else {
-                startForeground(NOTIF_SERVICE_ID, notification)
-            }
+            startForeground(NOTIF_SERVICE_ID, notification, resolveForegroundServiceTypes())
         } catch (e: Exception) {
             Log.e("NexaBridge", "Failed to start foreground notification: ${e.message}", e)
-        }
-
-        // Intercept action from SafeBankingLauncherActivity
-        if (intent?.action == "com.nexa.mobilebridge.ACTION_START_USAGE_OBSERVER") {
-            val targetPackage = intent.getStringExtra("WATCHING_PACKAGE")
-            if (!targetPackage.isNullOrBlank()) {
-                startUsageObserver(targetPackage)
-            }
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         if (!isServiceStarted) {
             isServiceStarted = true
-            Log.i("NexaBridge", "Service Dimulai di Foreground")
+            _isServiceRunning.value = true
+            Log.i("NexaBridge", "Service Dimulai di Foreground (Power Locks: On-Demand)")
 
             serviceScope.launch {
                 val config = loadConfig()
@@ -240,7 +300,7 @@ class NexaBridgeService : Service() {
                 // 2. Mulai konsumer perintah dari server
                 launchCommandConsumer()
 
-                // 3. Mulai pelaporan telemetri periodik (setiap 60 detik)
+                // 3. Mulai pelaporan telemetri periodik (diff-driven + 3-menit heartbeat)
                 launchTelemetryReporter()
 
                 // 4. Mulai pendengar event kegagalan fase reconnect
@@ -260,14 +320,8 @@ class NexaBridgeService : Service() {
                 // 7. Mulai pendengar event sensor & sintesis konteks
                 launchSensorObserverListener()
 
-                // 8. Mulai Network-Availability Watcher
-                // Saat internet kembali setelah hilang, langsung reset orchestrator
-                // dan coba reconnect dari awal — tanpa menunggu delay antar-fase.
-                registerNetworkWatcher(config.serverUrl, config.authToken)
-
-                // 9. Mulai Accessibility Self-Healing Watchdog
-                // Memulihkan layanan jika status di Settings 'Not working' (unbound) secara otomatis
-                launchAccessibilitySelfHealingWatchdog()
+                // 8. Mulai Network-Availability Watcher (selalu membaca config terbaru dari DataStore, A-H14)
+                registerNetworkWatcher()
             }
         }
 
@@ -280,99 +334,55 @@ class NexaBridgeService : Service() {
             }
         }
 
-        // START_STICKY — Jika service dimatikan oleh OS karena kekurangan memori
-        // atau user swipe dari Recent Apps, Android akan otomatis mencoba menghidupkannya lagi.
         return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.w("NexaBridge", " Aplikasi di-swipe dari Recent Apps! Mencoba menghidupkan kembali service via AlarmManager...")
-        
-        try {
-            val restartServiceIntent = Intent(applicationContext, NexaBridgeService::class.java)
-            val restartServicePendingIntent = android.app.PendingIntent.getService(
-                applicationContext,
-                1,
-                restartServiceIntent,
-                android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            val alarmService = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            alarmService.set(
-                android.app.AlarmManager.ELAPSED_REALTIME,
-                android.os.SystemClock.elapsedRealtime() + 1000, // restart dalam 1 detik
-                restartServicePendingIntent
-            )
-        } catch (e: Exception) {
-            Log.e("NexaBridge", "Gagal menjadwalkan restart via AlarmManager: ${e.message}")
-        }
+        // A-H13: Android 16 (API 36) forbids starting a background service via PendingIntent.getService().
+        // START_STICKY + ForegroundService + BootCompletedReceiver handle persistence legally.
+        Log.i("NexaBridge", "Aplikasi dihapus dari Recent Apps; FGS tetap aktif via START_STICKY.")
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Phase Failure Listener — Jantung dari sistem reconnect cerdas
-    // ─────────────────────────────────────────────────────────────
-
+    // Phase Failure Listener
     private fun launchPhaseFailureListener() = serviceScope.launch {
         webSocketClient.phaseFailureEvents.collect { event ->
-            Log.w("NexaBridge", " PhaseFailureEvent: Fase ${event.phase}, Final: ${event.isFinal}")
-
-            // 1. Bangun konten notifikasi dan pesan suara
+            Log.w("NexaBridge", "PhaseFailureEvent: Fase ${event.phase}, Final: ${event.isFinal}")
             val (notifTitle, notifBody) = buildAlertNotifContent(event)
             val ttsMessage = buildAlertTtsMessage(event)
-
-            // 2. Tampilkan notifikasi sistem di bilah notifikasi
             postAlertNotification(notifTitle, notifBody)
-
-            // 3. Ucapkan pesan kegagalan menggunakan volume media AKTIF SAAT INI (tanpa ubah volume)
             speakAlert(ttsMessage)
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Sensor & Context Engine Listener — Sensor Observers
-    // ─────────────────────────────────────────────────────────────
-
+    // Sensor & Context Engine Listener
     private fun launchSensorObserverListener() = serviceScope.launch {
         val manager = sensorObserverManager ?: return@launch
         val engine = contextEngine ?: return@launch
 
-        // Pipe raw sensor events to ContextEngine
         launch {
             manager.sensorEvents.collect { sensorEvent ->
                 engine.processSensorEvent(sensorEvent)
             }
         }
 
-        // Collect synthesized ContextReports and send over WebSocket
         launch {
             engine.contextReports.collect { report ->
-                // Sesuai instruksi Tuan Faqih: Sensor cahaya dan HP diangkat TIDAK dikirim streaming ke WebSocket.
-                if (report.event == "PHONE_PICKUP" || report.event == "PHONE_PICKUP_MORNING" ||
+                if (report.event == "PHONE_PICKUP" || report.event == "PICKUP_MORNING" ||
                     report.event == "LIGHT_CHANGED" || report.event == "ROOM_DARK_NIGHT" ||
                     report.event == "WALKING_AT_NIGHT") {
-                    Log.d("NexaBridge", " ContextReport [${report.event}] disaring (hemat daya, tidak dikirim ke WS).")
+                    Log.d("NexaBridge", "ContextReport [${report.event}] disaring (hemat daya, tidak dikirim ke WS).")
                     return@collect
                 }
                 val payload = json.encodeToString(ContextReport.serializer(), report)
                 val sent = webSocketClient.send(payload)
-                Log.d("NexaBridge", " ContextReport terkirim (success=$sent): ${report.event}")
+                Log.d("NexaBridge", "ContextReport terkirim (success=$sent): ${report.event}")
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Network Watcher — Reset & reconnect saat internet kembali
-    // ─────────────────────────────────────────────────────────────
-
-    /**
-     * Mendaftarkan NetworkCallback ke OS Android.
-     * Menggunakan [registerDefaultNetworkCallback] agar memantau rute internet aktif secara langsung.
-     * Dilengkapi multi-trigger ([onAvailable], [onCapabilitiesChanged], [onLinkPropertiesChanged])
-     * sehingga saat ada koneksi baru (Wi-Fi/4G) yang masuk meski sinyal lemah,
-     * sistem langsung membatalkan jeda tidur fase dan memicu reconnect instan.
-     */
-    private fun registerNetworkWatcher(serverUrl: String, authToken: String) {
+    // Network Watcher (A-H14: always reload fresh config from DataStore on reconnect)
+    private fun registerNetworkWatcher() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -405,50 +415,43 @@ class NexaBridgeService : Service() {
             }
 
             private fun triggerInstantReconnect(source: String, force: Boolean = false) {
-                if (!force && webSocketClient.isConnected() && source != "onAvailable") {
+                if (!force && webSocketClient.isConnected()) {
                     return
                 }
                 networkDebounceJob?.cancel()
                 networkDebounceJob = serviceScope.launch {
-                    delay(800L) // 800ms debounce cepat untuk stabilisasi rute
+                    delay(800L)
+                    if (!force && webSocketClient.isConnected()) return@launch
+                    val freshConfig = loadConfig()
+                    webSocketClient.setHmacSecret(freshConfig.hmacSecret)
                     Log.i("NexaBridge", "Sinyal internet masuk [$source]! Memicu reconnect instan dari Fase 1...")
-                    webSocketClient.forceReconnect(serverUrl, authToken)
+                    webSocketClient.forceReconnect(freshConfig.serverUrl, freshConfig.authToken)
                 }
             }
         }
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                cm.registerDefaultNetworkCallback(networkCallback!!)
-            } else {
-                val request = NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .build()
-                cm.registerNetworkCallback(request, networkCallback!!)
-            }
-            Log.i("NexaBridge", " Modern NetworkWatcher (Default + Reactive Multi-Trigger) terdaftar.")
+            cm.registerDefaultNetworkCallback(networkCallback!!)
+            Log.i("NexaBridge", "Modern NetworkWatcher terdaftar.")
         } catch (e: Exception) {
-            Log.e("NexaBridge", " Gagal mendaftarkan NetworkWatcher: ${e.message}")
+            Log.e("NexaBridge", "Gagal mendaftarkan NetworkWatcher: ${e.message}")
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
     // Alert Helpers
-    // ─────────────────────────────────────────────────────────────
-
     private fun buildAlertNotifContent(event: PhaseFailureEvent): Pair<String, String> {
         val errorName = when (event.errorType) {
-            ReconnectErrorType.NO_INTERNET  -> "Tidak Ada Internet / DNS Gagal"
-            ReconnectErrorType.SERVER_DOWN  -> "Server Offline / Koneksi Ditolak"
-            ReconnectErrorType.TIMEOUT      -> "Server Timeout (Tidak Merespons)"
-            ReconnectErrorType.SSL_ERROR    -> "Kesalahan Sertifikat SSL"
-            ReconnectErrorType.UNKNOWN      -> "Error: ${event.techMessage}"
+            ReconnectErrorType.NO_INTERNET -> "Tidak Ada Internet / DNS Gagal"
+            ReconnectErrorType.SERVER_DOWN -> "Server Offline / Koneksi Ditolak"
+            ReconnectErrorType.TIMEOUT -> "Server Timeout (Tidak Merespons)"
+            ReconnectErrorType.SSL_ERROR -> "Kesalahan Sertifikat SSL"
+            ReconnectErrorType.UNKNOWN -> "Error: ${event.techMessage}"
         }
 
         val title = if (event.isFinal) {
-            "N.E.X.A Bridge — Koneksi Dihentikan Total"
+            "N.E.X.A Bridge - Koneksi Dihentikan Total"
         } else {
-            "N.E.X.A Bridge — Koneksi Gagal (Fase ${event.phase})"
+            "N.E.X.A Bridge - Koneksi Gagal (Fase ${event.phase})"
         }
 
         val body = if (event.isFinal) {
@@ -462,90 +465,26 @@ class NexaBridgeService : Service() {
 
     private fun buildAlertTtsMessage(event: PhaseFailureEvent): String {
         val errorDesc = when (event.errorType) {
-            ReconnectErrorType.NO_INTERNET  ->
+            ReconnectErrorType.NO_INTERNET ->
                 "H P tidak dapat menemukan server N E X A. Pastikan koneksi internet aktif"
-            ReconnectErrorType.SERVER_DOWN  ->
+            ReconnectErrorType.SERVER_DOWN ->
                 "Server N E X A tidak dapat dihubungi. Server kemungkinan sedang offline atau dalam pemeliharaan"
-            ReconnectErrorType.TIMEOUT      ->
+            ReconnectErrorType.TIMEOUT ->
                 "Koneksi ke server N E X A habis waktu tunggu. Server mungkin sedang kelebihan beban"
-            ReconnectErrorType.SSL_ERROR    ->
+            ReconnectErrorType.SSL_ERROR ->
                 "Koneksi gagal karena masalah keamanan S S L. Periksa konfigurasi sertifikat server"
-            ReconnectErrorType.UNKNOWN      ->
+            ReconnectErrorType.UNKNOWN ->
                 "Koneksi gagal dengan error: ${event.techMessage}"
         }
 
         return if (event.isFinal) {
             "Perhatian. N E X A Bridge. Semua percobaan koneksi telah habis. $errorDesc. " +
-            "Silakan buka aplikasi untuk mencoba kembali secara manual."
+                "Silakan buka aplikasi untuk mencoba kembali secara manual."
         } else {
             "Perhatian. N E X A Bridge. Koneksi ke server gagal setelah fase ${event.phase}. " +
-            "$errorDesc. Akan dicoba kembali dalam ${event.nextRetryIn}."
+                "$errorDesc. Akan dicoba kembali dalam ${event.nextRetryIn}."
         }
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // M-Banking Shield Mode (UsageStats Observer)
-    // ─────────────────────────────────────────────────────────────
-    
-    private var usageObserverJob: kotlinx.coroutines.Job? = null
-    
-    private fun startUsageObserver(targetPackage: String) {
-        usageObserverJob?.cancel() // Batalkan jika ada yang sedang berjalan
-        Log.i("Nexa-MBankingShield", "Memulai pengamatan UsageStats untuk package: $targetPackage")
-        
-        usageObserverJob = serviceScope.launch {
-            val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
-            var isTargetStillForeground = true
-            var hasTargetBeenForeground = false
-            var cyclesWaitingForTarget = 0
-            
-            while (isActive && isTargetStillForeground) {
-                val endTime = System.currentTimeMillis()
-                val startTime = endTime - 5000 // Cek 5 detik terakhir
-                
-                val events = usageStatsManager.queryEvents(startTime, endTime)
-                val event = android.app.usage.UsageEvents.Event()
-                
-                var latestForegroundPackage: String? = null
-                while (events.hasNextEvent()) {
-                    events.getNextEvent(event)
-                    if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
-                        latestForegroundPackage = event.packageName
-                    }
-                }
-                
-                if (!hasTargetBeenForeground) {
-                    if (latestForegroundPackage == targetPackage) {
-                        hasTargetBeenForeground = true
-                        Log.i("Nexa-MBankingShield", "Target ($targetPackage) berhasil naik ke foreground.")
-                    } else {
-                        cyclesWaitingForTarget++
-                        if (cyclesWaitingForTarget > 15) { // 15 detik batas tunggu sebelum timeout
-                            Log.w("Nexa-MBankingShield", "Target ($targetPackage) tidak pernah muncul setelah 15 detik. Timeout.")
-                            isTargetStillForeground = false
-                        }
-                    }
-                } else {
-                    // Target sudah masuk, awasi kalau tertutup
-                    if (latestForegroundPackage != null && 
-                        latestForegroundPackage != targetPackage &&
-                        latestForegroundPackage != "com.nexa.mobilebridge" && // Jaga-jaga activity siluman
-                        latestForegroundPackage != "com.android.systemui") {
-                        
-                        Log.i("Nexa-MBankingShield", "Target ditutup/bergeser ke background. Foreground saat ini: $latestForegroundPackage")
-                        isTargetStillForeground = false
-                    }
-                }
-                
-                kotlinx.coroutines.delay(1000) // Polling setiap 1 detik
-            }
-            
-            // Saat keluar dari loop, berarti M-Banking sudah tidak di foreground
-            Log.i("Nexa-MBankingShield", "M-Banking tertutup atau timeout. Merestorasi izin Aksesibilitas N.E.X.A...")
-            com.nexa.mobilebridge.core.security.MBankingShieldManager.enableNexaAccessibility(this@NexaBridgeService)
-        }
-    }
-
 
     private fun postAlertNotification(title: String, body: String) {
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -563,24 +502,42 @@ class NexaBridgeService : Service() {
 
     private fun speakAlert(text: String) {
         if (alertTtsReady && alertTts != null) {
-            // TIDAK ada perubahan volume — gunakan volume media yang sedang aktif saat ini
             alertTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nexa_alert_${System.currentTimeMillis()}")
-            Log.d("NexaBridge", " Alert TTS: $text")
+            Log.d("NexaBridge", "Alert TTS: $text")
         } else {
-            Log.w("NexaBridge", "Alert TTS belum siap — notifikasi tetap ditampilkan.")
+            Log.w("NexaBridge", "Alert TTS belum siap - notifikasi tetap ditampilkan.")
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Existing Core Loops
-    // ─────────────────────────────────────────────────────────────
-
+    // Core Loops (A-L1: concurrent command execution so slow commands never block fast actions)
     private fun launchCommandConsumer() = serviceScope.launch {
         webSocketClient.incomingCommands.collect { command ->
-            Log.i("NexaBridge", "Menerima perintah: ${command.action}")
-            val result = dispatcher.dispatch(command)
+            serviceScope.launch {
+                Log.i("NexaBridge", "Menerima perintah: ${command.action}")
+                val startElapsed = android.os.SystemClock.elapsedRealtime()
+                val result: CommandResult = executeCommandWithLock(command)
+                val durationMs = android.os.SystemClock.elapsedRealtime() - startElapsed
+                recordCommandResult(command, result, durationMs)
+            }
+        }
+    }
+
+    private suspend fun executeCommandWithLock(command: NexaCommand): CommandResult {
+        val executeWithTimeout: suspend () -> CommandResult = {
+            val result = withTimeoutOrNull(BridgePowerLockManager.DEFAULT_TRANSFER_TIMEOUT_MS) {
+                dispatcher.dispatch(command)
+            } ?: CommandResult.failure(command.command_id, "Command '${command.action}' timed out after 15s")
             val payload = json.encodeToString(CommandResult.serializer(), result)
             webSocketClient.send(payload)
+            result
+        }
+        val manager = powerLockManager
+        return if (manager != null) {
+            manager.withActiveTransferLock("cmd:${command.action}") {
+                executeWithTimeout()
+            }
+        } else {
+            executeWithTimeout()
         }
     }
 
@@ -599,57 +556,89 @@ class NexaBridgeService : Service() {
         while (true) {
             try {
                 val batResult = batteryHandler.execute(stubCommand)
-                val level    = (batResult.data?.get("battery_level") as? JsonPrimitive)?.intOrNull ?: 0
+                val level = (batResult.data?.get("battery_level") as? JsonPrimitive)?.intOrNull ?: 0
                 val charging = (batResult.data?.get("charging") as? JsonPrimitive)?.booleanOrNull ?: false
+                val screenOn = isScreenInteractive()
                 val now = System.currentTimeMillis()
 
-                // Hemat daya & kuota: Hanya kirim ke WS jika level baterai berubah,
-                // status charging berubah, atau sudah 3 menit berlalu (heartbeat santai)
+                val snapshot = TelemetryReport(
+                    battery_level = level,
+                    battery_charging = charging,
+                    network_type = resolveNetworkType(),
+                    network_strength = 0,
+                    motion_state = "IDLE",
+                    screen_on = screenOn
+                )
+                _latestTelemetry.value = snapshot
+
                 val isBatteryChanged = (level != lastBatteryLevel) || (charging != lastChargingState)
                 val isHeartbeatDue = (now - lastReportTimeMs) >= 180_000L // 3 menit
 
-                if (isBatteryChanged || isHeartbeatDue) {
+                // A-M1 / NFR-BAT-03: Drop non-critical telemetry when outbound WS queue is congested (>= 16 KiB)
+                if ((isBatteryChanged || isHeartbeatDue) && webSocketClient.getQueueSize() < 16_384L) {
                     lastBatteryLevel = level
                     lastChargingState = charging
                     lastReportTimeMs = now
 
-                    val telemetry = TelemetryReport(
-                        battery_level    = level,
-                        battery_charging = charging,
-                        network_type     = "UNKNOWN",
-                        network_strength = 0,
-                        motion_state     = "IDLE",
-                        screen_on        = isScreenInteractive()
-                    )
-
-                    val payload = json.encodeToString(TelemetryReport.serializer(), telemetry)
+                    val payload = json.encodeToString(TelemetryReport.serializer(), snapshot)
                     webSocketClient.send(payload)
                     Log.d("NexaBridge", "Telemetri terkirim (diff/heartbeat): ${level}%, charging=$charging")
+                } else if (webSocketClient.isConnected()) {
+                    // Lightweight application-level heartbeat honoring configured screen-on/off intervals
+                    webSocketClient.send("""{"type":"PING","ts":$now}""")
                 }
 
-                // Periksa sesi aplikasi aktif secara periodik
-                com.nexa.mobilebridge.core.usage.AppUsageTracker.checkActiveSessionTick(this@NexaBridgeService)
+                // Periksa sesi aplikasi aktif secara aman lewat UsageStatsManager (tanpa AccessibilityService)
+                AppUsageTracker.checkActiveSessionTick(this@NexaBridgeService, isScreenOn = screenOn)
             } catch (e: Exception) {
                 Log.e("NexaBridge", "Error telemetri: ${e.message}")
             }
-            delay(30_000L) // Cek lokal tiap 30 detik tanpa spamming ke network
+            // A-M1 / NFR-BAT-01 / U-H12: Honor configured screen-on/screen-off intervals (defaults 60s / 120s)
+            val sleepMs = try {
+                val prefs = dataStore.data.first()
+                if (isScreenInteractive()) {
+                    val onSec = (prefs[intPreferencesKey("heartbeat_screen_on_sec")]
+                        ?: NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_ON_SEC).coerceIn(30, 120)
+                    onSec * 1_000L
+                } else {
+                    val offSec = (prefs[intPreferencesKey("heartbeat_screen_off_sec")]
+                        ?: NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_OFF_SEC).coerceIn(60, 300)
+                    offSec * 1_000L
+                }
+            } catch (_: Exception) {
+                if (isScreenInteractive()) 60_000L else 120_000L
+            }
+            delay(sleepMs)
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Config & Lifecycle
-    // ─────────────────────────────────────────────────────────────
+    private fun resolveNetworkType(): String {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+            when {
+                caps == null -> "OFFLINE"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                else -> "OTHER"
+            }
+        } catch (_: Exception) {
+            "UNKNOWN"
+        }
+    }
 
+    // Config & Lifecycle
     private suspend fun loadConfig(): NexaConfig {
-        val urlKey   = stringPreferencesKey("server_ws_url")
+        val urlKey = stringPreferencesKey("server_ws_url")
         val tokenKey = stringPreferencesKey("auth_token")
-        val hmacKey  = stringPreferencesKey("hmac_secret")
+        val hmacKey = stringPreferencesKey("hmac_secret")
 
         val prefs = dataStore.data.first()
         return NexaConfig(
-            serverUrl   = prefs[urlKey]   ?: "wss://nexa-asistant-nexa-core-server.hf.space/ws",
-            authToken   = prefs[tokenKey] ?: "",
-            hmacSecret  = prefs[hmacKey]  ?: ""
+            serverUrl = prefs[urlKey] ?: NexaPreferencesDataStore.DEFAULT_WS_URL,
+            authToken = SecretKeyStoreCipher.decrypt(prefs[tokenKey]),
+            hmacSecret = SecretKeyStoreCipher.decrypt(prefs[hmacKey])
         )
     }
 
@@ -658,7 +647,7 @@ class NexaBridgeService : Service() {
             if (status == TextToSpeech.SUCCESS) {
                 val result = alertTts?.setLanguage(Locale.forLanguageTag("id-ID"))
                 alertTtsReady = result != TextToSpeech.LANG_MISSING_DATA &&
-                                result != TextToSpeech.LANG_NOT_SUPPORTED
+                    result != TextToSpeech.LANG_NOT_SUPPORTED
                 Log.i("NexaBridge", "Alert TTS siap: $alertTtsReady")
             } else {
                 Log.w("NexaBridge", "Alert TTS gagal diinisialisasi (status=$status)")
@@ -669,14 +658,12 @@ class NexaBridgeService : Service() {
     private fun createNotificationChannels() {
         val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Kanal 1: Layanan Foreground (prioritas rendah — tidak mengganggu)
         NotificationChannel(CHANNEL_SERVICE_ID, "N.E.X.A Bridge", NotificationManager.IMPORTANCE_LOW).apply {
             description = "Menjaga koneksi ke N.E.X.A Cloud Server"
             notifManager.createNotificationChannel(this)
         }
 
-        // Kanal 2: Alert Kegagalan Koneksi (prioritas tinggi — heads-up notification)
-        NotificationChannel(CHANNEL_ALERT_ID, "N.E.X.A Bridge — Alert Koneksi", NotificationManager.IMPORTANCE_HIGH).apply {
+        NotificationChannel(CHANNEL_ALERT_ID, "N.E.X.A Bridge - Alert Koneksi", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Notifikasi kegagalan koneksi ke server N.E.X.A"
             enableLights(true)
             enableVibration(true)
@@ -684,72 +671,25 @@ class NexaBridgeService : Service() {
         }
     }
 
-    /**
-     * Accessibility Health Monitor
-     * Memantau status keterikatan NexaAccessibilityService secara pasif tanpa melakukan
-     * manipulasi siklus cabut-pasang Settings.Secure yang dapat memicu thrashing di Android OS.
-     */
-    private fun launchAccessibilitySelfHealingWatchdog() {
-        serviceScope.launch {
-            while (isActive) {
-                kotlinx.coroutines.delay(60_000)
-                try {
-                    val cr = applicationContext.contentResolver
-                    val enabledServices = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-                    val isConfiguredOn = enabledServices.contains("com.nexa.mobilebridge")
-                    val isServiceAlive = NexaAccessibilityService.instance != null
-
-                    if (isConfiguredOn && !isServiceAlive) {
-                        Log.d("NexaBridge", "Accessibility Monitor: Setting is ON, waiting for system binding.")
-                    }
-                } catch (e: Exception) {
-                    Log.w("NexaBridge", "Accessibility Monitor check notice: ${e.message}")
-                }
-            }
-        }
-    }
-
     override fun onTimeout(startId: Int, fgsType: Int) {
         super.onTimeout(startId, fgsType)
-        Log.w("NexaBridge", "Foreground service onTimeout signal received (type: $fgsType)")
+        // A-H13: Android 15/16 requires calling stopSelf() within seconds of onTimeout to prevent ForegroundServiceDidNotStopInTimeException
+        Log.w("NexaBridge", "Foreground service onTimeout signal received (type: $fgsType); stopping gracefully.")
+        stopSelf(startId)
     }
 
     private fun buildServiceNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_SERVICE_ID)
             .setContentTitle("N.E.X.A Mobile Bridge")
-            .setContentText("Listening to Neural Engine...")
+            .setContentText("Control Center Standby (Power-Save)")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
-    private fun acquireWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "NexaBridge::WakeLock"
-        )
-        @Suppress("WakelockTimeout")
-        wakeLock?.acquire()
-    }
-
-    private fun acquireWifiLock() {
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-        } else {
-            @Suppress("DEPRECATION")
-            WifiManager.WIFI_MODE_FULL_HIGH_PERF
-        }
-        wifiLock = wifiManager.createWifiLock(mode, "NexaBridge::WifiLock").apply {
-            setReferenceCounted(false)
-            acquire()
-        }
-        Log.i("NexaBridge", " WifiLock acquired (mode: $mode)")
-    }
-
     override fun onDestroy() {
-        // Clear companion references before tearing down
+        _isServiceRunning.value = false
+        _isPowerLockActive.value = false
         activeWebSocketClient = null
         activeJson = null
         if (instance === this) {
@@ -764,22 +704,20 @@ class NexaBridgeService : Service() {
         geofenceManager = null
         contextEngine = null
         unregisterScreenStateReceiver()
-        // Unregister network watcher agar tidak ada memory leak
         networkCallback?.let {
             try {
                 (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
                     .unregisterNetworkCallback(it)
-            } catch (e: Exception) { /* Diabaikan */ }
+            } catch (_: Exception) {
+            }
             networkCallback = null
         }
         webSocketClient.disconnect()
-        serviceScope.cancel() // Batalkan semua coroutine milik service ini
+        powerLockManager?.releaseAll()
+        powerLockManager = null
+        serviceScope.cancel()
         alertTts?.shutdown()
         alertTts = null
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-        wifiLock?.let { if (it.isHeld) it.release() }
-        wifiLock = null
         Log.i("NexaBridge", "Service Dihentikan")
     }
 
@@ -790,4 +728,14 @@ data class NexaConfig(
     val serverUrl: String,
     val authToken: String,
     val hmacSecret: String
+)
+
+data class CommandHistoryRecord(
+    val id: String,
+    val action: String,
+    val summary: String,
+    val isSuccess: Boolean,
+    val durationMs: Long,
+    val timestamp: Long,
+    val isSensitive: Boolean = false
 )

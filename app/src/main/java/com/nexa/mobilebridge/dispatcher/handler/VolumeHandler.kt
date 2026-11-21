@@ -14,8 +14,8 @@ class VolumeHandler(private val context: Context) {
     fun execute(command: NexaCommand): CommandResult {
         return try {
             val rawLevel = command.params?.get("level")?.jsonPrimitive?.intOrNull
-                ?: return CommandResult.failure(command.command_id, "Missing 'level' parameter (0–100)")
-            val streamName = command.params?.get("stream")?.jsonPrimitive?.content ?: "MUSIC"
+                ?: return CommandResult.failure(command.command_id, "Missing 'level' parameter (0-100)")
+            val streamName = command.params["stream"]?.jsonPrimitive?.content ?: "MUSIC"
 
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val streamType = when (streamName.uppercase()) {
@@ -27,16 +27,12 @@ class VolumeHandler(private val context: Context) {
             }
 
             val maxVolume = audioManager.getStreamMaxVolume(streamType)
-            // If level <= 15 treat as absolute index, else treat as percentage 0-100
-            val targetVolume = if (rawLevel <= maxVolume) {
-                rawLevel
-            } else {
-                (rawLevel.toFloat() / 100f * maxVolume).toInt().coerceIn(0, maxVolume)
-            }
+            val clampedPercent = rawLevel.coerceIn(0, 100)
+            val targetVolume = ((clampedPercent / 100f) * maxVolume).toInt().coerceIn(0, maxVolume)
 
             audioManager.setStreamVolume(streamType, targetVolume, AudioManager.FLAG_SHOW_UI)
 
-            CommandResult.success(command.command_id, "Volume [$streamName] set to $targetVolume / $maxVolume ($rawLevel%)")
+            CommandResult.success(command.command_id, "Volume [$streamName] set to $targetVolume / $maxVolume ($clampedPercent%)")
         } catch (e: Exception) {
             CommandResult.failure(command.command_id, "Failed to set volume: ${e.message}")
         }

@@ -39,59 +39,23 @@ class ScreenHandler(private val context: Context) {
     }
 
     fun executeLock(command: NexaCommand): CommandResult {
-        return try {
-            val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            if (service != null) {
-                val success = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
-                if (success) {
-                    CommandResult.success(command.command_id, "Screen locked successfully.")
-                } else {
-                    CommandResult.failure(command.command_id, "Failed to lock screen.")
-                }
-            } else {
-                CommandResult.failure(
-                    command.command_id,
-                    "Nexa Accessibility Service is not running. Please enable it in Settings > Accessibility."
-                )
-            }
-        } catch (e: Exception) {
-            CommandResult.failure(command.command_id, "Error locking screen: ${e.message}")
-        }
+        return CommandResult.failure(
+            command.command_id,
+            "Command LOCK_SCREEN is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."
+        )
     }
 
     fun executeBack(command: NexaCommand): CommandResult {
-        return try {
-            val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            if (service != null) {
-                val success = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
-                if (success) {
-                    CommandResult.success(command.command_id, "Navigated BACK successfully.")
-                } else {
-                    CommandResult.failure(command.command_id, "Failed to navigate BACK. Ensure Nexa Accessibility Service is enabled.")
-                }
-            } else {
-                CommandResult.failure(command.command_id, "Nexa Accessibility Service is not running. Please enable it in Settings -> Accessibility.")
-            }
-        } catch (e: Exception) {
-            CommandResult.failure(command.command_id, "Error: ${e.message}")
-        }
+        return CommandResult.failure(
+            command.command_id,
+            "Command GO_BACK is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."
+        )
     }
 
     fun executeRecents(command: NexaCommand): CommandResult {
-        return try {
-            val service = com.nexa.mobilebridge.NexaAccessibilityService.instance
-            if (service != null) {
-                val success = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
-                if (success) {
-                    CommandResult.success(command.command_id, "Opened RECENT APPS successfully.")
-                } else {
-                    CommandResult.failure(command.command_id, "Failed to open RECENT APPS. Ensure Nexa Accessibility Service is enabled.")
-                }
-            } else {
-                CommandResult.failure(command.command_id, "Nexa Accessibility Service is not running. Please enable it in Settings -> Accessibility.")
-            }
-        } catch (e: Exception) {
-            CommandResult.failure(command.command_id, "Error: ${e.message}")
-        }
+        return CommandResult.failure(
+            command.command_id,
+            "Command SHOW_RECENTS is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."
+        )
     }
 }

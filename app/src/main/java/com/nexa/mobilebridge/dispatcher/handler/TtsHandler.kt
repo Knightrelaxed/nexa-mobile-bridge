@@ -14,21 +14,32 @@ import kotlin.coroutines.resume
 
 class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
+    @Volatile
     private var isInitialized = false
 
     init {
         tts = TextToSpeech(context, this)
     }
 
+    fun shutdown() {
+        isInitialized = false
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (_: Exception) {
+        }
+        tts = null
+    }
+
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             // Prefer Indonesian Locale
-            val locale = Locale("id", "ID")
+            val locale = Locale.forLanguageTag("id-ID")
             val result = tts?.isLanguageAvailable(locale) ?: TextToSpeech.LANG_NOT_SUPPORTED
             if (result >= TextToSpeech.LANG_AVAILABLE) {
                 tts?.language = locale
             } else {
-                val fallbackLocale = Locale("id")
+                val fallbackLocale = Locale.forLanguageTag("id")
                 val fallbackResult = tts?.isLanguageAvailable(fallbackLocale) ?: TextToSpeech.LANG_NOT_SUPPORTED
                 if (fallbackResult >= TextToSpeech.LANG_AVAILABLE) {
                     tts?.language = fallbackLocale
@@ -99,10 +110,19 @@ class TtsHandler(private val context: Context) : TextToSpeech.OnInitListener {
                     }
                 }
                 
+                @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     if (continuation.isActive) {
                         continuation.resume(
                             CommandResult.failure(command.command_id, "TTS playback error")
+                        )
+                    }
+                }
+
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            CommandResult.failure(command.command_id, "TTS playback error (code=$errorCode)")
                         )
                     }
                 }

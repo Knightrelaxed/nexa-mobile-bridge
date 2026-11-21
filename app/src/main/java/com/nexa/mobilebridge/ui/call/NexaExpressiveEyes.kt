@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -37,7 +38,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -67,6 +67,8 @@ fun NexaExpressiveEyes(
     hudState: LiveVoiceHudState,
     isSpeaking: Boolean,
     audioEnergy: Float = 0f,
+    isSpeakingProvider: () -> Boolean = { isSpeaking },
+    audioEnergyProvider: () -> Float = { audioEnergy },
     onEyeTapped: (target: String, tapCount: Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
@@ -87,6 +89,10 @@ fun NexaExpressiveEyes(
         label = "SaccadeX"
     )
 
+    val latestHudState by rememberUpdatedState(hudState)
+    val latestIsSpeakingProvider by rememberUpdatedState(isSpeakingProvider)
+    val latestAudioEnergyProvider by rememberUpdatedState(audioEnergyProvider)
+
     LaunchedEffect(Unit) {
         // This runs independently of hudState changes so blinks don't restart
         // when state transitions (which would look unnatural)
@@ -95,9 +101,10 @@ fun NexaExpressiveEyes(
             delay(nextBlinkInterval)
 
             // Only blink during listening, thinking, or slow network
-            if (hudState == LiveVoiceHudState.LISTENING ||
-                hudState == LiveVoiceHudState.THINKING ||
-                hudState == LiveVoiceHudState.SLOW_NETWORK
+            val currentState = latestHudState
+            if (currentState == LiveVoiceHudState.LISTENING ||
+                currentState == LiveVoiceHudState.THINKING ||
+                currentState == LiveVoiceHudState.SLOW_NETWORK
             ) {
                 // Natural Saccade Micro-Shift before blinking
                 eyeSaccadeX = Random.nextFloat() * 6f - 3f
@@ -123,19 +130,14 @@ fun NexaExpressiveEyes(
         }
     }
 
-    // ─── 2. Audio-Reactive Smooth Energy Tracking ──────────────────────────────────
-    // The key fix: audioEnergy from VoiceStreamHandler is a @Volatile var
-    // that Compose cannot observe. We poll it every frame in a LaunchedEffect
-    // and smooth it with exponential moving average for buttery 60fps tracking.
+    // 2. Audio-Reactive Smooth Energy Tracking
     var smoothedAudioEnergy by remember { mutableFloatStateOf(0f) }
-    var isCurrentlySpeaking by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         // Continuously sample audioEnergy at frame rate for smooth animation
         while (isActive) {
             withFrameMillis { _ ->
-                isCurrentlySpeaking = isSpeaking
-                val target = if (isSpeaking) audioEnergy.coerceIn(0f, 1f) else 0f
+                val target = if (latestIsSpeakingProvider()) latestAudioEnergyProvider().coerceIn(0f, 1f) else 0f
                 // Exponential moving average: quick attack (0.35), slower decay (0.12)
                 val smoothingFactor = if (target > smoothedAudioEnergy) 0.35f else 0.12f
                 smoothedAudioEnergy += (target - smoothedAudioEnergy) * smoothingFactor
@@ -580,15 +582,14 @@ private fun DrawScope.drawSingleEye(
     if (width < 1f || height < 1f) return
 
     rotate(degrees = rotationDegrees, pivot = Offset(centerX, centerY)) {
-        scale(scaleX = 1f, scaleY = blinkScaleY, pivot = Offset(centerX, centerY)) {
-
-            val effectiveHeight = height * blinkScaleY
-            val left = centerX - (width / 2f)
-            val top = centerY - (effectiveHeight / 2f)
-            val rectSize = Size(width, effectiveHeight)
-            val safeCornerRadius = CornerRadius(
-                cornerRadius.coerceAtMost(effectiveHeight / 2f).coerceAtMost(width / 2f)
-            )
+        // Apply blinkScaleY once via effectiveHeight so squash is not squared
+        val effectiveHeight = height * blinkScaleY
+        val left = centerX - (width / 2f)
+        val top = centerY - (effectiveHeight / 2f)
+        val rectSize = Size(width, effectiveHeight)
+        val safeCornerRadius = CornerRadius(
+            cornerRadius.coerceAtMost(effectiveHeight / 2f).coerceAtMost(width / 2f)
+        )
 
             // 1. Layer 1: Outer Neon Bloom Glow (1.35x enlarged, soft alpha)
             val glowPaddingX = width * 0.16f
@@ -651,7 +652,6 @@ private fun DrawScope.drawSingleEye(
             }
         }
     }
-}
 
 /**
  * Draws dynamic audio soundwave ripples on the outer flanks of the eyes when speaking.

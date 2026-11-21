@@ -10,6 +10,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -53,6 +55,8 @@ class CameraStreamHandler(private val context: Context) {
 
     @Volatile private var lastFrameTime = 0L
     @Volatile private var isActive = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingSwitchRunnable: Runnable? = null
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -92,6 +96,10 @@ class CameraStreamHandler(private val context: Context) {
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
             try {
+                val executor = cameraExecutor
+                if (!isActive || executor == null || executor.isShutdown) {
+                    return@addListener
+                }
                 val provider = providerFuture.get()
                 cameraProvider = provider
 
@@ -108,14 +116,24 @@ class CameraStreamHandler(private val context: Context) {
                     previewUseCase.setSurfaceProvider(previewSurface)
                 }
 
-                // ImageAnalysis use case — 1 FPS throttled frame capture
+                // ImageAnalysis use case - 1 FPS throttled frame capture (CameraX 1.3+ ResolutionSelector)
+                val resolutionSelector = ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            TARGET_RESOLUTION,
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                        )
+                    )
+                    .build()
+
                 val imageAnalysis = ImageAnalysis.Builder()
-                    .setTargetResolution(TARGET_RESOLUTION)
+                    .setResolutionSelector(resolutionSelector)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
-                imageAnalysis.setAnalyzer(cameraExecutor!!) { imageProxy ->
-                    processFrame(imageProxy, useBackCamera, onFrame)
+                // Fix inverted mirror flag: mirror ONLY front camera frames, keep back camera text readable
+                imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                    processFrame(imageProxy, isFrontCamera = !useBackCamera, onFrame = onFrame)
                 }
 
                 provider.unbindAll()
@@ -144,10 +162,12 @@ class CameraStreamHandler(private val context: Context) {
         onFrame: (String) -> Unit
     ) {
         stopCamera()
-        // Brief pause so the HAL can release buffers cleanly before rebind
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        val runnable = Runnable {
+            pendingSwitchRunnable = null
             startCamera(lifecycleOwner, useBackCamera, previewSurface, onFrame)
-        }, 300L)
+        }
+        pendingSwitchRunnable = runnable
+        mainHandler.postDelayed(runnable, 300L)
     }
 
     /**
@@ -155,6 +175,8 @@ class CameraStreamHandler(private val context: Context) {
      */
     fun stopCamera() {
         isActive = false
+        pendingSwitchRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingSwitchRunnable = null
         try {
             cameraProvider?.unbindAll()
         } catch (e: Exception) {

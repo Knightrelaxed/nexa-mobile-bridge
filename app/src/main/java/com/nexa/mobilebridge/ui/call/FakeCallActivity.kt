@@ -244,7 +244,7 @@ class FakeCallActivity : ComponentActivity() {
             }
         }
 
-        override fun onStatusUpdate(status: String?, text: String?, userTranscriptVal: String?) {
+        override fun onStatusUpdate(status: String?, text: String?, userTranscript: String?) {
             runOnUiThread {
                 if (status != null) {
                     when (status) {
@@ -282,8 +282,8 @@ class FakeCallActivity : ComponentActivity() {
                     assistantMessage.value = text
                     ScreenCaptureService.assistantSubtitle.value = text
                 }
-                if (!userTranscriptVal.isNullOrBlank()) {
-                    userTranscript.value = userTranscriptVal
+                if (!userTranscript.isNullOrBlank()) {
+                    this@FakeCallActivity.userTranscript.value = userTranscript
                 }
             }
         }
@@ -698,6 +698,8 @@ class FakeCallActivity : ComponentActivity() {
                 isInPipMode = inPip,
                 isSpeaking = voiceStreamHandler.isPlayingAudio(),
                 audioEnergy = voiceStreamHandler.currentAudioEnergy,
+                isSpeakingProvider = { voiceStreamHandler.isPlayingAudio() },
+                audioEnergyProvider = { voiceStreamHandler.currentAudioEnergy },
                 isLoudspeaker = loudspeakerActive,
                 audioRoute = currentAudioRoute,
                 recordingElapsedMs = elapsedMs,
@@ -960,6 +962,7 @@ class FakeCallActivity : ComponentActivity() {
 
     private fun stopCameraStream() {
         isCameraActive.value = false
+        currentSurfaceProvider = null
         try {
             cameraStreamHandler.stopCamera()
         } catch (e: Exception) {
@@ -1275,6 +1278,7 @@ class FakeCallActivity : ComponentActivity() {
             NexaBridgeService.activeWebSocketClient?.liveCallListener = null
         }
         try { unregisterReceiver(callReplyReceiver) } catch (e: Exception) { /* already unregistered */ }
+        try { ttsHandler.shutdown() } catch (_: Exception) {}
         audioPlayerHandler.stopAll()
     }
 }
@@ -1289,6 +1293,8 @@ fun FakeCallScreen(
     isInPipMode: Boolean = false,
     isSpeaking: Boolean = false,
     audioEnergy: Float = 0f,
+    isSpeakingProvider: () -> Boolean = { isSpeaking },
+    audioEnergyProvider: () -> Float = { audioEnergy },
     isLoudspeaker: Boolean = false,
     audioRoute: AudioOutputRoute = AudioOutputRoute.EARPIECE,
     recordingElapsedMs: Long,
@@ -1326,6 +1332,8 @@ fun FakeCallScreen(
                 hudState = hudState,
                 isSpeaking = isSpeaking,
                 audioEnergy = audioEnergy,
+                isSpeakingProvider = isSpeakingProvider,
+                audioEnergyProvider = audioEnergyProvider,
                 onEyeTapped = onEyeTapped,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1683,6 +1691,8 @@ fun FakeCallScreen(
                                 hudState = hudState,
                                 isSpeaking = isSpeaking,
                                 audioEnergy = audioEnergy,
+                                isSpeakingProvider = isSpeakingProvider,
+                                audioEnergyProvider = audioEnergyProvider,
                                 onEyeTapped = onEyeTapped,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2289,92 +2299,7 @@ fun LiveStatusPill(state: LiveVoiceHudState, modifier: Modifier = Modifier) {
     }
 }
 
-// ─── Recording UI Composable ──────────────────────────────────────────────────
-@Composable
-fun RecordingSection(elapsedMs: Long, totalMs: Long = 10_000L) {
-    val remainingMs = (totalMs - elapsedMs).coerceAtLeast(0L)
-    val remainingSec = remainingMs / 1000L
-    val timerText = "00:%02d".format(remainingSec)
-
-    val progress = (elapsedMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
-
-    val infiniteTransition = rememberInfiniteTransition(label = "micPulse")
-    val micGlow by infiniteTransition.animateFloat(
-        initialValue = 0.85f, targetValue = 1.15f,
-        animationSpec = infiniteRepeatable(tween(600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "micGlow"
-    )
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth(0.9f)
-    ) {
-        // Timer
-        Text(
-            text = timerText,
-            color = Color(0xFF64FFDA),
-            fontSize = 56.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Bicaralah sekarang...",
-            color = Color(0xFF8892B0),
-            fontSize = 14.sp,
-            fontFamily = FontFamily.Monospace,
-            letterSpacing = 1.sp
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Progress bar
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-            color = Color(0xFFFF5252),
-            trackColor = Color(0xFF112240)
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Mic active indicator — glowing dot
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .scale(micGlow)
-                .clip(CircleShape)
-                .background(Color(0xFFFF5252))
-        )
-    }
-}
-
-// ─── Waiting Reply UI ─────────────────────────────────────────────────────────
-@Composable
-fun WaitingReplySection() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth(0.9f)
-    ) {
-        CircularProgressIndicator(
-            color = Color(0xFF64FFDA),
-            strokeWidth = 3.dp,
-            modifier = Modifier.size(48.dp)
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        Text(
-            text = "MENUNGGU BALASAN N.E.X.A",
-            color = Color(0xFF8892B0),
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            letterSpacing = 2.sp
-        )
-    }
-}
-
-// ─── Glowing Floating Upward Chevrons ─────────────────────────────────────────
+// Glowing Floating Upward Chevrons
 @Composable
 fun UpwardChevrons(
     tint: Color,
@@ -2565,62 +2490,6 @@ fun DynamicSwipeUpButton(
                         .scale(1.0f + (progress * 0.1f))
                 )
             }
-        }
-    }
-}
-
-// ─── Professional Speaker & Speaker Slashed Vector Icon ─────────────────────────
-@Composable
-fun SpeakerIcon(
-    isLoudspeaker: Boolean,
-    tint: Color,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-
-        // Draw clean minimalist speaker cone & body
-        val bodyPath = Path().apply {
-            moveTo(w * 0.16f, h * 0.36f)
-            lineTo(w * 0.38f, h * 0.36f)
-            lineTo(w * 0.64f, h * 0.16f)
-            lineTo(w * 0.64f, h * 0.84f)
-            lineTo(w * 0.38f, h * 0.64f)
-            lineTo(w * 0.16f, h * 0.64f)
-            close()
-        }
-        drawPath(bodyPath, color = tint)
-
-        if (isLoudspeaker) {
-            // Draw Sound Wave Arcs (Loudspeaker Active)
-            drawArc(
-                color = tint,
-                startAngle = -40f,
-                sweepAngle = 80f,
-                useCenter = false,
-                topLeft = Offset(w * 0.46f, h * 0.30f),
-                size = Size(w * 0.38f, h * 0.40f),
-                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-            )
-            drawArc(
-                color = tint,
-                startAngle = -40f,
-                sweepAngle = 80f,
-                useCenter = false,
-                topLeft = Offset(w * 0.36f, h * 0.18f),
-                size = Size(w * 0.58f, h * 0.64f),
-                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-            )
-        } else {
-            // Draw Elegant Diagonal Slash Line (Earpiece / Muted Speaker)
-            drawLine(
-                color = Color(0xFFFF5252),
-                start = Offset(w * 0.14f, h * 0.14f),
-                end = Offset(w * 0.86f, h * 0.86f),
-                strokeWidth = 2.5.dp.toPx(),
-                cap = StrokeCap.Round
-            )
         }
     }
 }

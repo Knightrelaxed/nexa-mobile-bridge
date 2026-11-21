@@ -28,10 +28,16 @@ class IntentHandler(private val context: Context) {
     }
 
     private fun openUrl(command: NexaCommand): CommandResult {
-        val url = (command.params?.get("url") as? JsonPrimitive)?.content
+        val url = (command.params?.get("url") as? JsonPrimitive)?.content?.trim()
             ?: return CommandResult.failure(command.command_id, "Missing required parameter 'url'.")
 
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        val parsed = Uri.parse(url)
+        val scheme = parsed.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            return CommandResult.failure(command.command_id, "Blocked unsupported URL scheme: ${scheme ?: "none"}")
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW, parsed).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)

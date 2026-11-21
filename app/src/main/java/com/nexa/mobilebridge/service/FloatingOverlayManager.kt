@@ -15,6 +15,10 @@ import android.view.WindowManager
 import android.animation.ValueAnimator
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import kotlin.math.abs
 import kotlin.math.cos
@@ -98,6 +102,8 @@ import kotlinx.coroutines.delay
  * 3. Smooth collapse to Floating Glowing Bubble at bottom-right on user screen touch / idle (Image 2).
  * 4. Tap bubble to smoothly re-expand to full dock.
  */
+private const val BUBBLE_SIZE_DP = 56
+
 class FloatingOverlayManager(private val context: Context) {
 
     companion object {
@@ -131,7 +137,7 @@ class FloatingOverlayManager(private val context: Context) {
 
         val density = context.resources.displayMetrics.density
         val displayMetrics = context.resources.displayMetrics
-        val sizePx = (56 * density).toInt()
+        val sizePx = (BUBBLE_SIZE_DP * density).toInt()
         val margin = (16 * density).toInt()
 
         // Default initial position: Bottom-Right edge above navigation bar
@@ -260,7 +266,7 @@ class FloatingOverlayManager(private val context: Context) {
                             }
                             if (isDraggingBubble) {
                                 val density = context.resources.displayMetrics.density
-                                val sizePx = (56 * density).toInt()
+                                val sizePx = (BUBBLE_SIZE_DP * density).toInt()
                                 val displayMetrics = context.resources.displayMetrics
                                 val maxBubbleX = displayMetrics.widthPixels - sizePx
                                 val minBubbleY = (36 * density).toInt()
@@ -282,7 +288,7 @@ class FloatingOverlayManager(private val context: Context) {
                             if (isDraggingBubble) {
                                 isDraggingBubble = false
                                 val density = context.resources.displayMetrics.density
-                                val sizePx = (56 * density).toInt()
+                                val sizePx = (BUBBLE_SIZE_DP * density).toInt()
                                 val displayMetrics = context.resources.displayMetrics
                                 val margin = (16 * density).toInt()
                                 // Snap smoothly to closest edge (Left or Right)
@@ -316,12 +322,14 @@ class FloatingOverlayManager(private val context: Context) {
                 return super.dispatchTouchEvent(ev)
             }
         }.apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
         }
 
         val composeView = ComposeView(context).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
@@ -390,7 +398,7 @@ class FloatingOverlayManager(private val context: Context) {
 
     private fun createCollapsedParams(overlayType: Int): WindowManager.LayoutParams {
         val density = context.resources.displayMetrics.density
-        val sizePx = (56 * density).toInt()
+        val sizePx = (BUBBLE_SIZE_DP * density).toInt()
         return WindowManager.LayoutParams(
             sizePx,
             sizePx,
@@ -515,7 +523,7 @@ fun FloatingDockOverlayScreen(
 
     Box(
         modifier = if (isCollapsed) {
-            Modifier.size(56.dp)
+            Modifier.size(BUBBLE_SIZE_DP.dp)
         } else {
             Modifier
                 .fillMaxWidth()
@@ -802,64 +810,40 @@ fun FloatingGlowingBubble(
     val isSpeaking by ScreenCaptureService.isAssistantSpeaking.collectAsState()
     val audioEnergy by ScreenCaptureService.audioEnergy.collectAsState()
 
-    val infiniteTransition = rememberInfiniteTransition(label = "GeminiOrb")
+    val infiniteTransition = rememberInfiniteTransition(label = "GeminiElectricOrb")
 
-    // Continuous dynamic rotation of the color gradient
+    // Dynamic rotation of the electric aurora swirl (3.0s idle, 1.5s speaking)
     val rotationAngle by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(if (isSpeaking) 2800 else 7000, easing = androidx.compose.animation.core.LinearEasing),
+            animation = tween(if (isSpeaking) 1500 else 3000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
-        label = "orbRotation"
+        label = "electricRotation"
     )
 
-    // Breathing pulse phase
-    val breathePhase by infiniteTransition.animateFloat(
+    // Breathing & electric pulse phase
+    val pulsePhase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(if (isSpeaking) 1100 else 2800, easing = FastOutSlowInEasing),
+            animation = tween(if (isSpeaking) 750 else 1800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "breathePhase"
+        label = "electricPulse"
     )
 
-    // Speech-reactive dynamic scale
-    val targetScale = if (isSpeaking) {
-        1.02f + (audioEnergy.coerceIn(0f, 1f) * 0.12f) + (breathePhase * 0.04f)
+    // Voice & speech dynamic energy boost
+    val dynamicEnergy = if (isSpeaking) {
+        (0.70f + audioEnergy.coerceIn(0f, 1f) * 0.45f + pulsePhase * 0.15f).coerceIn(0.6f, 1.3f)
     } else {
-        1.0f + (breathePhase * 0.03f)
-    }
-    val animatedScale by animateFloatAsState(
-        targetValue = targetScale,
-        animationSpec = spring(stiffness = 400f, dampingRatio = 0.8f),
-        label = "orbScale"
-    )
-
-    // Dynamic aura glow color shifting across Cyan -> Electric Blue -> Emerald Green
-    val auraColor = if (isSpeaking) {
-        when {
-            breathePhase < 0.33f -> Color(0xFF00E5FF) // Cyan
-            breathePhase < 0.66f -> Color(0xFF2563EB) // Electric Blue
-            else -> Color(0xFF10B981) // Emerald Green
-        }
-    } else {
-        Color(0xFF00E5FF) // Calm Cyan
+        (0.40f + pulsePhase * 0.20f)
     }
 
     Box(
         modifier = Modifier
-            .size(56.dp)
-            .scale(animatedScale)
-            .shadow(
-                elevation = if (isSpeaking) 22.dp else 12.dp,
-                shape = CircleShape,
-                spotColor = auraColor,
-                ambientColor = auraColor
-            )
-            .clip(CircleShape)
+            .size(BUBBLE_SIZE_DP.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -867,139 +851,149 @@ fun FloatingGlowingBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.size(56.dp)) {
+        Canvas(modifier = Modifier.size(BUBBLE_SIZE_DP.dp)) {
             val center = Offset(size.width / 2f, size.height / 2f)
-            val radius = size.minDimension / 2f
+            val outerRadius = (size.minDimension / 2f) - 1.5.dp.toPx()
 
-            // 1. Deep cosmic midnight sphere base
-            drawCircle(
-                color = Color(0xFF090E1A),
-                radius = radius,
-                center = center
-            )
-
-            // 2. Swirling Organic Color Gradients (Cyan, Electric Blue, Hijau)
-            val rad = Math.toRadians(rotationAngle.toDouble())
-            val bDist = radius * (0.32f + (breathePhase * 0.12f))
-
-            // Blob 1: Biru Elektrik (#2563EB)
-            val b1Center = Offset(
-                center.x + (cos(rad) * bDist).toFloat(),
-                center.y + (sin(rad) * bDist).toFloat()
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF2563EB).copy(alpha = if (isSpeaking) 0.95f else 0.85f),
-                        Color(0xFF1D4ED8).copy(alpha = 0.6f),
-                        Color.Transparent
-                    ),
-                    center = b1Center,
-                    radius = radius * 0.9f
-                ),
-                radius = radius,
-                center = center
-            )
-
-            // Blob 2: Neon Cyan (#00E5FF) - 120° offset
-            val rad2 = rad + (2.0 * Math.PI / 3.0)
-            val b2Center = Offset(
-                center.x + (cos(rad2) * bDist).toFloat(),
-                center.y + (sin(rad2) * bDist).toFloat()
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF00E5FF).copy(alpha = if (isSpeaking) 0.95f else 0.85f),
-                        Color(0xFF0284C7).copy(alpha = 0.5f),
-                        Color.Transparent
-                    ),
-                    center = b2Center,
-                    radius = radius * 0.9f
-                ),
-                radius = radius,
-                center = center
-            )
-
-            // Blob 3: Hijau Emerald / Mint (#10B981) - 240° offset
-            val rad3 = rad + (4.0 * Math.PI / 3.0)
-            val b3Center = Offset(
-                center.x + (cos(rad3) * bDist).toFloat(),
-                center.y + (sin(rad3) * bDist).toFloat()
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF10B981).copy(alpha = if (isSpeaking) 0.95f else 0.80f),
-                        Color(0xFF059669).copy(alpha = 0.5f),
-                        Color.Transparent
-                    ),
-                    center = b3Center,
-                    radius = radius * 0.9f
-                ),
-                radius = radius,
-                center = center
-            )
-
-            // 3. Central Luminous Nucleus (Breathing & Audio Energy reactive)
-            val coreRadius = (radius * (0.26f + (audioEnergy * 0.18f) + (breathePhase * 0.06f))).coerceIn(4f, radius * 0.55f)
-            val coreColors = if (isSpeaking) {
-                listOf(
-                    Color(0xFFFFFFFF),
-                    Color(0xFF67E8F9), // Light Cyan
-                    Color(0xFF34D399), // Mint Green
-                    Color.Transparent
+            // Clip all dynamic rendering strictly inside the sphere
+            clipPath(Path().apply {
+                addOval(Rect(center = center, radius = outerRadius))
+            }) {
+                // 1. Deep midnight obsidian background
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF090D16),
+                            Color(0xFF0F1524)
+                        ),
+                        startY = center.y - outerRadius,
+                        endY = center.y + outerRadius
+                    )
                 )
-            } else {
-                listOf(
-                    Color(0xFFE0F2FE),
-                    Color(0xFF38BDF8),
-                    Color.Transparent
+
+                // 2. Swirling 3D Electric Aurora Orbit (Cyan, Biru Elektrik, Hijau Mint)
+                val rad = Math.toRadians(rotationAngle.toDouble())
+                val orbitTiltY = outerRadius * 0.22f // Anchored in the lower hemisphere
+                val orbitRadiusX = outerRadius * 0.48f
+                val orbitRadiusY = outerRadius * 0.26f
+
+                // Node 1: Neon Cyan (#00E5FF / #00F0FF)
+                val cyanX = center.x + (cos(rad) * orbitRadiusX).toFloat()
+                val cyanY = center.y + orbitTiltY + (sin(rad) * orbitRadiusY).toFloat()
+                val cyanCenter = Offset(cyanX, cyanY)
+                val cyanRadius = outerRadius * (0.85f + dynamicEnergy * 0.22f)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF00F0FF).copy(alpha = if (isSpeaking) 0.95f else 0.82f),
+                            Color(0xFF00B4D8).copy(alpha = if (isSpeaking) 0.65f else 0.48f),
+                            Color(0xFF0077B6).copy(alpha = 0.22f),
+                            Color.Transparent
+                        ),
+                        center = cyanCenter,
+                        radius = cyanRadius
+                    ),
+                    center = cyanCenter,
+                    radius = cyanRadius
+                )
+
+                // Node 2: Biru Elektrik (#2563EB / #1D4ED8) - 120° offset
+                val radBlue = rad + (2.0 * Math.PI / 3.0)
+                val blueX = center.x + (cos(radBlue) * orbitRadiusX).toFloat()
+                val blueY = center.y + orbitTiltY + (sin(radBlue) * orbitRadiusY).toFloat()
+                val blueCenter = Offset(blueX, blueY)
+                val blueRadius = outerRadius * (0.88f + dynamicEnergy * 0.24f)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF3B82F6).copy(alpha = if (isSpeaking) 0.92f else 0.78f),
+                            Color(0xFF1D4ED8).copy(alpha = if (isSpeaking) 0.62f else 0.45f),
+                            Color(0xFF1E3A8A).copy(alpha = 0.20f),
+                            Color.Transparent
+                        ),
+                        center = blueCenter,
+                        radius = blueRadius
+                    ),
+                    center = blueCenter,
+                    radius = blueRadius
+                )
+
+                // Node 3: Hijau Emerald / Mint (#10B981 / #34D399) - 240° offset
+                val radGreen = rad + (4.0 * Math.PI / 3.0)
+                val greenX = center.x + (cos(radGreen) * orbitRadiusX).toFloat()
+                val greenY = center.y + orbitTiltY + (sin(radGreen) * orbitRadiusY).toFloat()
+                val greenCenter = Offset(greenX, greenY)
+                val greenRadius = outerRadius * (0.80f + dynamicEnergy * 0.20f)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF10B981).copy(alpha = if (isSpeaking) 0.88f else 0.72f),
+                            Color(0xFF059669).copy(alpha = if (isSpeaking) 0.55f else 0.40f),
+                            Color(0xFF064E3B).copy(alpha = 0.15f),
+                            Color.Transparent
+                        ),
+                        center = greenCenter,
+                        radius = greenRadius
+                    ),
+                    center = greenCenter,
+                    radius = greenRadius
+                )
+
+                // 3. Central Luminous Plasma Shimmer (Pulsing glowing mist, shifting with rotation)
+                val coreX = center.x + (cos(rad + Math.PI / 4) * (outerRadius * 0.14f)).toFloat()
+                val coreY = center.y + orbitTiltY + (sin(rad + Math.PI / 4) * (outerRadius * 0.10f)).toFloat()
+                val coreCenter = Offset(coreX, coreY)
+                val coreRadius = outerRadius * (0.45f + dynamicEnergy * 0.22f)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFFFFFFFF).copy(alpha = if (isSpeaking) 0.90f else 0.70f),
+                            Color(0xFFE0F2FE).copy(alpha = if (isSpeaking) 0.55f else 0.38f),
+                            Color(0xFF67E8F9).copy(alpha = 0.20f),
+                            Color.Transparent
+                        ),
+                        center = coreCenter,
+                        radius = coreRadius
+                    ),
+                    center = coreCenter,
+                    radius = coreRadius
+                )
+
+                // 4. Cosmic Obsidian Top Shadow (Deepens upper hemisphere for true 3D sphere look)
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xCC090D16),
+                            Color(0x66090D16),
+                            Color.Transparent
+                        ),
+                        startY = center.y - outerRadius,
+                        endY = center.y + (outerRadius * 0.3f)
+                    )
                 )
             }
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = coreColors,
-                    center = center,
-                    radius = coreRadius * 1.5f
-                ),
-                radius = coreRadius,
-                center = center
-            )
 
-            // 4. Fine 3D Glass Spherical Rim Stroke
+            // 5. Dynamic Shimmering Glass Rim
             val rimBrush = Brush.sweepGradient(
                 colors = listOf(
-                    Color(0xFF00E5FF),
-                    Color(0xFF2563EB),
-                    Color(0xFF10B981),
-                    Color(0xFF00E5FF)
+                    Color(0x5500F0FF),
+                    Color(0x552563EB),
+                    Color(0x5510B981),
+                    Color(0x5500F0FF)
                 ),
                 center = center
             )
             drawCircle(
                 brush = rimBrush,
-                radius = radius - 1f,
+                radius = outerRadius,
                 center = center,
-                style = Stroke(width = 1.5.dp.toPx())
+                style = Stroke(width = 1.dp.toPx())
             )
-
-            // 5. Specular Reflection Arc Highlight (Glass 3D effect at top)
-            drawArc(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x66FFFFFF),
-                        Color(0x00FFFFFF)
-                    ),
-                    startY = 0f,
-                    endY = radius * 0.6f
-                ),
-                startAngle = 200f,
-                sweepAngle = 140f,
-                useCenter = false,
-                style = Stroke(width = 2.dp.toPx()),
-                topLeft = Offset(radius * 0.2f, radius * 0.1f),
-                size = androidx.compose.ui.geometry.Size(radius * 1.6f, radius * 0.8f)
+            drawCircle(
+                color = Color(0x22FFFFFF),
+                radius = outerRadius,
+                center = center,
+                style = Stroke(width = 0.8.dp.toPx())
             )
         }
     }
