@@ -40,6 +40,7 @@ enum class NexaAvatarState {
     LISTENING,
     THINKING,
     STREAMING,
+    STEP_UP,
     ALERT
 }
 
@@ -285,7 +286,14 @@ class ChatRepository @Inject constructor(
     }
 
     fun clearError() {
-        _streamState.update { it.copy(lastError = null) }
+        _streamState.update { curr ->
+            val nextAvatar = when {
+                _pendingStepUp.value != null -> NexaAvatarState.STEP_UP
+                curr.avatarState == NexaAvatarState.ALERT && curr.activeClientMsgId == null -> NexaAvatarState.IDLE
+                else -> curr.avatarState
+            }
+            curr.copy(lastError = null, avatarState = nextAvatar)
+        }
     }
 
     suspend fun getMessagesByIds(ids: Collection<String>): List<ChatMessageEntity> {
@@ -371,6 +379,17 @@ class ChatRepository @Inject constructor(
         webSocketClient.send(payload)
         _pendingStepUp.update { curr -> if (curr?.actionId == actionId) null else curr }
         notificationManager.cancelStepUp()
+        _streamState.update { curr ->
+            if (curr.activeClientMsgId == null &&
+                (curr.avatarState == NexaAvatarState.STEP_UP || curr.avatarState == NexaAvatarState.ALERT)
+            ) {
+                curr.copy(
+                    avatarState = if (curr.lastError != null) NexaAvatarState.ALERT else NexaAvatarState.IDLE
+                )
+            } else {
+                curr
+            }
+        }
     }
 
     /**
@@ -381,6 +400,17 @@ class ChatRepository @Inject constructor(
         if (current == null || current.actionId != actionId) return
         _pendingStepUp.value = null
         notificationManager.cancelStepUp()
+        _streamState.update { curr ->
+            if (curr.activeClientMsgId == null &&
+                (curr.avatarState == NexaAvatarState.STEP_UP || curr.avatarState == NexaAvatarState.ALERT)
+            ) {
+                curr.copy(
+                    avatarState = if (curr.lastError != null) NexaAvatarState.ALERT else NexaAvatarState.IDLE
+                )
+            } else {
+                curr
+            }
+        }
 
         val payload = JSONObject().apply {
             put("type", "ACTION_CANCEL")
@@ -842,7 +872,7 @@ class ChatRepository @Inject constructor(
             errorBanner = null
         )
         _pendingStepUp.value = pending
-        _streamState.update { it.copy(avatarState = NexaAvatarState.ALERT) }
+        _streamState.update { it.copy(avatarState = NexaAvatarState.STEP_UP) }
         notificationManager.showStepUpRequired(
             actionLabel = pending.actionLabel,
             formattedAmount = pending.formattedAmount,

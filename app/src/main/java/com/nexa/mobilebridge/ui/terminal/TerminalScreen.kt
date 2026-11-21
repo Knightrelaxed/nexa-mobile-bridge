@@ -91,7 +91,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.nexa.mobilebridge.core.security.SecureScreenEffect
 import com.nexa.mobilebridge.core.security.findActivity
-import com.nexa.mobilebridge.data.chat.NexaAvatarState
 import com.nexa.mobilebridge.data.terminal.TerminalCell
 import com.nexa.mobilebridge.data.terminal.TerminalScreenSnapshot
 import com.nexa.mobilebridge.data.terminal.TerminalSessionState
@@ -99,6 +98,7 @@ import com.nexa.mobilebridge.data.terminal.TerminalSessionStatus
 import com.nexa.mobilebridge.theme.LocalNexaColors
 import com.nexa.mobilebridge.theme.NexaMonoTypography
 import com.nexa.mobilebridge.ui.components.NexaVisorBadge
+import com.nexa.mobilebridge.ui.components.NexaVisorVisualState
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
@@ -517,13 +517,18 @@ private fun TerminalSingleCompactHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    val terminalVisorState = when (sessionState.status) {
+                        TerminalSessionStatus.ACTIVE -> NexaVisorVisualState.IDLE
+                        TerminalSessionStatus.CONNECTING -> NexaVisorVisualState.THINKING
+                        TerminalSessionStatus.AWAITING_BIOMETRIC -> NexaVisorVisualState.STEP_UP
+                        TerminalSessionStatus.DETACHED_RECONNECTING -> NexaVisorVisualState.RECONNECTING
+                        TerminalSessionStatus.ERROR,
+                        TerminalSessionStatus.DISABLED_BY_SERVER -> NexaVisorVisualState.ERROR
+                        TerminalSessionStatus.DISCONNECTED,
+                        TerminalSessionStatus.PAUSED_SCREEN_OFF -> NexaVisorVisualState.OFFLINE
+                    }
                     NexaVisorBadge(
-                        eyeColor = nexaColors.visorEye,
-                        avatarState = if (sessionState.status == TerminalSessionStatus.ACTIVE) {
-                            NexaAvatarState.IDLE
-                        } else {
-                            NexaAvatarState.ALERT
-                        },
+                        visualState = terminalVisorState,
                         modifier = Modifier.size(width = 38.dp, height = 28.dp)
                     )
                     Text(

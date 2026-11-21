@@ -137,6 +137,8 @@ fun MainNavigation(
                                 connectionState = connectionState,
                                 onOpenSettings = { if (backStack.lastOrNull() != Settings) backStack.add(Settings) },
                                 avatarState = effectiveAvatarState,
+                                voiceLevelFlow = chatViewModel.voiceVisorLevel,
+                                hapticEnabled = chatPrefs.hapticEnabled,
                                 onStartVoiceCall = {
                                     val intent = Intent(context, FakeCallActivity::class.java).apply {
                                         action = "com.nexa.mobilebridge.ACTION_CALL_NEXA"

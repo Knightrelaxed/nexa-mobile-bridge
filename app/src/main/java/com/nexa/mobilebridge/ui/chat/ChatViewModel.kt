@@ -109,23 +109,32 @@ class ChatViewModel @Inject constructor(
 
     private val _isInputListening = MutableStateFlow(false)
 
-    // FR-CHAT-13 / U-H4: Surface LISTENING visor state while user focuses, types, or records voice note
+    // FR-CHAT-13 / U-H4: Surface STEP_UP / LISTENING visor state in priority order
     val effectiveAvatarState: StateFlow<NexaAvatarState> = combine(
         streamState,
+        pendingStepUp,
         _isInputListening,
         _voiceRecordingState
-    ) { state, listening, voiceState ->
-        if (voiceState.phase != VoiceRecordingPhase.IDLE) {
-            NexaAvatarState.LISTENING
-        } else if (state.avatarState == NexaAvatarState.IDLE && listening) {
-            NexaAvatarState.LISTENING
-        } else {
-            state.avatarState
+    ) { state, stepUp, listening, voiceState ->
+        when {
+            stepUp != null -> NexaAvatarState.STEP_UP
+            voiceState.phase != VoiceRecordingPhase.IDLE -> NexaAvatarState.LISTENING
+            state.avatarState == NexaAvatarState.IDLE && listening -> NexaAvatarState.LISTENING
+            else -> state.avatarState
         }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = NexaAvatarState.IDLE
+    )
+
+    val voiceVisorLevel: StateFlow<Float> = combine(_voiceRecordingState) { arr ->
+        val voiceState = arr[0]
+        if (voiceState.phase != VoiceRecordingPhase.IDLE) voiceState.liveLevel.coerceIn(0f, 1f) else 0f
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = 0f
     )
 
     private val _chatPrefs = MutableStateFlow(ChatUiPreferences())

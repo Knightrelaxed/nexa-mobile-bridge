@@ -94,7 +94,6 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nexa.mobilebridge.core.security.SecureScreenEffect
 import com.nexa.mobilebridge.core.security.findActivity
-import com.nexa.mobilebridge.data.chat.NexaAvatarState
 import com.nexa.mobilebridge.data.logs.LogBinaryProtocol
 import com.nexa.mobilebridge.data.logs.LogEntry
 import com.nexa.mobilebridge.data.logs.LogFilterPreset
@@ -102,6 +101,7 @@ import com.nexa.mobilebridge.data.logs.LogStreamStatus
 import com.nexa.mobilebridge.theme.LocalNexaColors
 import com.nexa.mobilebridge.theme.NexaMonoTypography
 import com.nexa.mobilebridge.ui.components.NexaVisorBadge
+import com.nexa.mobilebridge.ui.components.NexaVisorVisualState
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -459,10 +459,13 @@ private fun LogUnifiedTopHeader(
         LogStreamStatus.ERROR, LogStreamStatus.IDLE_DISCONNECTED -> "Siaga" to MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    val visorAvatarState = when (status) {
-        LogStreamStatus.LIVE -> NexaAvatarState.IDLE
-        LogStreamStatus.CONNECTING, LogStreamStatus.AWAITING_BIOMETRIC -> NexaAvatarState.THINKING
-        else -> NexaAvatarState.ALERT
+    val visorVisualState = when (status) {
+        LogStreamStatus.LIVE -> NexaVisorVisualState.IDLE
+        LogStreamStatus.CONNECTING -> NexaVisorVisualState.THINKING
+        LogStreamStatus.AWAITING_BIOMETRIC -> NexaVisorVisualState.STEP_UP
+        LogStreamStatus.ERROR -> NexaVisorVisualState.ERROR
+        LogStreamStatus.PAUSED,
+        LogStreamStatus.IDLE_DISCONNECTED -> NexaVisorVisualState.OFFLINE
     }
 
     Surface(
@@ -485,8 +488,7 @@ private fun LogUnifiedTopHeader(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     NexaVisorBadge(
-                        eyeColor = nexaColors.visorEye,
-                        avatarState = visorAvatarState,
+                        visualState = visorVisualState,
                         modifier = Modifier.size(width = 38.dp, height = 28.dp)
                     )
 
