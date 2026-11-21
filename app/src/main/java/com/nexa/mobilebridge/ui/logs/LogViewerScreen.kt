@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -52,6 +54,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -120,6 +123,7 @@ import java.util.Locale
  */
 @Composable
 fun LogViewerScreen(
+    onNavigateBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     viewModel: LogViewerViewModel = hiltViewModel()
 ) {
@@ -215,10 +219,11 @@ fun LogViewerScreen(
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 1. Single Unified Header with Search, Pause, Clear, Settings
+        // 1. Single Unified Header with Back, Search, Pause, Clear, Settings
         LogUnifiedTopHeader(
             status = streamStatus,
             isSearchActive = isSearchExpanded || searchQuery.isNotEmpty(),
+            onNavigateBack = onNavigateBack,
             onToggleSearch = {
                 triggerHaptic()
                 if (isSearchExpanded) {
@@ -445,6 +450,7 @@ fun LogViewerScreen(
 private fun LogUnifiedTopHeader(
     status: LogStreamStatus,
     isSearchActive: Boolean,
+    onNavigateBack: () -> Unit,
     onToggleSearch: () -> Unit,
     onTogglePause: () -> Unit,
     onClearBuffer: () -> Unit,
@@ -458,15 +464,6 @@ private fun LogUnifiedTopHeader(
         LogStreamStatus.ERROR, LogStreamStatus.IDLE_DISCONNECTED -> "Standby" to MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    val visorVisualState = when (status) {
-        LogStreamStatus.LIVE -> NexaVisorVisualState.IDLE
-        LogStreamStatus.CONNECTING -> NexaVisorVisualState.THINKING
-        LogStreamStatus.AWAITING_BIOMETRIC -> NexaVisorVisualState.STEP_UP
-        LogStreamStatus.ERROR -> NexaVisorVisualState.ERROR
-        LogStreamStatus.PAUSED,
-        LogStreamStatus.IDLE_DISCONNECTED -> NexaVisorVisualState.OFFLINE
-    }
-
     Surface(
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxWidth()
@@ -477,29 +474,34 @@ private fun LogUnifiedTopHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(start = 12.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                    .padding(start = 2.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    NexaVisorBadge(
-                        visualState = visorVisualState,
-                        modifier = Modifier.size(width = 38.dp, height = 28.dp)
-                    )
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
 
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(1.dp)
                     ) {
                         Text(
-                            text = "N.E.X.A",
+                            text = "Server Logs",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.2.sp,
                             color = MaterialTheme.colorScheme.onBackground,
                             maxLines = 1
                         )
@@ -1005,6 +1007,7 @@ private fun LogAccurateFooter(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
+            .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

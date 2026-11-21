@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.Bolt
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Circle
@@ -47,13 +50,18 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -91,15 +99,19 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * HUD / Bridge Control screen matching Stitch Blueprint v2 (02_hud_bridge_control_v2.png).
+ * Bridge Status (HUD) screen pushed from Chat Top Bar or Settings -> Diagnostics.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HudScreen(
     viewModel: HudViewModel = hiltViewModel(),
-    onToggleService: (Boolean) -> Unit
+    onToggleService: (Boolean) -> Unit,
+    onNavigateBack: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val nexaColors = LocalNexaColors.current
     var showStopConfirmDialog by remember { mutableStateOf(false) }
 
     LifecycleResumeEffect(Unit) {
@@ -107,9 +119,56 @@ fun HudScreen(
         onPauseOrDispose { }
     }
 
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "Bridge Status",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onBackground
+                    )
+                )
+                HorizontalDivider(
+                    thickness = 0.75.dp,
+                    color = nexaColors.cardBorder.copy(alpha = 0.55f)
+                )
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { scaffoldPadding ->
     when (val state = uiState) {
         is HudUiState.Loading -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(scaffoldPadding),
+                contentAlignment = Alignment.Center
+            ) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         }
@@ -118,7 +177,10 @@ fun HudScreen(
             val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
 
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(scaffoldPadding)
+                    .navigationBarsPadding(),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -202,6 +264,7 @@ fun HudScreen(
                 }
             }
         }
+    }
     }
 
     if (showStopConfirmDialog) {

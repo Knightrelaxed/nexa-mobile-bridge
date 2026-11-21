@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,20 +32,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
-import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,7 +69,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -85,7 +76,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
-import com.nexa.mobilebridge.NexaMainTab
 import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.data.chat.NexaAvatarState
 import com.nexa.mobilebridge.theme.LocalNexaColors
@@ -573,14 +563,14 @@ private fun DrawScope.drawMiniExpressiveEye(
 }
 
 /**
- * Uniform Top App Bar matching Stitch Blueprint v2 (01_chat_ai_native_v2 & 02_hud_bridge_control_v2).
- * Shows 48x38 dp Mini OLED Visor synced with Live Call eye language, "N.E.X.A" + connection status,
- * optional Voice Call quick action, and 48 dp Settings button.
+ * Pure Chat-First Top App Bar:
+ * Shows 48x38 dp Mini OLED Visor (tap-to-wink), clickable "N.E.X.A" + connection/activity status
+ * to open Bridge Status (HUD), Voice Call quick action, and Settings button.
  */
 @Composable
 fun NexaTopBar(
-    activeTab: NexaMainTab,
     connectionState: ConnectionState,
+    onOpenBridgeStatus: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     avatarState: NexaAvatarState = NexaAvatarState.IDLE,
@@ -590,11 +580,7 @@ fun NexaTopBar(
 ) {
     val nexaColors = LocalNexaColors.current
     val (statusColor: Color, statusIcon: ImageVector, statusText: String) = when (connectionState) {
-        is ConnectionState.Connected -> Triple(
-            nexaColors.emerald,
-            Icons.Default.CheckCircle,
-            if (activeTab == NexaMainTab.CHAT) "Connected" else "Connected · TLS"
-        )
+        is ConnectionState.Connected -> Triple(nexaColors.emerald, Icons.Default.CheckCircle, "Connected")
         is ConnectionState.Connecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Connecting...")
         is ConnectionState.Reconnecting -> Triple(nexaColors.amber, Icons.Default.Sync, "Reconnecting #${connectionState.attempt}")
         is ConnectionState.Disconnected -> Triple(nexaColors.crimson, Icons.Default.CloudOff, "Disconnected")
@@ -603,13 +589,12 @@ fun NexaTopBar(
 
     val visorState = resolveVisorVisualState(avatarState = avatarState, connectionState = connectionState)
 
-    val subtitleLabel = when {
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.THINKING -> "Working..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STREAMING -> "Replying..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.STEP_UP -> "Waiting for fingerprint..."
-        activeTab == NexaMainTab.CHAT && visorState == NexaVisorVisualState.LISTENING -> "Listening..."
-        activeTab == NexaMainTab.CHAT -> statusText
-        else -> "$statusText · ${activeTab.label.uppercase()}"
+    val subtitleLabel = when (visorState) {
+        NexaVisorVisualState.THINKING -> "Working..."
+        NexaVisorVisualState.STREAMING -> "Replying..."
+        NexaVisorVisualState.STEP_UP -> "Waiting for fingerprint..."
+        NexaVisorVisualState.LISTENING -> "Listening..."
+        else -> statusText
     }
 
     Surface(
@@ -627,6 +612,7 @@ fun NexaTopBar(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -636,7 +622,16 @@ fun NexaTopBar(
                         hapticEnabled = hapticEnabled
                     )
 
-                    Column(verticalArrangement = Arrangement.Center) {
+                    Column(
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = "Open Bridge Status",
+                                onClick = onOpenBridgeStatus
+                            )
+                            .padding(vertical = 4.dp, horizontal = 2.dp)
+                    ) {
                         Text(
                             text = "N.E.X.A",
                             style = MaterialTheme.typography.titleMedium,
@@ -646,7 +641,7 @@ fun NexaTopBar(
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
                                 imageVector = statusIcon,
@@ -659,12 +654,18 @@ fun NexaTopBar(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (onStartVoiceCall != null && (activeTab == NexaMainTab.CHAT || activeTab == NexaMainTab.HUD)) {
+                    if (onStartVoiceCall != null) {
                         IconButton(
                             onClick = onStartVoiceCall,
                             modifier = Modifier.size(48.dp)
@@ -693,122 +694,6 @@ fun NexaTopBar(
                 thickness = 1.dp,
                 color = nexaColors.cardBorder.copy(alpha = 0.7f)
             )
-        }
-    }
-}
-
-/**
- * Uniform 4-Tab Bottom Navigation Bar (CHAT | HUD | LOGS | SHELL) with consistent 2dp top indicator bar
- * and >= 48dp touch targets (PRD 12.1 / Stitch Blueprint v2).
- */
-@Composable
-fun NexaBottomNavBar(
-    activeTab: NexaMainTab,
-    onSelectTab: (NexaMainTab) -> Unit,
-    modifier: Modifier = Modifier,
-    chatUnreadCount: Int = 0
-) {
-    val nexaColors = LocalNexaColors.current
-
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Column {
-            HorizontalDivider(
-                thickness = 1.dp,
-                color = nexaColors.cardBorder
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .height(64.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                NexaMainTab.entries.forEach { tab ->
-                    val isSelected = tab == activeTab
-                    val activeTint = MaterialTheme.colorScheme.primary
-                    val inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant
-                    val tint = if (isSelected) activeTint else inactiveTint
-                    val showBadge = tab == NexaMainTab.CHAT && chatUnreadCount > 0 && !isSelected
-
-                    val icon = when (tab) {
-                        NexaMainTab.CHAT -> if (isSelected) Icons.Filled.ChatBubble else Icons.Outlined.ChatBubbleOutline
-                        NexaMainTab.HUD -> if (isSelected) Icons.Filled.Dashboard else Icons.Outlined.Dashboard
-                        NexaMainTab.LOGS -> if (isSelected) Icons.AutoMirrored.Filled.ReceiptLong else Icons.AutoMirrored.Outlined.ReceiptLong
-                        NexaMainTab.SHELL -> if (isSelected) Icons.Filled.Terminal else Icons.Outlined.Terminal
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(64.dp)
-                            .semantics {
-                                selected = isSelected
-                                contentDescription = if (showBadge) "${tab.label} ($chatUnreadCount unread)" else tab.label
-                            }
-                            .clickable(
-                                role = Role.Tab,
-                                onClick = { onSelectTab(tab) }
-                            ),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(34.dp)
-                                .height(2.dp)
-                                .background(
-                                    color = if (isSelected) activeTint else Color.Transparent,
-                                    shape = RoundedCornerShape(bottomStart = 2.dp, bottomEnd = 2.dp)
-                                )
-                        )
-
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(top = 2.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Box(contentAlignment = Alignment.TopEnd) {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = tint,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                if (showBadge) {
-                                    val badgeLabel = if (chatUnreadCount > 99) "99+" else chatUnreadCount.toString()
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = 8.dp, y = (-5).dp)
-                                            .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
-                                            .background(color = nexaColors.crimson, shape = CircleShape)
-                                            .padding(horizontal = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = badgeLabel,
-                                            color = Color.White,
-                                            fontSize = 9.sp,
-                                            lineHeight = 10.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Text(
-                                text = tab.label.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = tint
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

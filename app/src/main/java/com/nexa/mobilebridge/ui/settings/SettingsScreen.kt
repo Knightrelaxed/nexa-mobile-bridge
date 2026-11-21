@@ -44,8 +44,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
@@ -133,7 +135,10 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onOpenBridgeStatus: () -> Unit = {},
+    onOpenServerLogs: () -> Unit = {},
+    onOpenRemoteTerminal: () -> Unit = {}
 ) {
     // Automatically enforces FLAG_SECURE on release builds; allows screenshots during debug/testing.
     SecureScreenEffect(allowInDebugBuild = true)
@@ -430,6 +435,7 @@ fun SettingsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clickable(role = Role.Button) { onOpenBridgeStatus() }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -456,6 +462,11 @@ fun SettingsScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        Text(
+                            text = "Status",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     SettingsRowDivider(insetStart = false)
@@ -677,69 +688,6 @@ fun SettingsScreen(
                                     )
                                 }
                             }
-                        }
-                    }
-
-                    SettingsRowDivider(insetStart = false)
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Terminal font size",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${uiState.terminalFontSizeSp} sp",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.SemiBold
-                                ),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        Slider(
-                            value = uiState.terminalFontSizeSp.toFloat(),
-                            onValueChange = { viewModel.onTerminalFontSizePreview(it.roundToInt()) },
-                            onValueChangeFinished = { viewModel.onTerminalFontSizeCommitted() },
-                            valueRange = NexaPreferencesDataStore.MIN_TERMINAL_FONT_SP.toFloat()..
-                                NexaPreferencesDataStore.MAX_TERMINAL_FONT_SP.toFloat(),
-                            steps = (NexaPreferencesDataStore.MAX_TERMINAL_FONT_SP -
-                                NexaPreferencesDataStore.MIN_TERMINAL_FONT_SP) - 1,
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = nexaColors.primaryButtonFill,
-                                inactiveTrackColor = nexaColors.elevatedSurface,
-                                activeTickColor = Color.Transparent,
-                                inactiveTickColor = Color.Transparent
-                            )
-                        )
-
-                        Surface(
-                            color = if (nexaColors.isDark) Color(0xFF070B10) else MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "nexa@mobile:~\$ ack packet_seq=10492 OK",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = uiState.terminalFontSizeSp.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                            )
                         }
                     }
                 }
@@ -1067,7 +1015,49 @@ fun SettingsScreen(
             }
 
             // =================================================================
-            // 6. ADVANCED
+            // 6. DIAGNOSTICS
+            // =================================================================
+            Column {
+                SettingsGroupHeader(title = "Diagnostics")
+                SettingsGroupCard {
+                    SettingsListRow(
+                        leadingIcon = Icons.Default.Dashboard,
+                        title = "Bridge Status",
+                        subtitle = "Connection, telemetry, permissions & service",
+                        showChevron = true,
+                        onClick = onOpenBridgeStatus
+                    )
+
+                    SettingsRowDivider(insetStart = true)
+
+                    SettingsListRow(
+                        leadingIcon = Icons.AutoMirrored.Filled.ReceiptLong,
+                        title = "Server Logs",
+                        subtitle = "Live on-demand log stream · Fingerprint",
+                        showChevron = true,
+                        onClick = onOpenServerLogs
+                    )
+
+                    SettingsRowDivider(insetStart = true)
+
+                    SettingsListRow(
+                        leadingIcon = Icons.Default.Terminal,
+                        title = "Remote Terminal",
+                        subtitle = "Isolated VPS shell · Fingerprint",
+                        trailingText = uiState.killSwitchLabel,
+                        trailingColor = if (uiState.isKillSwitchActive) {
+                            nexaColors.emerald
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        showChevron = true,
+                        onClick = onOpenRemoteTerminal
+                    )
+                }
+            }
+
+            // =================================================================
+            // 7. ADVANCED
             // =================================================================
             Column {
                 SettingsGroupHeader(title = "Advanced")
@@ -1128,16 +1118,66 @@ fun SettingsScreen(
 
                     SettingsRowDivider(insetStart = false)
 
-                    SettingsListRow(
-                        title = "Server terminal access",
-                        subtitle = uiState.killSwitchSubtitle,
-                        trailingText = uiState.killSwitchLabel,
-                        trailingColor = if (uiState.isKillSwitchActive) {
-                            nexaColors.emerald
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Terminal font size",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${uiState.terminalFontSizeSp} sp",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                    )
+
+                        Slider(
+                            value = uiState.terminalFontSizeSp.toFloat(),
+                            onValueChange = { viewModel.onTerminalFontSizePreview(it.roundToInt()) },
+                            onValueChangeFinished = { viewModel.onTerminalFontSizeCommitted() },
+                            valueRange = NexaPreferencesDataStore.MIN_TERMINAL_FONT_SP.toFloat()..
+                                NexaPreferencesDataStore.MAX_TERMINAL_FONT_SP.toFloat(),
+                            steps = (NexaPreferencesDataStore.MAX_TERMINAL_FONT_SP -
+                                NexaPreferencesDataStore.MIN_TERMINAL_FONT_SP) - 1,
+                            colors = SliderDefaults.colors(
+                                thumbColor = MaterialTheme.colorScheme.primary,
+                                activeTrackColor = nexaColors.primaryButtonFill,
+                                inactiveTrackColor = nexaColors.elevatedSurface,
+                                activeTickColor = Color.Transparent,
+                                inactiveTickColor = Color.Transparent
+                            )
+                        )
+
+                        Surface(
+                            color = if (nexaColors.isDark) Color(0xFF070B10) else MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "nexa@mobile:~\$ ack packet_seq=10492 OK",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = uiState.terminalFontSizeSp.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
                 }
             }
 

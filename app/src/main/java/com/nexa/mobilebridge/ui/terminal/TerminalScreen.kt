@@ -12,18 +12,23 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.LockOpen
@@ -115,10 +120,11 @@ import kotlin.math.max
 @Composable
 fun TerminalScreen(
     onOpenSettings: () -> Unit,
+    onNavigateBack: () -> Unit = {},
     isLandscape: Boolean = false,
     viewModel: TerminalViewModel = hiltViewModel()
 ) {
-    // Otomatis aktif FLAG_SECURE pada build release; tetap bebas screenshot saat debug/testing.
+    // Automatically enforces FLAG_SECURE on release builds; allows screenshots during debug/testing.
     SecureScreenEffect(allowInDebugBuild = true)
 
     val context = LocalContext.current
@@ -149,7 +155,7 @@ fun TerminalScreen(
         }
     }
 
-    // PRD §13: Distinguish deliberate Terminal tab switch from screen off, rotation, or Settings navigation
+    // PRD §13: Distinguish deliberate Terminal exit from screen off, rotation, or Settings navigation
     DisposableEffect(Unit) {
         onDispose {
             val activity = context.findActivity()
@@ -185,13 +191,14 @@ fun TerminalScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .imePadding()
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
     ) {
-        // 1. Single Compact 40 dp Header matching 04_terminal_pty_v2.png (No double top bar!)
+        // 1. Single Compact Header with Back arrow
         TerminalSingleCompactHeader(
             sessionState = sessionState,
             fontSizeSp = fontSizeSp,
             isLandscape = isLandscape,
+            onNavigateBack = onNavigateBack,
             onAdjustFont = { delta ->
                 triggerHaptic()
                 viewModel.adjustFontSize(delta)
@@ -468,6 +475,7 @@ private fun TerminalSingleCompactHeader(
     sessionState: TerminalSessionState,
     fontSizeSp: Int,
     isLandscape: Boolean,
+    onNavigateBack: () -> Unit,
     onAdjustFont: (Int) -> Unit,
     onOpenSettings: () -> Unit,
     onRequestDisconnect: () -> Unit
@@ -508,29 +516,26 @@ private fun TerminalSingleCompactHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(if (!isLandscape) Modifier.statusBarsPadding() else Modifier)
-                    .height(40.dp)
-                    .padding(start = 12.dp, end = 4.dp),
+                    .height(44.dp)
+                    .padding(start = 2.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    val terminalVisorState = when (sessionState.status) {
-                        TerminalSessionStatus.ACTIVE -> NexaVisorVisualState.IDLE
-                        TerminalSessionStatus.CONNECTING -> NexaVisorVisualState.THINKING
-                        TerminalSessionStatus.AWAITING_BIOMETRIC -> NexaVisorVisualState.STEP_UP
-                        TerminalSessionStatus.DETACHED_RECONNECTING -> NexaVisorVisualState.RECONNECTING
-                        TerminalSessionStatus.ERROR,
-                        TerminalSessionStatus.DISABLED_BY_SERVER -> NexaVisorVisualState.ERROR
-                        TerminalSessionStatus.DISCONNECTED,
-                        TerminalSessionStatus.PAUSED_SCREEN_OFF -> NexaVisorVisualState.OFFLINE
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.requiredSize(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
-                    NexaVisorBadge(
-                        visualState = terminalVisorState,
-                        modifier = Modifier.size(width = 38.dp, height = 28.dp)
-                    )
                     Text(
                         text = "nexa-term@vps",
                         style = NexaMonoTypography.metricMedium,

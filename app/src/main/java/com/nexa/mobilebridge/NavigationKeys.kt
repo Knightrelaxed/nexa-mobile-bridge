@@ -11,4 +11,7 @@ enum class NexaMainTab(val label: String, val subtitle: String) {
 }
 
 @Serializable data object MainShell : NavKey
+@Serializable data object BridgeStatus : NavKey
 @Serializable data object Settings : NavKey
+@Serializable data object ServerLogs : NavKey
+@Serializable data object RemoteTerminal : NavKey
