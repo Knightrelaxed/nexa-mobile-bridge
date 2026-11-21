@@ -49,6 +49,7 @@
         
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
@@ -111,6 +112,12 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- Chat Notification Inline Reply & Mark-as-Read Receiver -->
+        <receiver
+            android:name=".notification.ChatNotificationActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <!-- Geofence Receiver -->
         <receiver

@@ -27,6 +27,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.nexa.mobilebridge.core.util.ConnectionState
+import com.nexa.mobilebridge.data.chat.ChatVisibilityTracker
 import com.nexa.mobilebridge.ui.call.FakeCallActivity
 import com.nexa.mobilebridge.ui.chat.ChatScreen
 import com.nexa.mobilebridge.ui.chat.ChatSelectionTopBar
@@ -42,11 +43,29 @@ import com.nexa.mobilebridge.ui.terminal.TerminalScreen
 
 @Composable
 fun MainNavigation(
+    chatVisibilityTracker: ChatVisibilityTracker,
     onToggleService: (Boolean) -> Unit
 ) {
     val backStack = rememberNavBackStack(MainShell)
     var activeTab by rememberSaveable { mutableStateOf(NexaMainTab.CHAT) }
     val context = LocalContext.current
+
+    val chatUnreadCount by chatVisibilityTracker.unreadCount.collectAsStateWithLifecycle()
+    val openTabRequest by chatVisibilityTracker.openTabRequest.collectAsStateWithLifecycle()
+
+    LaunchedEffect(openTabRequest) {
+        val requested = openTabRequest ?: return@LaunchedEffect
+        while (backStack.size > 1) {
+            backStack.removeLastOrNull()
+        }
+        activeTab = requested
+        chatVisibilityTracker.consumeOpenTabRequest()
+    }
+
+    val topRoute = backStack.lastOrNull()
+    LaunchedEffect(topRoute, activeTab) {
+        chatVisibilityTracker.setVisibleTab(if (topRoute == MainShell) activeTab else null)
+    }
 
     NavDisplay(
         backStack = backStack,
@@ -137,6 +156,7 @@ fun MainNavigation(
                             activeTab = activeTab,
                             isTerminalTab = isTerminalTab,
                             isLandscape = isLandscape,
+                            chatUnreadCount = chatUnreadCount,
                             onSelectTab = { activeTab = it }
                         )
                     },
@@ -180,6 +200,7 @@ private fun AdaptiveBottomNavBar(
     activeTab: NexaMainTab,
     isTerminalTab: Boolean,
     isLandscape: Boolean,
+    chatUnreadCount: Int,
     onSelectTab: (NexaMainTab) -> Unit
 ) {
     val density = LocalDensity.current
@@ -188,7 +209,8 @@ private fun AdaptiveBottomNavBar(
     if (!isImeVisible && !(isTerminalTab && isLandscape)) {
         NexaBottomNavBar(
             activeTab = activeTab,
-            onSelectTab = onSelectTab
+            onSelectTab = onSelectTab,
+            chatUnreadCount = chatUnreadCount
         )
     }
 }

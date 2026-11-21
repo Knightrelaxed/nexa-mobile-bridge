@@ -9,14 +9,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -309,7 +312,8 @@ fun NexaTopBar(
 fun NexaBottomNavBar(
     activeTab: NexaMainTab,
     onSelectTab: (NexaMainTab) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    chatUnreadCount: Int = 0
 ) {
     val nexaColors = LocalNexaColors.current
 
@@ -334,6 +338,7 @@ fun NexaBottomNavBar(
                     val activeTint = MaterialTheme.colorScheme.primary
                     val inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant
                     val tint = if (isSelected) activeTint else inactiveTint
+                    val showBadge = tab == NexaMainTab.CHAT && chatUnreadCount > 0 && !isSelected
 
                     val icon = when (tab) {
                         NexaMainTab.CHAT -> if (isSelected) Icons.Filled.ChatBubble else Icons.Outlined.ChatBubbleOutline
@@ -348,7 +353,7 @@ fun NexaBottomNavBar(
                             .height(64.dp)
                             .semantics {
                                 selected = isSelected
-                                contentDescription = tab.label
+                                contentDescription = if (showBadge) "${tab.label} ($chatUnreadCount belum dibaca)" else tab.label
                             }
                             .clickable(
                                 role = Role.Tab,
@@ -373,12 +378,33 @@ fun NexaBottomNavBar(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = null,
-                                tint = tint,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Box(contentAlignment = Alignment.TopEnd) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = tint,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                if (showBadge) {
+                                    val badgeLabel = if (chatUnreadCount > 99) "99+" else chatUnreadCount.toString()
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(x = 8.dp, y = (-5).dp)
+                                            .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                                            .background(color = nexaColors.crimson, shape = CircleShape)
+                                            .padding(horizontal = 4.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = badgeLabel,
+                                            color = Color.White,
+                                            fontSize = 9.sp,
+                                            lineHeight = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
                                 text = tab.label.uppercase(),

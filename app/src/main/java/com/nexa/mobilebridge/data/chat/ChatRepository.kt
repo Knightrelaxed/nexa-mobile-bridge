@@ -12,6 +12,7 @@ import com.nexa.mobilebridge.data.local.chat.ChatMessageDao
 import com.nexa.mobilebridge.data.local.chat.ChatMessageEntity
 import com.nexa.mobilebridge.data.local.chat.ChatRole
 import com.nexa.mobilebridge.data.local.chat.ChatStatus
+import com.nexa.mobilebridge.notification.ChatNotificationManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,11 +21,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -74,13 +72,6 @@ data class PendingFinanceStepUp(
     val errorBanner: String? = null
 )
 
-data class ProactiveChatMessage(
-    val clientMsgId: String,
-    val kind: String,
-    val priority: String,
-    val content: String
-)
-
 /**
  * Offline-first Chat Repository combining Room + Paging 3 (maxSize=100),
  * per-stream Channel batching, offline send queue, and seq-based CHAT_RESUME
@@ -89,7 +80,9 @@ data class ProactiveChatMessage(
 @Singleton
 class ChatRepository @Inject constructor(
     private val chatMessageDao: ChatMessageDao,
-    private val webSocketClient: NexaWebSocketClient
+    private val webSocketClient: NexaWebSocketClient,
+    private val notificationManager: ChatNotificationManager,
+    private val visibilityTracker: ChatVisibilityTracker
 ) {
     companion object {
         private const val TAG = "ChatRepository"
@@ -126,12 +119,17 @@ class ChatRepository @Inject constructor(
     private val _pendingStepUp = MutableStateFlow<PendingFinanceStepUp?>(null)
     val pendingStepUp: StateFlow<PendingFinanceStepUp?> = _pendingStepUp.asStateFlow()
 
-    private val _proactiveMessages = MutableSharedFlow<ProactiveChatMessage>(extraBufferCapacity = 32)
-    val proactiveMessages: SharedFlow<ProactiveChatMessage> = _proactiveMessages.asSharedFlow()
-
     init {
         observeIncomingChatEvents()
         observeConnectionForQueueAndResume()
+        // Opening the chat clears the notification shade + unread badge and tells the server it was read
+        repoScope.launch {
+            visibilityTracker.chatVisible.collect { visible ->
+                if (visible && notificationManager.clearAll()) {
+                    markChatRead()
+                }
+            }
+        }
         // A-H10: Recover stale STREAMING rows if app starts while offline
         repoScope.launch {
             delay(5_000L)
@@ -372,6 +370,7 @@ class ChatRepository @Inject constructor(
         }.toString()
         webSocketClient.send(payload)
         _pendingStepUp.update { curr -> if (curr?.actionId == actionId) null else curr }
+        notificationManager.cancelStepUp()
     }
 
     /**
@@ -381,6 +380,7 @@ class ChatRepository @Inject constructor(
         val current = _pendingStepUp.value
         if (current == null || current.actionId != actionId) return
         _pendingStepUp.value = null
+        notificationManager.cancelStepUp()
 
         val payload = JSONObject().apply {
             put("type", "ACTION_CANCEL")
@@ -700,14 +700,17 @@ class ChatRepository @Inject constructor(
                 intentTag = kind
             )
         )
-        _proactiveMessages.tryEmit(
-            ProactiveChatMessage(
-                clientMsgId = clientMsgId,
-                kind = kind,
-                priority = priority,
-                content = content
-            )
+        notificationManager.onIncomingMessage(
+            text = content,
+            priority = priority,
+            isProactive = true,
+            silent = isLiveCallActive()
         )
+    }
+
+    /** Tells the server the user read/answered the notification (engagement analytics). */
+    fun markChatRead() {
+        webSocketClient.send(JSONObject().apply { put("type", "CHAT_READ") }.toString())
     }
 
     private suspend fun handleChatAck(obj: JSONObject) {
@@ -840,9 +843,15 @@ class ChatRepository @Inject constructor(
         )
         _pendingStepUp.value = pending
         _streamState.update { it.copy(avatarState = NexaAvatarState.ALERT) }
+        notificationManager.showStepUpRequired(
+            actionLabel = pending.actionLabel,
+            formattedAmount = pending.formattedAmount,
+            recipient = pending.recipientFull
+        )
     }
 
     private suspend fun handleActionResult(obj: JSONObject) {
+        notificationManager.cancelStepUp()
         val actionId = obj.optString("action_id", "")
         val status = obj.optString("status", "UNKNOWN").uppercase()
         val message = obj.optString("message", "").trim()
@@ -966,6 +975,15 @@ class ChatRepository @Inject constructor(
                             lastSeq = seq,
                             intentTag = session.finalIntentTag
                         )
+                        // Completed assistant reply while the chat is not on screen -> notification
+                        if (status == ChatStatus.SENT && text.isNotBlank()) {
+                            notificationManager.onIncomingMessage(
+                                text = text,
+                                priority = "P1",
+                                isProactive = false,
+                                silent = isLiveCallActive()
+                            )
+                        }
                     }
                 )
             }

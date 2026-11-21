@@ -171,6 +171,7 @@ class NexaBridgeService : Service() {
 
     @Inject lateinit var webSocketClient: NexaWebSocketClient
     @Inject lateinit var chatRepository: com.nexa.mobilebridge.data.chat.ChatRepository
+    @Inject lateinit var chatNotificationManager: com.nexa.mobilebridge.notification.ChatNotificationManager
     @Inject lateinit var dispatcher: DeviceCommandDispatcher
     @Inject lateinit var dataStore: DataStore<Preferences>
     @Inject lateinit var json: Json
@@ -181,9 +182,7 @@ class NexaBridgeService : Service() {
     // Notification Channels
     private val CHANNEL_SERVICE_ID = "nexa_bridge_channel_01"
     private val CHANNEL_ALERT_ID = "nexa_bridge_alert_01"
-    private val CHANNEL_PROACTIVE_ID = "nexa_bridge_proactive_01"
     private val NOTIF_ALERT_ID = 1002
-    private val NOTIF_PROACTIVE_BASE_ID = 2000
 
     // Alert TTS
     private var alertTts: TextToSpeech? = null
@@ -308,9 +307,6 @@ class NexaBridgeService : Service() {
 
                 // 4. Mulai pendengar event kegagalan fase reconnect
                 launchPhaseFailureListener()
-
-                // 4b. Mulai pendengar pesan proaktif dari server (Notifier -> CHAT_PROACTIVE)
-                launchProactiveChatListener()
 
                 // 5. Inisialisasi SensorObserverManager & ContextEngine
                 sensorObserverManager = SensorObserverManager(this@NexaBridgeService, serviceScope).apply {
@@ -506,50 +502,6 @@ class NexaBridgeService : Service() {
         notifManager.notify(NOTIF_ALERT_ID, notification)
     }
 
-    private fun launchProactiveChatListener() = serviceScope.launch {
-        chatRepository.proactiveMessages.collect { msg ->
-            postProactiveChatNotification(msg.kind, msg.priority, msg.content)
-        }
-    }
-
-    private fun postProactiveChatNotification(kind: String, priority: String, content: String) {
-        try {
-            val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = android.app.PendingIntent.getActivity(
-                this,
-                NOTIF_PROACTIVE_BASE_ID,
-                launchIntent,
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-            )
-            val title = if (priority.equals("P0", ignoreCase = true)) {
-                "N.E.X.A (Penting)"
-            } else {
-                "N.E.X.A"
-            }
-            val preview = content.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: content.take(120)
-            val notification = NotificationCompat.Builder(this, CHANNEL_PROACTIVE_ID)
-                .setContentTitle(title)
-                .setContentText(preview)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(content.take(800)))
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentIntent(pendingIntent)
-                .setPriority(
-                    if (priority.equals("P0", ignoreCase = true)) NotificationCompat.PRIORITY_HIGH
-                    else NotificationCompat.PRIORITY_DEFAULT
-                )
-                .setAutoCancel(true)
-                .build()
-            val notifId = NOTIF_PROACTIVE_BASE_ID + ((System.currentTimeMillis() / 1000L) % 500L).toInt()
-            notifManager.notify(notifId, notification)
-            Log.i("NexaBridge", "Proactive chat notification posted (kind=$kind, priority=$priority)")
-        } catch (e: Exception) {
-            Log.w("NexaBridge", "Failed posting proactive chat notification: ${e.message}")
-        }
-    }
-
     private fun speakAlert(text: String) {
         if (alertTtsReady && alertTts != null) {
             alertTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nexa_alert_${System.currentTimeMillis()}")
@@ -715,13 +667,6 @@ class NexaBridgeService : Service() {
 
         NotificationChannel(CHANNEL_ALERT_ID, "N.E.X.A Bridge - Alert Koneksi", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Notifikasi kegagalan koneksi ke server N.E.X.A"
-            enableLights(true)
-            enableVibration(true)
-            notifManager.createNotificationChannel(this)
-        }
-
-        NotificationChannel(CHANNEL_PROACTIVE_ID, "N.E.X.A - Pesan Proaktif", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Pengingat, ringkasan, dan notifikasi proaktif dari N.E.X.A"
             enableLights(true)
             enableVibration(true)
             notifManager.createNotificationChannel(this)
