@@ -60,7 +60,6 @@ data class NexaConfig(
     val telemetryIntervalS: Int,
     val themeMode: ThemeMode = ThemeMode.DARK,
     val accentPreset: AccentPreset = AccentPreset.CYAN,
-    val ttsEnabled: Boolean = true,
     val hapticEnabled: Boolean = true,
     val terminalFontSizeSp: Int = 12,
     val enrollmentStatus: String = "NOT_ENROLLED",
@@ -99,7 +98,6 @@ class NexaPreferencesDataStore @Inject constructor(
         val TELEMETRY_INTERVAL_S = intPreferencesKey("telemetry_interval_sec")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_PRESET = stringPreferencesKey("accent_preset")
-        val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         val HAPTIC_ENABLED = booleanPreferencesKey("haptic_enabled")
         val TERMINAL_FONT_SIZE_SP = intPreferencesKey("terminal_font_size_sp")
         val ENROLLMENT_STATUS = stringPreferencesKey("enrollment_status")
@@ -137,7 +135,6 @@ class NexaPreferencesDataStore @Inject constructor(
             telemetryIntervalS = prefs[Keys.TELEMETRY_INTERVAL_S] ?: 60,
             themeMode = ThemeMode.fromStored(prefs[Keys.THEME_MODE]),
             accentPreset = AccentPreset.fromStored(prefs[Keys.ACCENT_PRESET]),
-            ttsEnabled = prefs[Keys.TTS_ENABLED] ?: true,
             hapticEnabled = prefs[Keys.HAPTIC_ENABLED] ?: true,
             terminalFontSizeSp = fontSize,
             enrollmentStatus = prefs[Keys.ENROLLMENT_STATUS] ?: "NOT_ENROLLED",
@@ -178,12 +175,6 @@ class NexaPreferencesDataStore @Inject constructor(
     suspend fun saveAccentPreset(preset: AccentPreset) {
         dataStore.edit { prefs ->
             prefs[Keys.ACCENT_PRESET] = preset.name
-        }
-    }
-
-    suspend fun saveTtsEnabled(enabled: Boolean) {
-        dataStore.edit { prefs ->
-            prefs[Keys.TTS_ENABLED] = enabled
         }
     }
 

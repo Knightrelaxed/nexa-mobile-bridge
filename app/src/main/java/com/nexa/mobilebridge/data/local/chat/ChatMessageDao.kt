@@ -49,4 +49,10 @@ interface ChatMessageDao {
     // A-H10: Clean up stale STREAMING rows after process crash when offline
     @Query("UPDATE chat_messages SET status = :newStatus WHERE role = :role AND status = :oldStatus")
     suspend fun updateAllByRoleAndStatus(role: String, oldStatus: String, newStatus: String)
+
+    @Query("SELECT * FROM chat_messages WHERE id IN (:ids) ORDER BY timestamp ASC, rowid ASC")
+    suspend fun getByIds(ids: List<String>): List<ChatMessageEntity>
+
+    @Query("DELETE FROM chat_messages WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 }

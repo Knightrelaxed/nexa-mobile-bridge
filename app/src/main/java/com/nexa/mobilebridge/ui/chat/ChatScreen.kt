@@ -1,8 +1,6 @@
 package com.nexa.mobilebridge.ui.chat
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.BackHandler
@@ -18,10 +16,12 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -65,11 +65,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
@@ -108,12 +105,19 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -159,7 +163,7 @@ import kotlin.math.roundToInt
  * - LazyColumn(reverseLayout = true) + Paging 3 (maxSize = 100)
  * - 33ms token batching overlay on active STREAMING row (zero per-token Room writes)
  * - Incremental Markdown & Rupiah highlight renderer (memoizes completed paragraphs)
- * - Offline-capable "Baca" TTS button & "Salin" button on each N.E.X.A bubble
+ * - Telegram-style bubble gestures: single tap opens action menu, long press enters multi-select mode
  * - Idempotent "Kirim ulang" retry button on FAILED user bubbles
  * - Docked FinanceStepUpBottomSheet with ref-counted FLAG_SECURE & locked input bar
  */
@@ -171,18 +175,21 @@ fun ChatScreen(
     val streamState by viewModel.streamState.collectAsStateWithLifecycle()
     val pendingStepUp by viewModel.pendingStepUp.collectAsStateWithLifecycle()
     val chatPrefs by viewModel.chatPrefs.collectAsStateWithLifecycle()
-    val speakingMessageId by viewModel.speakingMessageId.collectAsStateWithLifecycle()
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
     val replyTarget by viewModel.replyTarget.collectAsStateWithLifecycle()
+    val selectionState by viewModel.selectionState.collectAsStateWithLifecycle()
+    val pendingDeleteIds by viewModel.pendingDeleteIds.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val view = LocalView.current
+    val focusManager = LocalFocusManager.current
     val nexaColors = LocalNexaColors.current
     var draftText by rememberSaveable { mutableStateOf("") }
     var isInputFocused by remember { mutableStateOf(false) }
     var isExpandedComposer by rememberSaveable { mutableStateOf(false) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
+    var activeMenuAnchor by remember { mutableStateOf<MessageMenuAnchor?>(null) }
     var hasMicPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -202,12 +209,37 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    BackHandler(enabled = activeMenuAnchor != null || selectionState.isActive) {
+        if (activeMenuAnchor != null) {
+            activeMenuAnchor = null
+        } else if (selectionState.isActive) {
+            viewModel.clearSelection()
+        }
+    }
+
+    LaunchedEffect(selectionState.isActive) {
+        if (selectionState.isActive) {
+            activeMenuAnchor = null
+            isExpandedComposer = false
+            focusManager.clearFocus(force = true)
+            viewModel.cancelVoiceRecording()
+        }
+    }
+
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && activeMenuAnchor != null) {
+            activeMenuAnchor = null
+        }
+    }
+
     LaunchedEffect(isInputFocused, draftText, pendingStepUp, isExpandedComposer) {
         viewModel.setInputListening(
             pendingStepUp == null && (isInputFocused || isExpandedComposer || draftText.isNotBlank())
         )
         if (pendingStepUp != null) {
             isExpandedComposer = false
+            activeMenuAnchor = null
+            viewModel.clearSelection()
             viewModel.cancelVoiceRecording()
         }
     }
@@ -241,7 +273,7 @@ fun ChatScreen(
         hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         onPauseOrDispose {
-            viewModel.stopSpeaking()
+            activeMenuAnchor = null
             viewModel.stopVoicePlayback()
             viewModel.cancelVoiceRecording()
             viewModel.setInputListening(false)
@@ -340,13 +372,31 @@ fun ChatScreen(
                         } else {
                             msg.content
                         }
+                        val isStreamingOrSending =
+                            msg.status == ChatStatus.STREAMING ||
+                                msg.status == ChatStatus.SENDING ||
+                                isLiveStreamingRow
+                        val isInteractive = !isStreamingOrSending
+                        val isSelected = msg.id in selectionState.selectedIds
+                        val isVoiceMsg = remember(msg.executionMetadata) {
+                            VoiceNoteMetadata.fromJson(msg.executionMetadata) != null
+                        }
 
                         SwipeToReplyContainer(
                             messageKey = msg.id,
                             isHighlighted = highlightedMessageId == msg.id,
+                            isSelected = isSelected,
+                            isSelectionMode = selectionState.isActive,
+                            swipeEnabled = !selectionState.isActive,
                             onTriggerHaptic = { triggerHapticTick() },
                             onSwipeReply = {
                                 viewModel.selectReplyTarget(msg, effectiveContent)
+                            },
+                            onRowTapInSelectionMode = {
+                                if (isInteractive) {
+                                    triggerHapticTick()
+                                    viewModel.toggleSelectMessage(msg)
+                                }
                             }
                         ) {
                             if (msg.role == ChatRole.USER) {
@@ -354,6 +404,32 @@ fun ChatScreen(
                                     message = msg,
                                     formattedTime = timeFormat.format(Date(msg.timestamp)),
                                     playbackState = voicePlaybackState,
+                                    isSelected = isSelected,
+                                    isSelectionMode = selectionState.isActive,
+                                    isInteractive = isInteractive,
+                                    onTapBubble = { tapOffset ->
+                                        if (selectionState.isActive) {
+                                            triggerHapticTick()
+                                            viewModel.toggleSelectMessage(msg)
+                                        } else {
+                                            triggerHapticTick()
+                                            activeMenuAnchor = MessageMenuAnchor(
+                                                message = msg,
+                                                displayContent = effectiveContent,
+                                                isVoice = isVoiceMsg,
+                                                tapWindowOffset = tapOffset
+                                            )
+                                        }
+                                    },
+                                    onLongPressBubble = {
+                                        activeMenuAnchor = null
+                                        triggerHapticConfirm()
+                                        if (selectionState.isActive) {
+                                            viewModel.toggleSelectMessage(msg)
+                                        } else {
+                                            viewModel.selectMessage(msg)
+                                        }
+                                    },
                                     onToggleVoicePlay = { audioPath, durationMs ->
                                         triggerHapticTick()
                                         viewModel.toggleVoicePlayback(msg.id, audioPath, durationMs)
@@ -381,20 +457,31 @@ fun ChatScreen(
                                     message = msg,
                                     displayContent = effectiveContent,
                                     isStreaming = msg.status == ChatStatus.STREAMING || isLiveStreamingRow,
-                                    isSpeaking = speakingMessageId == msg.id,
-                                    ttsEnabled = chatPrefs.ttsEnabled,
-                                    onToggleSpeak = {
-                                        triggerHapticTick()
-                                        viewModel.toggleSpeakMessage(msg.id, effectiveContent)
+                                    isSelected = isSelected,
+                                    isSelectionMode = selectionState.isActive,
+                                    isInteractive = isInteractive,
+                                    onTapBubble = { tapOffset ->
+                                        if (selectionState.isActive) {
+                                            triggerHapticTick()
+                                            viewModel.toggleSelectMessage(msg)
+                                        } else {
+                                            triggerHapticTick()
+                                            activeMenuAnchor = MessageMenuAnchor(
+                                                message = msg,
+                                                displayContent = effectiveContent,
+                                                isVoice = false,
+                                                tapWindowOffset = tapOffset
+                                            )
+                                        }
                                     },
-                                    onCopyText = { textToCopy ->
-                                        triggerHapticTick()
-                                        val clipboard = context.getSystemService(ClipboardManager::class.java)
-                                        clipboard?.setPrimaryClip(ClipData.newPlainText("Balasan N.E.X.A", textToCopy))
-                                    },
-                                    onStopStream = {
-                                        triggerHapticTick()
-                                        viewModel.stopActiveStream()
+                                    onLongPressBubble = {
+                                        activeMenuAnchor = null
+                                        triggerHapticConfirm()
+                                        if (selectionState.isActive) {
+                                            viewModel.toggleSelectMessage(msg)
+                                        } else {
+                                            viewModel.selectMessage(msg)
+                                        }
                                     }
                                 )
                             }
@@ -518,6 +605,41 @@ fun ChatScreen(
                 }
             )
         }
+
+        // Single screen-level Telegram-style tap menu for any interactive bubble
+        val menuAnchor = activeMenuAnchor
+        if (menuAnchor != null && !selectionState.isActive && pendingStepUp == null) {
+            MessageActionMenuPopup(
+                anchor = menuAnchor,
+                onDismiss = { activeMenuAnchor = null },
+                onReply = {
+                    activeMenuAnchor = null
+                    triggerHapticTick()
+                    viewModel.selectReplyTarget(menuAnchor.message, menuAnchor.displayContent)
+                },
+                onCopy = {
+                    activeMenuAnchor = null
+                    triggerHapticTick()
+                    viewModel.copyToClipboard(menuAnchor.displayContent)
+                },
+                onDelete = {
+                    activeMenuAnchor = null
+                    triggerHapticTick()
+                    viewModel.requestDeleteMessages(setOf(menuAnchor.message.id))
+                }
+            )
+        }
+
+        if (pendingDeleteIds.isNotEmpty()) {
+            DeleteMessagesConfirmDialog(
+                count = pendingDeleteIds.size,
+                onConfirm = {
+                    triggerHapticConfirm()
+                    viewModel.confirmPendingDelete()
+                },
+                onDismiss = { viewModel.dismissPendingDelete() }
+            )
+        }
     }
 }
 
@@ -529,8 +651,12 @@ fun ChatScreen(
 private fun SwipeToReplyContainer(
     messageKey: String,
     isHighlighted: Boolean,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    swipeEnabled: Boolean,
     onTriggerHaptic: () -> Unit,
     onSwipeReply: () -> Unit,
+    onRowTapInSelectionMode: () -> Unit,
     content: @Composable () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
@@ -544,65 +670,89 @@ private fun SwipeToReplyContainer(
     val latestOnHaptic by rememberUpdatedState(onTriggerHaptic)
     val latestOnReply by rememberUpdatedState(onSwipeReply)
 
+    LaunchedEffect(swipeEnabled) {
+        if (!swipeEnabled && offsetX.value != 0f) {
+            thresholdReached = false
+            offsetX.snapTo(0f)
+        }
+    }
+
     val highlightAlpha by animateFloatAsState(
-        targetValue = if (isHighlighted) 0.16f else 0f,
-        animationSpec = tween(durationMillis = 260),
-        label = "replyJumpHighlight"
+        targetValue = if (isSelected || isHighlighted) 0.16f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "rowHighlightTint"
     )
 
     val currentOffset = offsetX.value
     val swipeProgress = (abs(currentOffset) / triggerThresholdPx).coerceIn(0f, 1f)
     val isActiveThreshold = swipeProgress >= 1f
 
+    val dragModifier = if (swipeEnabled) {
+        Modifier.pointerInput(messageKey) {
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val shouldReply = thresholdReached || abs(offsetX.value) >= triggerThresholdPx
+                    thresholdReached = false
+                    if (shouldReply) {
+                        latestOnReply()
+                    }
+                    coroutineScope.launch {
+                        offsetX.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f)
+                        )
+                    }
+                },
+                onDragCancel = {
+                    thresholdReached = false
+                    coroutineScope.launch {
+                        offsetX.animateTo(
+                            targetValue = 0f,
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f)
+                        )
+                    }
+                },
+                onHorizontalDrag = { change, dragAmount ->
+                    change.consume()
+                    val cur = offsetX.value
+                    val resistance = 1f - ((abs(cur) / maxDragPx).coerceIn(0f, 1f) * 0.52f)
+                    val next = (cur + dragAmount * resistance).coerceIn(-maxDragPx, maxDragPx)
+                    coroutineScope.launch {
+                        offsetX.snapTo(next)
+                    }
+                    val reachedNow = abs(next) >= triggerThresholdPx
+                    if (reachedNow && !thresholdReached) {
+                        thresholdReached = true
+                        latestOnHaptic()
+                    } else if (!reachedNow && abs(next) < triggerThresholdPx * 0.85f) {
+                        thresholdReached = false
+                    }
+                }
+            )
+        }
+    } else {
+        Modifier
+    }
+
+    val selectionRowClickModifier = if (isSelectionMode) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onRowTapInSelectionMode
+        )
+    } else {
+        Modifier
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = highlightAlpha))
-            .pointerInput(messageKey) {
-                detectHorizontalDragGestures(
-                    onDragEnd = {
-                        val shouldReply = thresholdReached || abs(offsetX.value) >= triggerThresholdPx
-                        thresholdReached = false
-                        if (shouldReply) {
-                            latestOnReply()
-                        }
-                        coroutineScope.launch {
-                            offsetX.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f)
-                            )
-                        }
-                    },
-                    onDragCancel = {
-                        thresholdReached = false
-                        coroutineScope.launch {
-                            offsetX.animateTo(
-                                targetValue = 0f,
-                                animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f)
-                            )
-                        }
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        change.consume()
-                        val cur = offsetX.value
-                        val resistance = 1f - ((abs(cur) / maxDragPx).coerceIn(0f, 1f) * 0.52f)
-                        val next = (cur + dragAmount * resistance).coerceIn(-maxDragPx, maxDragPx)
-                        coroutineScope.launch {
-                            offsetX.snapTo(next)
-                        }
-                        val reachedNow = abs(next) >= triggerThresholdPx
-                        if (reachedNow && !thresholdReached) {
-                            thresholdReached = true
-                            latestOnHaptic()
-                        } else if (!reachedNow && abs(next) < triggerThresholdPx * 0.85f) {
-                            thresholdReached = false
-                        }
-                    }
-                )
-            }
+            .then(dragModifier)
+            .then(selectionRowClickModifier)
     ) {
-        if (abs(currentOffset) > 4f) {
+        if (swipeEnabled && abs(currentOffset) > 4f) {
             val iconAlignment = if (currentOffset > 0f) Alignment.CenterStart else Alignment.CenterEnd
             val iconBg = if (isActiveThreshold) {
                 nexaColors.primaryButtonFill
@@ -644,12 +794,26 @@ private fun SwipeToReplyContainer(
             }
         }
 
-        Box(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(currentOffset.roundToInt(), 0) }
         ) {
-            content()
+            AnimatedVisibility(
+                visible = isSelectionMode,
+                enter = expandHorizontally(tween(150)) + fadeIn(tween(150)),
+                exit = shrinkHorizontally(tween(150)) + fadeOut(tween(150))
+            ) {
+                SelectionCheckCircle(
+                    isSelected = isSelected,
+                    modifier = Modifier.padding(start = 2.dp, end = 8.dp)
+                )
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                content()
+            }
         }
     }
 }
@@ -662,13 +826,32 @@ private fun UserChatBubble(
     message: ChatMessageEntity,
     formattedTime: String,
     playbackState: VoicePlaybackState,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    isInteractive: Boolean,
+    onTapBubble: (windowOffset: IntOffset) -> Unit,
+    onLongPressBubble: () -> Unit,
     onToggleVoicePlay: (audioPath: String, durationMs: Long) -> Unit,
     onSeekVoice: (audioPath: String, durationMs: Long, fraction: Float) -> Unit,
     onJumpToReply: (targetMessageId: String) -> Unit,
     onRetry: () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
-    val bubbleBg = if (nexaColors.isDark) Color(0xFF1A2232) else MaterialTheme.colorScheme.surfaceVariant
+    val baseBg = if (nexaColors.isDark) Color(0xFF1A2232) else MaterialTheme.colorScheme.surfaceVariant
+    val bubbleBg = if (isSelected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f).compositeOver(baseBg)
+    } else {
+        baseBg
+    }
+    val bubbleBorder = if (isSelected) {
+        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+    } else {
+        BorderStroke(1.dp, nexaColors.cardBorder)
+    }
+    var bubbleWindowPos by remember(message.id) { mutableStateOf(Offset.Zero) }
+    val latestOnTapBubble by rememberUpdatedState(onTapBubble)
+    val latestOnLongPressBubble by rememberUpdatedState(onLongPressBubble)
+
     val voiceMeta = remember(message.executionMetadata) {
         VoiceNoteMetadata.fromJson(message.executionMetadata)
     }
@@ -683,6 +866,39 @@ private fun UserChatBubble(
         else -> "Terkirim"
     }
 
+    val gestureModifier = if (isInteractive) {
+        Modifier
+            .onGloballyPositioned { coords -> bubbleWindowPos = coords.positionInWindow() }
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction("Opsi pesan") {
+                        latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
+                        true
+                    },
+                    CustomAccessibilityAction("Pilih pesan") {
+                        latestOnLongPressBubble()
+                        true
+                    }
+                )
+            }
+            .pointerInput(message.id, isInteractive) {
+                detectTapGestures(
+                    onTap = { localOffset ->
+                        val winOffset = IntOffset(
+                            (bubbleWindowPos.x + localOffset.x).roundToInt(),
+                            (bubbleWindowPos.y + localOffset.y).roundToInt()
+                        )
+                        latestOnTapBubble(winOffset)
+                    },
+                    onLongPress = {
+                        latestOnLongPressBubble()
+                    }
+                )
+            }
+    } else {
+        Modifier
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
@@ -695,14 +911,22 @@ private fun UserChatBubble(
                 bottomStart = 14.dp,
                 bottomEnd = 4.dp
             ),
-            border = BorderStroke(1.dp, nexaColors.cardBorder),
-            modifier = Modifier.widthIn(max = 320.dp)
+            border = bubbleBorder,
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .then(gestureModifier)
         ) {
             Column {
                 if (replyTarget != null) {
                     QuotedReplyBox(
                         replyTarget = replyTarget,
-                        onClick = { onJumpToReply(replyTarget.messageId) },
+                        onClick = {
+                            if (isSelectionMode && isInteractive) {
+                                latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
+                            } else {
+                                onJumpToReply(replyTarget.messageId)
+                            }
+                        },
                         modifier = Modifier
                             .padding(start = 8.dp, end = 8.dp, top = 8.dp)
                     )
@@ -723,6 +947,12 @@ private fun UserChatBubble(
                         isPlaying = isPlaying,
                         progress = progress,
                         durationLabel = displayTime,
+                        isSelectionMode = isSelectionMode,
+                        isInteractive = isInteractive,
+                        onToggleSelect = {
+                            latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
+                        },
+                        onLongPress = { latestOnLongPressBubble() },
                         onTogglePlay = { onToggleVoicePlay(voiceMeta.audioPath, voiceMeta.durationMs) },
                         onSeek = { frac -> onSeekVoice(voiceMeta.audioPath, voiceMeta.durationMs, frac) }
                     )
@@ -944,6 +1174,10 @@ private fun UserVoiceNoteContent(
     isPlaying: Boolean,
     progress: Float,
     durationLabel: String,
+    isSelectionMode: Boolean,
+    isInteractive: Boolean,
+    onToggleSelect: () -> Unit,
+    onLongPress: () -> Unit,
     onTogglePlay: () -> Unit,
     onSeek: (Float) -> Unit
 ) {
@@ -953,6 +1187,12 @@ private fun UserVoiceNoteContent(
     val bars = remember(waveform) {
         if (waveform.isEmpty()) List(VoiceNoteMetadata.TARGET_WAVEFORM_BARS) { 16 } else waveform
     }
+    val latestSelectionMode by rememberUpdatedState(isSelectionMode)
+    val latestInteractive by rememberUpdatedState(isInteractive)
+    val latestOnToggleSelect by rememberUpdatedState(onToggleSelect)
+    val latestOnLongPress by rememberUpdatedState(onLongPress)
+    val latestOnTogglePlay by rememberUpdatedState(onTogglePlay)
+    val latestOnSeek by rememberUpdatedState(onSeek)
 
     Row(
         modifier = Modifier
@@ -966,7 +1206,20 @@ private fun UserVoiceNoteContent(
             shape = CircleShape,
             modifier = Modifier
                 .size(40.dp)
-                .clickable(role = Role.Button, onClick = onTogglePlay)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            if (latestSelectionMode && latestInteractive) {
+                                latestOnToggleSelect()
+                            } else {
+                                latestOnTogglePlay()
+                            }
+                        },
+                        onLongPress = {
+                            if (latestInteractive) latestOnLongPress()
+                        }
+                    )
+                }
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
@@ -987,12 +1240,19 @@ private fun UserVoiceNoteContent(
                     .fillMaxWidth()
                     .height(26.dp)
                     .pointerInput(bars) {
-                        detectTapGestures { tapOffset ->
-                            if (size.width > 0) {
-                                val fraction = (tapOffset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                                onSeek(fraction)
+                        detectTapGestures(
+                            onTap = { tapOffset ->
+                                if (latestSelectionMode && latestInteractive) {
+                                    latestOnToggleSelect()
+                                } else if (size.width > 0) {
+                                    val fraction = (tapOffset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                    latestOnSeek(fraction)
+                                }
+                            },
+                            onLongPress = {
+                                if (latestInteractive) latestOnLongPress()
                             }
-                        }
+                        )
                     }
             ) {
                 val count = bars.size.coerceAtLeast(1)
@@ -1038,29 +1298,67 @@ private fun UserVoiceNoteContent(
 }
 
 /**
- * Left-aligned N.E.X.A Assistant Bubble with Incremental Markdown & Rupiah highlight (FR-CHAT-11)
- * and action footer ("[Baca] [Salin]") matching 01_chat_ai_native_v2.png.
+ * Left-aligned N.E.X.A Assistant Bubble with Incremental Markdown & Rupiah highlight (FR-CHAT-11).
+ * Compact Telegram-style bubble: tap for contextual action menu, long press for selection mode.
  */
 @Composable
 private fun AssistantChatBubble(
     message: ChatMessageEntity,
     displayContent: String,
     isStreaming: Boolean,
-    isSpeaking: Boolean,
-    ttsEnabled: Boolean,
-    onToggleSpeak: () -> Unit,
-    onCopyText: (String) -> Unit,
-    onStopStream: () -> Unit
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    isInteractive: Boolean,
+    onTapBubble: (windowOffset: IntOffset) -> Unit,
+    onLongPressBubble: () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
-    val bubbleBg = if (nexaColors.isDark) Color(0xFF111720) else MaterialTheme.colorScheme.surface
-    var copiedRecently by remember { mutableStateOf(false) }
+    val baseBg = if (nexaColors.isDark) Color(0xFF111720) else MaterialTheme.colorScheme.surface
+    val bubbleBg = if (isSelected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f).compositeOver(baseBg)
+    } else {
+        baseBg
+    }
+    val bubbleBorder = if (isSelected) {
+        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+    } else {
+        BorderStroke(1.dp, nexaColors.cardBorder)
+    }
+    var bubbleWindowPos by remember(message.id) { mutableStateOf(Offset.Zero) }
+    val latestOnTapBubble by rememberUpdatedState(onTapBubble)
+    val latestOnLongPressBubble by rememberUpdatedState(onLongPressBubble)
 
-    LaunchedEffect(copiedRecently) {
-        if (copiedRecently) {
-            delay(1_800L)
-            copiedRecently = false
-        }
+    val gestureModifier = if (isInteractive) {
+        Modifier
+            .onGloballyPositioned { coords -> bubbleWindowPos = coords.positionInWindow() }
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction("Opsi pesan") {
+                        latestOnTapBubble(IntOffset(bubbleWindowPos.x.roundToInt(), bubbleWindowPos.y.roundToInt()))
+                        true
+                    },
+                    CustomAccessibilityAction("Pilih pesan") {
+                        latestOnLongPressBubble()
+                        true
+                    }
+                )
+            }
+            .pointerInput(message.id, isInteractive, isSelectionMode) {
+                detectTapGestures(
+                    onTap = { localOffset ->
+                        val winOffset = IntOffset(
+                            (bubbleWindowPos.x + localOffset.x).roundToInt(),
+                            (bubbleWindowPos.y + localOffset.y).roundToInt()
+                        )
+                        latestOnTapBubble(winOffset)
+                    },
+                    onLongPress = {
+                        latestOnLongPressBubble()
+                    }
+                )
+            }
+    } else {
+        Modifier
     }
 
     Column(
@@ -1075,12 +1373,14 @@ private fun AssistantChatBubble(
                 bottomStart = 14.dp,
                 bottomEnd = 14.dp
             ),
-            border = BorderStroke(1.dp, nexaColors.cardBorder),
-            modifier = Modifier.widthIn(max = 340.dp)
+            border = bubbleBorder,
+            modifier = Modifier
+                .widthIn(max = 340.dp)
+                .then(gestureModifier)
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (displayContent.isEmpty() && isStreaming) {
                     Text(
@@ -1102,97 +1402,7 @@ private fun AssistantChatBubble(
                         color = nexaColors.amber
                     )
                 }
-
-                HorizontalDivider(
-                    thickness = 1.dp,
-                    color = nexaColors.cardBorder.copy(alpha = 0.55f)
-                )
-
-                // Footer Action Pills matching 01_chat_ai_native_v2.png: [Baca] [Salin]
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (ttsEnabled) {
-                        BubbleActionPill(
-                            icon = if (isSpeaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
-                            label = if (isSpeaking) "Berhenti" else "Baca",
-                            isActive = isSpeaking,
-                            onClick = onToggleSpeak
-                        )
-                    }
-
-                    BubbleActionPill(
-                        icon = if (copiedRecently) Icons.Default.Check else Icons.Default.ContentCopy,
-                        label = if (copiedRecently) "Tersalin" else "Salin",
-                        isActive = copiedRecently,
-                        onClick = {
-                            if (displayContent.isNotEmpty()) {
-                                copiedRecently = true
-                                onCopyText(displayContent)
-                            }
-                        }
-                    )
-
-                    if (isStreaming) {
-                        Spacer(modifier = Modifier.weight(1f))
-                        BubbleActionPill(
-                            icon = Icons.Default.Stop,
-                            label = "Hentikan",
-                            isActive = true,
-                            onClick = onStopStream
-                        )
-                    }
-                }
             }
-        }
-    }
-}
-
-@Composable
-private fun BubbleActionPill(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    isActive: Boolean,
-    onClick: () -> Unit
-) {
-    val nexaColors = LocalNexaColors.current
-    val pillBg = if (isActive) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-    } else if (nexaColors.isDark) {
-        Color(0xFF17202D)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val pillBorder = if (isActive) MaterialTheme.colorScheme.primary else nexaColors.cardBorder
-    val contentTint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-
-    Surface(
-        color = pillBg,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, pillBorder),
-        modifier = Modifier
-            .heightIn(min = 48.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = contentTint,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = contentTint
-            )
         }
     }
 }

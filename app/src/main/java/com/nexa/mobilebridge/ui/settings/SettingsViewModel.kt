@@ -31,7 +31,6 @@ data class SettingsUiState(
     val hmacSecret: String = "",
     val themeMode: ThemeMode = ThemeMode.DARK,
     val accentPreset: AccentPreset = AccentPreset.CYAN,
-    val ttsEnabled: Boolean = true,
     val hapticEnabled: Boolean = true,
     val terminalFontSizeSp: Int = 12,
     val heartbeatScreenOnSec: Int = NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_ON_SEC,
@@ -128,7 +127,6 @@ class SettingsViewModel @Inject constructor(
                     hmacSecret = config.hmacSecret,
                     themeMode = config.themeMode,
                     accentPreset = config.accentPreset,
-                    ttsEnabled = config.ttsEnabled,
                     hapticEnabled = config.hapticEnabled,
                     terminalFontSizeSp = config.terminalFontSizeSp,
                     heartbeatScreenOnSec = config.heartbeatScreenOnSec,
@@ -165,11 +163,6 @@ class SettingsViewModel @Inject constructor(
     fun onAccentPresetSelected(preset: AccentPreset) {
         _uiState.update { it.copy(accentPreset = preset) }
         viewModelScope.launch { dataStore.saveAccentPreset(preset) }
-    }
-
-    fun onTtsToggled(enabled: Boolean) {
-        _uiState.update { it.copy(ttsEnabled = enabled) }
-        viewModelScope.launch { dataStore.saveTtsEnabled(enabled) }
     }
 
     fun onHapticToggled(enabled: Boolean) {

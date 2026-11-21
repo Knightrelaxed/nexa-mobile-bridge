@@ -277,6 +277,42 @@ class ChatRepository @Inject constructor(
         _streamState.update { it.copy(lastError = null) }
     }
 
+    suspend fun getMessagesByIds(ids: Collection<String>): List<ChatMessageEntity> {
+        if (ids.isEmpty()) return emptyList()
+        return chatMessageDao.getByIds(ids.toList())
+    }
+
+    /**
+     * Delete chat rows from this device only (server memory is untouched).
+     * Rows still SENDING or STREAMING are never deleted so retry timers and live streams stay consistent.
+     * Returns the ids that were actually deleted.
+     */
+    suspend fun deleteMessages(ids: Collection<String>): Set<String> {
+        if (ids.isEmpty()) return emptySet()
+        val deletable = chatMessageDao.getByIds(ids.toList()).filter {
+            it.status != ChatStatus.SENDING && it.status != ChatStatus.STREAMING
+        }
+        if (deletable.isEmpty()) return emptySet()
+
+        for (row in deletable) {
+            if (row.role == ChatRole.USER) {
+                // User and assistant rows share clientMsgId: only user rows own ACK timers and retry counters
+                pendingAckTimers.remove(row.clientMsgId)?.cancel()
+                retryCounts.remove(row.clientMsgId)
+                VoiceNoteMetadata.fromJson(row.executionMetadata)?.let { meta ->
+                    try {
+                        File(meta.audioPath).takeIf { it.isFile }?.delete()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed deleting voice file: ${e.message}")
+                    }
+                }
+            }
+        }
+        val deletedIds = deletable.map { it.id }
+        chatMessageDao.deleteByIds(deletedIds)
+        return deletedIds.toSet()
+    }
+
     /**
      * Submit ECDSA P-256 hardware-biometric signature for a pending Finance Step-Up action (FR-AUTH-07).
      */

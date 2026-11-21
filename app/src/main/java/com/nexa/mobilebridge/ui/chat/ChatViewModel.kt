@@ -1,9 +1,9 @@
 package com.nexa.mobilebridge.ui.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.security.keystore.KeyPermanentlyInvalidatedException
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
@@ -14,6 +14,7 @@ import androidx.paging.cachedIn
 import com.nexa.mobilebridge.core.security.BiometricAuthHelper
 import com.nexa.mobilebridge.core.security.DeviceKeystoreManager
 import com.nexa.mobilebridge.data.chat.ActiveChatStreamState
+import com.nexa.mobilebridge.data.chat.ChatCopyText
 import com.nexa.mobilebridge.data.chat.ChatReplyMetadata
 import com.nexa.mobilebridge.data.chat.ChatReplyTarget
 import com.nexa.mobilebridge.data.chat.ChatRepository
@@ -42,7 +43,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
@@ -62,9 +62,18 @@ data class VoiceRecordingUiState(
 
 data class ChatUiPreferences(
     val deviceName: String = "samsung-a33-tuan",
-    val ttsEnabled: Boolean = true,
     val hapticEnabled: Boolean = true
 )
+
+data class ChatSelectionUiState(
+    val selectedCopyableById: Map<String, Boolean> = emptyMap()
+) {
+    val selectedIds: Set<String> get() = selectedCopyableById.keys
+    val count: Int get() = selectedCopyableById.size
+    val isActive: Boolean get() = selectedCopyableById.isNotEmpty()
+    val canReply: Boolean get() = selectedCopyableById.size == 1
+    val canCopy: Boolean get() = selectedCopyableById.values.any { it }
+}
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -122,12 +131,11 @@ class ChatViewModel @Inject constructor(
     private val _chatPrefs = MutableStateFlow(ChatUiPreferences())
     val chatPrefs: StateFlow<ChatUiPreferences> = _chatPrefs.asStateFlow()
 
-    private val _speakingMessageId = MutableStateFlow<String?>(null)
-    val speakingMessageId: StateFlow<String?> = _speakingMessageId.asStateFlow()
+    private val _selectionState = MutableStateFlow(ChatSelectionUiState())
+    val selectionState: StateFlow<ChatSelectionUiState> = _selectionState.asStateFlow()
 
-    private var ttsEngine: TextToSpeech? = null
-    @Volatile
-    private var isTtsReady: Boolean = false
+    private val _pendingDeleteIds = MutableStateFlow<Set<String>>(emptySet())
+    val pendingDeleteIds: StateFlow<Set<String>> = _pendingDeleteIds.asStateFlow()
 
     private var activeVoiceClientMsgId: String? = null
     private var voiceStartedAtMs: Long = 0L
@@ -151,7 +159,6 @@ class ChatViewModel @Inject constructor(
             val cfg = dataStore.getConfig()
             _chatPrefs.value = ChatUiPreferences(
                 deviceName = cfg.deviceName.ifBlank { "samsung-a33-tuan" },
-                ttsEnabled = cfg.ttsEnabled,
                 hapticEnabled = cfg.hapticEnabled
             )
         }
@@ -222,8 +229,7 @@ class ChatViewModel @Inject constructor(
             return false
         }
 
-        // Stop any active local TTS or voice playback to avoid feedback/echo
-        stopSpeaking()
+        // Stop any active voice playback to avoid feedback/echo
         voiceNotePlayer.stop()
 
         val clientMsgId = UUID.randomUUID().toString()
@@ -353,12 +359,10 @@ class ChatViewModel @Inject constructor(
     }
 
     fun toggleVoicePlayback(messageId: String, audioPath: String, durationMs: Long) {
-        stopSpeaking()
         voiceNotePlayer.togglePlay(messageId, audioPath, durationMs)
     }
 
     fun seekVoicePlayback(messageId: String, audioPath: String, durationMs: Long, fraction: Float) {
-        stopSpeaking()
         voiceNotePlayer.seekToFraction(messageId, audioPath, durationMs, fraction)
     }
 
@@ -366,88 +370,89 @@ class ChatViewModel @Inject constructor(
         voiceNotePlayer.stop()
     }
 
-    /**
-     * FR-CHAT-16: Offline-capable local Android TextToSpeech per N.E.X.A assistant bubble.
-     */
-    fun toggleSpeakMessage(messageId: String, rawText: String) {
-        if (_speakingMessageId.value == messageId) {
-            stopSpeaking()
-            return
+    // ------------------------------------------------------------------
+    // Message selection mode (long press) and per-message actions (tap menu)
+    // ------------------------------------------------------------------
+
+    fun selectMessage(message: ChatMessageEntity) {
+        val copyable = ChatCopyText.isCopyable(message)
+        _selectionState.update { curr ->
+            curr.copy(selectedCopyableById = curr.selectedCopyableById + (message.id to copyable))
         }
+    }
 
-        val cleanSpeech = sanitizeForSpeech(rawText)
-        if (cleanSpeech.isBlank()) return
-
-        // Stop any active voice note playback to prevent overlapping audio streams
-        voiceNotePlayer.stop()
-
-        if (ttsEngine == null) {
-            ttsEngine = TextToSpeech(appContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    val indonesian = Locale.forLanguageTag("id-ID")
-                    ttsEngine?.language = indonesian
-                    ttsEngine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {
-                            _speakingMessageId.value = utteranceId
-                        }
-
-                        override fun onDone(utteranceId: String?) {
-                            _speakingMessageId.update { curr -> if (curr == utteranceId) null else curr }
-                        }
-
-                        @Suppress("OVERRIDE_DEPRECATION")
-                        override fun onError(utteranceId: String?) {
-                            _speakingMessageId.update { curr -> if (curr == utteranceId) null else curr }
-                        }
-
-                        override fun onError(utteranceId: String?, errorCode: Int) {
-                            _speakingMessageId.update { curr -> if (curr == utteranceId) null else curr }
-                        }
-                    })
-                    isTtsReady = true
-                    speakNow(messageId, cleanSpeech)
-                } else {
-                    Log.w(TAG, "Local TextToSpeech initialization failed with status=$status")
-                    // U-M8: Reset failed engine reference so future taps retry cleanly
-                    try {
-                        ttsEngine?.shutdown()
-                    } catch (_: Exception) {
-                    }
-                    ttsEngine = null
-                    isTtsReady = false
-                    _speakingMessageId.value = null
-                }
+    fun toggleSelectMessage(message: ChatMessageEntity) {
+        val copyable = ChatCopyText.isCopyable(message)
+        _selectionState.update { curr ->
+            val next = if (message.id in curr.selectedCopyableById) {
+                curr.selectedCopyableById - message.id
+            } else {
+                curr.selectedCopyableById + (message.id to copyable)
             }
-        } else if (isTtsReady) {
-            speakNow(messageId, cleanSpeech)
+            curr.copy(selectedCopyableById = next)
         }
     }
 
-    fun stopSpeaking() {
-        try {
-            ttsEngine?.stop()
-        } catch (_: Exception) {
+    fun clearSelection() {
+        if (_selectionState.value.isActive) {
+            _selectionState.value = ChatSelectionUiState()
         }
-        _speakingMessageId.value = null
     }
 
-    private fun speakNow(messageId: String, cleanSpeech: String) {
-        _speakingMessageId.value = messageId
-        ttsEngine?.speak(
-            cleanSpeech,
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            messageId
-        )
+    fun copyToClipboard(text: String) {
+        if (text.isBlank()) return
+        val clipboard = appContext.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("Pesan N.E.X.A", text))
     }
 
-    private fun sanitizeForSpeech(text: String): String {
-        return text
-            .replace(Regex("```[\\s\\S]*?```"), " blok kode ")
-            .replace(Regex("`([^`]+)`"), "$1")
-            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
-            .replace(Regex("N\\.?E\\.?X\\.?A\\.?", RegexOption.IGNORE_CASE), "Nexa")
-            .trim()
+    fun copySelected() {
+        val ids = _selectionState.value.selectedIds
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val text = ChatCopyText.build(chatRepository.getMessagesByIds(ids))
+            copyToClipboard(text)
+            clearSelection()
+        }
+    }
+
+    fun replyToSelected() {
+        val id = _selectionState.value.selectedIds.singleOrNull() ?: return
+        viewModelScope.launch {
+            val row = chatRepository.getMessagesByIds(listOf(id)).firstOrNull()
+            if (row != null) selectReplyTarget(row)
+            clearSelection()
+        }
+    }
+
+    fun requestDeleteMessages(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        _pendingDeleteIds.value = ids
+    }
+
+    fun requestDeleteSelected() {
+        requestDeleteMessages(_selectionState.value.selectedIds)
+    }
+
+    fun dismissPendingDelete() {
+        _pendingDeleteIds.value = emptySet()
+    }
+
+    fun confirmPendingDelete() {
+        val ids = _pendingDeleteIds.value
+        _pendingDeleteIds.value = emptySet()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val deleted = chatRepository.deleteMessages(ids)
+            if (voiceNotePlayer.state.value.activeMessageId in deleted) {
+                voiceNotePlayer.stop()
+            }
+            if (_replyTarget.value?.messageId in deleted) {
+                _replyTarget.value = null
+            }
+            _selectionState.update { curr ->
+                curr.copy(selectedCopyableById = curr.selectedCopyableById - ids)
+            }
+        }
     }
 
     /**
@@ -568,11 +573,5 @@ class ChatViewModel @Inject constructor(
         cancelVoiceRecording()
         voiceNotePlayer.stop()
         hintDismissJob?.cancel()
-        try {
-            ttsEngine?.stop()
-            ttsEngine?.shutdown()
-        } catch (_: Exception) {
-        }
-        ttsEngine = null
     }
 }

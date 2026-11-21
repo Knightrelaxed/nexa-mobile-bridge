@@ -823,18 +823,8 @@ fun SettingsScreen(
                 badgeIcon = Icons.Default.Tune,
                 badgeTint = nexaColors.violet,
                 title = "PREFERENSI (TERSIMPAN OTOMATIS)",
-                subtitle = "Audio, haptik, font terminal, dan tampilan"
+                subtitle = "Haptik, nada, font terminal, dan tampilan"
             ) {
-                PreferenceToggleRow(
-                    title = "Suara Baca Lokal",
-                    badge = "TTS Android · id-ID",
-                    subtitle = "Bacakan balasan AI secara offline",
-                    checked = uiState.ttsEnabled,
-                    onCheckedChange = { viewModel.onTtsToggled(it) }
-                )
-
-                HorizontalDivider(color = nexaColors.cardBorder.copy(alpha = 0.5f))
-
                 PreferenceToggleRow(
                     title = "Getaran Haptik",
                     badge = if (uiState.hapticEnabled) "AKTIF" else "MATI",

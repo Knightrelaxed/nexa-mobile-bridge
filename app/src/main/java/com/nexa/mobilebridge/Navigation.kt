@@ -2,6 +2,7 @@ package com.nexa.mobilebridge
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -18,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.entryProvider
@@ -26,6 +29,7 @@ import androidx.navigation3.ui.NavDisplay
 import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.ui.call.FakeCallActivity
 import com.nexa.mobilebridge.ui.chat.ChatScreen
+import com.nexa.mobilebridge.ui.chat.ChatSelectionTopBar
 import com.nexa.mobilebridge.ui.chat.ChatViewModel
 import com.nexa.mobilebridge.ui.components.NexaBottomNavBar
 import com.nexa.mobilebridge.ui.components.NexaTopBar
@@ -58,17 +62,57 @@ fun MainNavigation(
 
                 val hudState by hudViewModel.uiState.collectAsStateWithLifecycle()
                 val effectiveAvatarState by chatViewModel.effectiveAvatarState.collectAsStateWithLifecycle()
+                val chatSelection by chatViewModel.selectionState.collectAsStateWithLifecycle()
+                val chatPrefs by chatViewModel.chatPrefs.collectAsStateWithLifecycle()
                 val connectionState = (hudState as? HudUiState.Active)?.connectionState
                     ?: ConnectionState.Disconnected(null)
+                val shellView = LocalView.current
+
+                LaunchedEffect(activeTab) {
+                    if (activeTab != NexaMainTab.CHAT) {
+                        chatViewModel.clearSelection()
+                    }
+                }
 
                 val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
                 val isTerminalTab = activeTab == NexaMainTab.SHELL
                 val isLogsTab = activeTab == NexaMainTab.LOGS
+                val showChatSelectionBar = activeTab == NexaMainTab.CHAT && chatSelection.isActive
 
                 Scaffold(
                     topBar = {
                         // PRD §12.1 / Stitch v2: Both SHELL (04) and LOGS (03) render their own unified single top header
-                        if (!isTerminalTab && !isLogsTab) {
+                        if (showChatSelectionBar) {
+                            ChatSelectionTopBar(
+                                selectedCount = chatSelection.count,
+                                canReply = chatSelection.canReply,
+                                canCopy = chatSelection.canCopy,
+                                onClear = {
+                                    if (chatPrefs.hapticEnabled) {
+                                        shellView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    }
+                                    chatViewModel.clearSelection()
+                                },
+                                onReply = {
+                                    if (chatPrefs.hapticEnabled) {
+                                        shellView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    }
+                                    chatViewModel.replyToSelected()
+                                },
+                                onCopy = {
+                                    if (chatPrefs.hapticEnabled) {
+                                        shellView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    }
+                                    chatViewModel.copySelected()
+                                },
+                                onDelete = {
+                                    if (chatPrefs.hapticEnabled) {
+                                        shellView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    }
+                                    chatViewModel.requestDeleteSelected()
+                                }
+                            )
+                        } else if (!isTerminalTab && !isLogsTab) {
                             NexaTopBar(
                                 activeTab = activeTab,
                                 connectionState = connectionState,
