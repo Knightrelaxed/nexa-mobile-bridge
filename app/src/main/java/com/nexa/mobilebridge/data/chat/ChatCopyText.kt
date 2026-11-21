@@ -25,5 +25,5 @@ object ChatCopyText {
         }
     }
 
-    private fun senderLabel(role: String): String = if (role == ChatRole.ASSISTANT) "N.E.X.A" else "Tuan"
+    private fun senderLabel(role: String): String = if (role == ChatRole.ASSISTANT) "N.E.X.A" else "User"
 }

@@ -51,7 +51,7 @@ class ChatCopyTextTest {
         val m1 = textMsg("1", ChatRole.USER, "Cek saldo Mandiri", 100L)
 
         val copied = ChatCopyText.build(listOf(m2, m1))
-        assertEquals("Tuan: Cek saldo Mandiri\n\nN.E.X.A: Saldo Mandiri Rp 1.500.000.", copied)
+        assertEquals("User: Cek saldo Mandiri\n\nN.E.X.A: Saldo Mandiri Rp 1.500.000.", copied)
     }
 
     @Test
