@@ -9,6 +9,7 @@ import com.nexa.mobilebridge.core.network.NexaWebSocketClient
 import com.nexa.mobilebridge.core.security.DeviceKeySnapshot
 import com.nexa.mobilebridge.core.security.DeviceKeystoreManager
 import com.nexa.mobilebridge.core.security.KeystoreKeyState
+import com.nexa.mobilebridge.core.util.ConnectionState
 import com.nexa.mobilebridge.data.local.AccentPreset
 import com.nexa.mobilebridge.data.local.NexaPreferencesDataStore
 import com.nexa.mobilebridge.data.local.ThemeMode
@@ -29,6 +30,10 @@ data class SettingsUiState(
     val serverUrl: String = "",
     val authToken: String = "",
     val hmacSecret: String = "",
+    val savedServerUrl: String = "",
+    val savedAuthToken: String = "",
+    val savedHmacSecret: String = "",
+    val connectionState: ConnectionState = ConnectionState.Disconnected(null),
     val themeMode: ThemeMode = ThemeMode.DARK,
     val accentPreset: AccentPreset = AccentPreset.CYAN,
     val hapticEnabled: Boolean = true,
@@ -37,8 +42,8 @@ data class SettingsUiState(
     val heartbeatScreenOffSec: Int = NexaPreferencesDataStore.DEFAULT_HEARTBEAT_SCREEN_OFF_SEC,
     val chatNotificationSoundUri: String = "",
     val chatNotificationSoundLabel: String = "Default Sistem",
-    val killSwitchLabel: String = "NONAKTIF",
-    val killSwitchSubtitle: String = "Nonaktif secara default di server (FR-TERM-18)",
+    val killSwitchLabel: String = "Nonaktif",
+    val killSwitchSubtitle: String = "Nonaktif secara default di server",
     val isKillSwitchActive: Boolean = false,
     val isSaved: Boolean = false,
     // Hardware Identity & Enrollment (Tahap 1.5 / Audit A7)
@@ -46,12 +51,18 @@ data class SettingsUiState(
     val enrollmentStatus: String = "NOT_ENROLLED", // NOT_ENROLLED | ACTIVE | INVALIDATED
     val enrolledAtEpochSec: Long = 0L,
     val isDomainUnlocked: Boolean = false,
+    val isServerEditMode: Boolean = false,
     val tokenRevealSecondsLeft: Int = 0,
     val isEnrolling: Boolean = false,
     val enrollError: String? = null,
     val lastEnrollSuccessTick: Int = 0,
     val statusNotice: String? = null
-)
+) {
+    val hasUnsavedServerChanges: Boolean
+        get() = serverUrl.trim() != savedServerUrl.trim() ||
+            authToken != savedAuthToken ||
+            hmacSecret != savedHmacSecret
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -69,7 +80,16 @@ class SettingsViewModel @Inject constructor(
 
     init {
         loadInitialState()
+        observeConnectionState()
         observeTerminalKillSwitch()
+    }
+
+    private fun observeConnectionState() {
+        viewModelScope.launch {
+            webSocketClient.connectionState.collect { state ->
+                _uiState.update { it.copy(connectionState = state) }
+            }
+        }
     }
 
     private fun observeTerminalKillSwitch() {
@@ -79,18 +99,18 @@ class SettingsViewModel @Inject constructor(
                     TerminalSessionStatus.ACTIVE,
                     TerminalSessionStatus.PAUSED_SCREEN_OFF,
                     TerminalSessionStatus.DETACHED_RECONNECTING -> Triple(
-                        "AKTIF",
+                        "Aktif",
                         "Sesi terminal sedang aktif di server (/io/term)",
                         true
                     )
                     TerminalSessionStatus.DISABLED_BY_SERVER -> Triple(
-                        "NONAKTIF",
-                        "Dinonaktifkan oleh kill switch server (FR-TERM-18)",
+                        "Nonaktif",
+                        "Dinonaktifkan oleh kill switch server",
                         false
                     )
                     else -> Triple(
-                        "NONAKTIF",
-                        "Nonaktif secara default di server (verifikasi saat buka Shell)",
+                        "Nonaktif (server)",
+                        "Verifikasi saat membuka tab Shell",
                         false
                     )
                 }
@@ -119,12 +139,16 @@ class SettingsViewModel @Inject constructor(
                 else -> config.enrollmentStatus
             }
 
+            val editableByDefault = effectiveStatus != "ACTIVE"
             _uiState.update {
                 it.copy(
                     deviceName = config.deviceName,
                     serverUrl = config.serverUrl,
                     authToken = config.authToken,
                     hmacSecret = config.hmacSecret,
+                    savedServerUrl = config.serverUrl,
+                    savedAuthToken = config.authToken,
+                    savedHmacSecret = config.hmacSecret,
                     themeMode = config.themeMode,
                     accentPreset = config.accentPreset,
                     hapticEnabled = config.hapticEnabled,
@@ -136,8 +160,9 @@ class SettingsViewModel @Inject constructor(
                     keySnapshot = keySnap,
                     enrollmentStatus = effectiveStatus,
                     enrolledAtEpochSec = config.enrolledAtEpochSec,
-                    // Domain is editable initially before enrollment, locked once ACTIVE (Audit A7)
-                    isDomainUnlocked = effectiveStatus != "ACTIVE"
+                    // Domain & server form are editable before enrollment, read-only once ACTIVE (Audit A7)
+                    isDomainUnlocked = editableByDefault,
+                    isServerEditMode = editableByDefault
                 )
             }
         }
@@ -186,22 +211,32 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { dataStore.saveTerminalFontSizeSp(clamped) }
     }
 
+    fun onHeartbeatScreenOnSelected(seconds: Int) {
+        if (seconds !in NexaPreferencesDataStore.HEARTBEAT_SCREEN_ON_OPTIONS) return
+        val screenOff = _uiState.value.heartbeatScreenOffSec
+        _uiState.update { it.copy(heartbeatScreenOnSec = seconds) }
+        viewModelScope.launch { dataStore.saveHeartbeatIntervals(seconds, screenOff) }
+    }
+
+    fun onHeartbeatScreenOffSelected(seconds: Int) {
+        if (seconds !in NexaPreferencesDataStore.HEARTBEAT_SCREEN_OFF_OPTIONS) return
+        val screenOn = _uiState.value.heartbeatScreenOnSec
+        _uiState.update { it.copy(heartbeatScreenOffSec = seconds) }
+        viewModelScope.launch { dataStore.saveHeartbeatIntervals(screenOn, seconds) }
+    }
+
     fun onCycleHeartbeatScreenOn() {
         val options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_ON_OPTIONS
         val current = _uiState.value.heartbeatScreenOnSec
         val next = options[(options.indexOf(current).let { if (it < 0) 0 else it + 1 }) % options.size]
-        val screenOff = _uiState.value.heartbeatScreenOffSec
-        _uiState.update { it.copy(heartbeatScreenOnSec = next) }
-        viewModelScope.launch { dataStore.saveHeartbeatIntervals(next, screenOff) }
+        onHeartbeatScreenOnSelected(next)
     }
 
     fun onCycleHeartbeatScreenOff() {
         val options = NexaPreferencesDataStore.HEARTBEAT_SCREEN_OFF_OPTIONS
         val current = _uiState.value.heartbeatScreenOffSec
         val next = options[(options.indexOf(current).let { if (it < 0) 0 else it + 1 }) % options.size]
-        val screenOn = _uiState.value.heartbeatScreenOnSec
-        _uiState.update { it.copy(heartbeatScreenOffSec = next) }
-        viewModelScope.launch { dataStore.saveHeartbeatIntervals(screenOn, next) }
+        onHeartbeatScreenOffSelected(next)
     }
 
     fun onChatNotificationSoundSelected(uri: String, label: String) {
@@ -226,16 +261,46 @@ class SettingsViewModel @Inject constructor(
     fun onLeaveSettings() {
         hideTokenImmediately()
         _uiState.update { curr ->
+            val editableByDefault = curr.enrollmentStatus != "ACTIVE"
             curr.copy(
-                isDomainUnlocked = curr.enrollmentStatus != "ACTIVE",
+                serverUrl = curr.savedServerUrl,
+                authToken = curr.savedAuthToken,
+                hmacSecret = curr.savedHmacSecret,
+                isDomainUnlocked = editableByDefault,
+                isServerEditMode = editableByDefault,
                 statusNotice = null,
                 enrollError = null
             )
         }
     }
 
+    fun unlockServerEditAfterBiometric() {
+        _uiState.update {
+            it.copy(
+                isDomainUnlocked = true,
+                isServerEditMode = true,
+                statusNotice = "Mode ubah konfigurasi server dibuka."
+            )
+        }
+    }
+
+    fun discardServerChanges() {
+        hideTokenImmediately()
+        _uiState.update { curr ->
+            val editableByDefault = curr.enrollmentStatus != "ACTIVE"
+            curr.copy(
+                serverUrl = curr.savedServerUrl,
+                authToken = curr.savedAuthToken,
+                hmacSecret = curr.savedHmacSecret,
+                isDomainUnlocked = editableByDefault,
+                isServerEditMode = editableByDefault,
+                statusNotice = null
+            )
+        }
+    }
+
     fun unlockDomainAfterBiometric() {
-        _uiState.update { it.copy(isDomainUnlocked = true, statusNotice = "Domain dibuka untuk pengeditan.") }
+        unlockServerEditAfterBiometric()
     }
 
     /**
@@ -267,6 +332,7 @@ class SettingsViewModel @Inject constructor(
                     enrollmentStatus = "NOT_ENROLLED",
                     enrolledAtEpochSec = 0L,
                     isDomainUnlocked = true,
+                    isServerEditMode = true,
                     statusNotice = if (newSnap.state == KeystoreKeyState.READY) {
                         "Kunci Keystore P-256 baru dibuat. Masukkan kode nexa-enroll re-pair dari server."
                     } else {
@@ -294,6 +360,7 @@ class SettingsViewModel @Inject constructor(
                             enrollmentStatus = "ACTIVE",
                             enrolledAtEpochSec = res.enrolledAtSec,
                             isDomainUnlocked = false,
+                            isServerEditMode = false,
                             lastEnrollSuccessTick = it.lastEnrollSuccessTick + 1,
                             statusNotice = "Perangkat terdaftar! Cocokkan SHA-256 32 oktet dengan CLI server."
                         )
@@ -355,11 +422,18 @@ class SettingsViewModel @Inject constructor(
             if (NexaBridgeService.isServiceRunning.value && trimmedUrl.isNotBlank()) {
                 webSocketClient.forceReconnect(trimmedUrl, state.authToken)
             }
+            hideTokenImmediately()
+            val editableByDefault = state.enrollmentStatus != "ACTIVE"
             _uiState.update {
                 it.copy(
                     serverUrl = trimmedUrl,
+                    savedServerUrl = trimmedUrl,
+                    savedAuthToken = state.authToken,
+                    savedHmacSecret = state.hmacSecret,
                     isSaved = true,
-                    isDomainUnlocked = it.enrollmentStatus != "ACTIVE"
+                    isDomainUnlocked = editableByDefault,
+                    isServerEditMode = editableByDefault,
+                    statusNotice = "Konfigurasi server tersimpan dan disambung ulang."
                 )
             }
             onSaved()
