@@ -517,7 +517,11 @@ fun NexaInteractiveCard(
                                             "REJECT_WITH_REASON" -> showRejectReasonInput = true
                                             "MULTI_SELECT_SUBMIT" -> {
                                                 val chosen = selectionMap.filterValues { it }.keys.toList()
-                                                val payload = JSONObject().apply {
+                                                val payload = try {
+                                                    JSONObject(card.metaJson)
+                                                } catch (_: Exception) {
+                                                    JSONObject()
+                                                }.apply {
                                                     put("selected_ids", JSONArray(chosen))
                                                 }
                                                 onSubmitAction(card.cardId, card.cardType, act.id, payload)
@@ -661,6 +665,173 @@ private fun CardActionButton(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Compact Quick Action Chips strip rendered directly beneath N.E.X.A conversational text (Phase 2).
+ * Used for CALENDAR_CONFLICT, FINANCE_DELETE, and TASK_CONFIRM (Sync / Duration / List).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun NexaQuickActionChips(
+    card: InteractiveCardData,
+    isSubmitting: Boolean,
+    errorMessage: String?,
+    hapticEnabled: Boolean,
+    onSubmitAction: (cardId: String, cardType: String, actionId: String, payload: JSONObject?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val nexaColors = LocalNexaColors.current
+    val haptic = LocalHapticFeedback.current
+
+    var remainingSec by remember(card.cardId, card.expiresAtMs, card.status) {
+        val initial = if (card.isPending && card.expiresAtMs > 0L) {
+            ((card.expiresAtMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        mutableLongStateOf(initial)
+    }
+    LaunchedEffect(card.cardId, card.expiresAtMs, card.status) {
+        if (!card.isPending || card.expiresAtMs <= 0L) return@LaunchedEffect
+        while (true) {
+            val sec = ((card.expiresAtMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L)
+            remainingSec = sec
+            if (sec <= 0L) break
+            delay(1_000L)
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        HorizontalDivider(
+            thickness = 0.75.dp,
+            color = nexaColors.cardBorder.copy(alpha = 0.55f)
+        )
+
+        if (card.isPending) {
+            if (card.expiresAtMs > 0L && remainingSec > 0L) {
+                val mins = remainingSec / 60L
+                val secs = remainingSec % 60L
+                val prefix = card.expiresLabel.ifEmpty { "Expires in" }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = nexaColors.amber,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = "$prefix ${String.format(Locale.US, "%02d:%02d", mins, secs)}",
+                        style = NexaMonoTypography.codeLine.copy(fontSize = 10.5.sp),
+                        color = nexaColors.amber
+                    )
+                }
+            }
+
+            if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = nexaColors.crimson
+                )
+            }
+
+            if (isSubmitting) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(vertical = 2.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Applying...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    card.actions.forEach { act ->
+                        CardActionButton(
+                            action = act,
+                            label = act.label,
+                            enabled = true,
+                            onClick = {
+                                if (hapticEnabled) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                val metaPayload = try {
+                                    JSONObject(card.metaJson)
+                                } catch (_: Exception) {
+                                    JSONObject()
+                                }
+                                onSubmitAction(card.cardId, card.cardType, act.id, metaPayload)
+                            }
+                        )
+                    }
+                }
+            }
+        } else {
+            val badgeText = card.resolvedBadge.ifEmpty {
+                if (card.isExpired) "Expired" else "Resolved"
+            }
+            val isNegative = badgeText.contains("Cancel", ignoreCase = true) ||
+                badgeText.contains("Fail", ignoreCase = true) ||
+                badgeText.contains("Skip", ignoreCase = true)
+            val isMuted = card.isExpired || badgeText.contains("Kept", ignoreCase = true)
+            val statusColor = when {
+                isNegative -> nexaColors.crimson
+                isMuted -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> nexaColors.emerald
+            }
+            val statusIcon = when {
+                isNegative -> Icons.Default.Cancel
+                isMuted -> Icons.Default.Schedule
+                else -> Icons.Default.CheckCircle
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = statusIcon,
+                    contentDescription = null,
+                    tint = statusColor,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = if (card.resolvedDetail.isNotEmpty()) {
+                        "$badgeText · ${card.resolvedDetail}"
+                    } else {
+                        badgeText
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = statusColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

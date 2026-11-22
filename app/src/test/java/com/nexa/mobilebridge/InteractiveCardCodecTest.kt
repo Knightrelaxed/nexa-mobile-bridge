@@ -78,4 +78,34 @@ class InteractiveCardCodecTest {
         assertNull(InteractiveCardCodec.parseFromExecutionMetadata(null))
         assertNull(InteractiveCardCodec.parseFromExecutionMetadata(""))
     }
+
+    @Test
+    fun roundTripQuickActionChipsAndInlineCardPresentations() {
+        val chipsJson = """
+            {
+              "version": 1,
+              "card_id": "calconf_123",
+              "card_type": "CALENDAR_CONFLICT",
+              "presentation": "CHIPS",
+              "status": "PENDING",
+              "title": "Calendar Conflict",
+              "subtitle": "Standup",
+              "actions": [
+                { "id": "force_create", "label": "Create Anyway", "style": "PRIMARY" },
+                { "id": "cancel", "label": "Cancel", "style": "DESTRUCTIVE" }
+              ],
+              "meta": { "summary": "Standup" }
+            }
+        """.trimIndent()
+
+        val parsed = InteractiveCardCodec.parseFromJsonString(chipsJson)
+        assertNotNull(parsed)
+        assertEquals("CHIPS", parsed!!.presentation)
+        val reloaded = InteractiveCardCodec.parseFromExecutionMetadata(
+            InteractiveCardCodec.toExecutionMetadataJson(parsed)
+        )
+        assertNotNull(reloaded)
+        assertEquals("CHIPS", reloaded!!.presentation)
+        assertEquals("Standup", reloaded.metaString("summary"))
+    }
 }

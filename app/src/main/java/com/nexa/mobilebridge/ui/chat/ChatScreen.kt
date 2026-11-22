@@ -1731,7 +1731,7 @@ private fun AssistantChatBubble(
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (interactiveCard != null) {
+                if (interactiveCard != null && interactiveCard.presentation == "CARD") {
                     NexaInteractiveCard(
                         card = interactiveCard,
                         isSubmitting = interactiveCard.cardId in submittingCardIds,
@@ -1741,17 +1741,41 @@ private fun AssistantChatBubble(
                         onOpenCategoryPicker = onOpenCategoryPicker,
                         onOpenFinanceEdit = onOpenFinanceEdit
                     )
-                } else if (displayContent.isEmpty() && isStreaming) {
-                    Text(
-                        text = "Thinking...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 } else {
-                    IncrementalMarkdownText(
-                        rawText = displayContent,
-                        highlightColor = MaterialTheme.colorScheme.primary
-                    )
+                    if (displayContent.isEmpty() && isStreaming) {
+                        Text(
+                            text = "Thinking...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (displayContent.isNotEmpty()) {
+                        IncrementalMarkdownText(
+                            rawText = displayContent,
+                            highlightColor = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (interactiveCard != null) {
+                        if (interactiveCard.presentation == "CHIPS") {
+                            NexaQuickActionChips(
+                                card = interactiveCard,
+                                isSubmitting = interactiveCard.cardId in submittingCardIds,
+                                errorMessage = cardErrors[interactiveCard.cardId],
+                                hapticEnabled = hapticEnabled,
+                                onSubmitAction = onSubmitCardAction
+                            )
+                        } else {
+                            NexaInteractiveCard(
+                                card = interactiveCard,
+                                isSubmitting = interactiveCard.cardId in submittingCardIds,
+                                errorMessage = cardErrors[interactiveCard.cardId],
+                                hapticEnabled = hapticEnabled,
+                                onSubmitAction = onSubmitCardAction,
+                                onOpenCategoryPicker = onOpenCategoryPicker,
+                                onOpenFinanceEdit = onOpenFinanceEdit
+                            )
+                        }
+                    }
                 }
 
                 if (message.status == ChatStatus.INTERRUPTED && !isStreaming) {

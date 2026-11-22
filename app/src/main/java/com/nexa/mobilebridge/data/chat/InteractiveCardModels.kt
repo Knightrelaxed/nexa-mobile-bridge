@@ -44,7 +44,8 @@ data class CardActionItem(
 data class InteractiveCardData(
     val version: Int = 1,
     val cardId: String,
-    val cardType: String,            // FINANCE_TX | RECURRING_BILL | IDENTITY_PROPOSAL | MEMORY_HYGIENE | DISCIPLINE_CHECK
+    val cardType: String,            // FINANCE_TX | RECURRING_BILL | IDENTITY_PROPOSAL | MEMORY_HYGIENE | DISCIPLINE_CHECK | CALENDAR_CONFLICT | FINANCE_DELETE | TASK_CONFIRM | PROACTIVE_TASKS
+    val presentation: String = "CARD", // CARD | CHIPS | INLINE_CARD
     val status: String = "PENDING",  // PENDING | RESOLVED | EXPIRED
     val title: String,
     val subtitle: String = "",
@@ -189,6 +190,7 @@ object InteractiveCardCodec {
             version = obj.int("version", 1),
             cardId = cardId,
             cardType = cardType,
+            presentation = obj.str("presentation", "CARD").ifBlank { "CARD" }.uppercase(),
             status = obj.str("status", "PENDING").uppercase(),
             title = title,
             subtitle = obj.str("subtitle").trim(),
@@ -220,6 +222,7 @@ object InteractiveCardCodec {
             put("version", card.version)
             put("card_id", card.cardId)
             put("card_type", card.cardType)
+            put("presentation", card.presentation)
             put("status", card.status)
             put("title", card.title)
             if (card.subtitle.isNotEmpty()) put("subtitle", card.subtitle)
