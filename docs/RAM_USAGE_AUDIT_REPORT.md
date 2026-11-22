@@ -355,7 +355,7 @@ Setelah implementasi optimasi pada `SettingsScreen.kt` (`LazyColumn`), `Navigati
 #### D. Tab Logs Aktif (14:56 WIB)
 - **RAM Fisik Aktif:** `145,4 MB` (`148.853 KB`) | **TOTAL PSS:** `153,6 MB` (`157.317 KB`, `SwapPss: 8.464 KB`)
 - **Java Heap:** PSS `31,5 MB` (`32.230 KB`), meskipun Alloc nyata hanya `7,7 MB` (`7.862 KB`) dan `Heap Free: 24,0 MB` (`24.576 KB`) karena mesin ART belum memicu GC setelah keluar dari Settings.
-- **Graphics:** `38,6 MB` (`39.575 KB` = EGL `13.839 KB` + GL `25.736 KB`) — `GL mtrack` naik saat daftar log aktif dirender/mengalir tiap 150 ms.
+- **Graphics:** `38,6 MB` (`39.575 KB` = EGL `13.839 KB` + GL `25.736 KB`), `GL mtrack` naik saat daftar log aktif dirender/mengalir tiap 150 ms.
 
 #### E. Tab Terminal Aktif (14:57 WIB)
 - **RAM Fisik Aktif:** `128,2 MB` (`131.283 KB`) | **TOTAL PSS:** `136,2 MB` (`139.489 KB`, `SwapPss: 8.206 KB`)
