@@ -34,19 +34,27 @@ data class CardSelectableItem(
     val selected: Boolean = true
 )
 
+data class CardMetricItem(
+    val label: String,
+    val value: String,
+    val tone: String = "NEUTRAL", // NEUTRAL | PRIMARY | EMERALD | AMBER | CRIMSON
+    val progress: Int? = null     // Optional 0..100 progress bar (e.g. Budget Recap)
+)
+
 data class CardActionItem(
     val id: String,
     val label: String,
     val style: String = "SECONDARY", // PRIMARY | SECONDARY | DESTRUCTIVE
-    val kind: String = ""            // "" | PICK_CATEGORY | EDIT_FINANCE | REJECT_WITH_REASON | MULTI_SELECT_SUBMIT
+    val kind: String = "",           // "" | PICK_CATEGORY | EDIT_FINANCE | EDIT_VAULT | REJECT_WITH_REASON | MULTI_SELECT_SUBMIT | SEND_PROMPT
+    val prompt: String = ""          // Optional prompt text for SEND_PROMPT quick follow-up chips
 )
 
 data class InteractiveCardData(
     val version: Int = 1,
     val cardId: String,
-    val cardType: String,            // FINANCE_TX | RECURRING_BILL | IDENTITY_PROPOSAL | MEMORY_HYGIENE | DISCIPLINE_CHECK | CALENDAR_CONFLICT | FINANCE_DELETE | TASK_CONFIRM | PROACTIVE_TASKS
-    val presentation: String = "CARD", // CARD | CHIPS | INLINE_CARD
-    val status: String = "PENDING",  // PENDING | RESOLVED | EXPIRED
+    val cardType: String,            // FINANCE_TX | RECURRING_BILL | IDENTITY_PROPOSAL | MEMORY_HYGIENE | DISCIPLINE_CHECK | CALENDAR_CONFLICT | FINANCE_DELETE | TASK_CONFIRM | PROACTIVE_TASKS | VAULT_METADATA | BRIEFING_SUMMARY | BUDGET_RECAP
+    val presentation: String = "CARD", // CARD | CHIPS | INLINE_CARD | SUMMARY_CARD
+    val status: String = "PENDING",  // PENDING | RESOLVED | EXPIRED | INFO
     val title: String,
     val subtitle: String = "",
     val badge: String = "",
@@ -58,6 +66,7 @@ data class InteractiveCardData(
     val confidence: Int? = null,
     val diff: CardDiff? = null,
     val fields: List<CardField> = emptyList(),
+    val metrics: List<CardMetricItem> = emptyList(),
     val categories: List<String> = emptyList(),
     val selectableItems: List<CardSelectableItem> = emptyList(),
     val actions: List<CardActionItem> = emptyList(),
@@ -145,6 +154,19 @@ object InteractiveCardCodec {
             else CardField(key = f.str("key", "f_$idx"), label = label, value = value)
         } ?: emptyList()
 
+        val metrics = (obj["metrics"] as? JsonArray)?.mapNotNull { elem ->
+            val m = elem as? JsonObject ?: return@mapNotNull null
+            val label = m.str("label").trim()
+            val value = m.str("value").trim()
+            if (label.isEmpty() && value.isEmpty()) null
+            else CardMetricItem(
+                label = label,
+                value = value,
+                tone = m.str("tone", "NEUTRAL").uppercase(),
+                progress = (m["progress"] as? JsonPrimitive)?.intOrNull?.coerceIn(0, 100)
+            )
+        } ?: emptyList()
+
         val categories = (obj["categories"] as? JsonArray)?.mapNotNull { elem ->
             (elem as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
         } ?: emptyList()
@@ -171,7 +193,8 @@ object InteractiveCardCodec {
                 id = id,
                 label = label,
                 style = act.str("style", "SECONDARY").uppercase(),
-                kind = act.str("kind", "").uppercase()
+                kind = act.str("kind", "").uppercase(),
+                prompt = act.str("prompt").trim()
             )
         } ?: emptyList()
 
@@ -203,6 +226,7 @@ object InteractiveCardCodec {
             confidence = confidence,
             diff = diff,
             fields = fields,
+            metrics = metrics,
             categories = categories,
             selectableItems = selectableItems,
             actions = actions,
@@ -248,6 +272,18 @@ object InteractiveCardCodec {
                     })
                 }
             })
+            if (card.metrics.isNotEmpty()) {
+                put("metrics", buildJsonArray {
+                    card.metrics.forEach { m ->
+                        add(buildJsonObject {
+                            put("label", m.label)
+                            put("value", m.value)
+                            put("tone", m.tone)
+                            if (m.progress != null) put("progress", m.progress)
+                        })
+                    }
+                })
+            }
             if (card.categories.isNotEmpty()) {
                 put("categories", buildJsonArray {
                     card.categories.forEach { add(JsonPrimitive(it)) }
@@ -272,6 +308,7 @@ object InteractiveCardCodec {
                         put("label", act.label)
                         put("style", act.style)
                         if (act.kind.isNotEmpty()) put("kind", act.kind)
+                        if (act.prompt.isNotEmpty()) put("prompt", act.prompt)
                     })
                 }
             })

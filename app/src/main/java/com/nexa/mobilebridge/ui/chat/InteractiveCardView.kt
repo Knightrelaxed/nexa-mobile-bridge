@@ -89,6 +89,8 @@ fun NexaInteractiveCard(
     onSubmitAction: (cardId: String, cardType: String, actionId: String, payload: JSONObject?) -> Unit,
     onOpenCategoryPicker: (InteractiveCardData) -> Unit,
     onOpenFinanceEdit: (InteractiveCardData) -> Unit,
+    onOpenVaultEdit: (InteractiveCardData) -> Unit = {},
+    onQuickPrompt: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val nexaColors = LocalNexaColors.current
@@ -526,6 +528,8 @@ fun NexaInteractiveCard(
                                         when (act.kind) {
                                             "PICK_CATEGORY" -> onOpenCategoryPicker(card)
                                             "EDIT_FINANCE" -> onOpenFinanceEdit(card)
+                                            "EDIT_VAULT" -> onOpenVaultEdit(card)
+                                            "SEND_PROMPT" -> if (act.prompt.isNotBlank()) onQuickPrompt(act.prompt)
                                             "REJECT_WITH_REASON" -> showRejectReasonInput = true
                                             "MULTI_SELECT_SUBMIT" -> {
                                                 val chosen = selectionMap.filterValues { it }.keys.toList()
@@ -1011,6 +1015,370 @@ fun FinanceQuickEditDialog(
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Text("Update")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+/**
+ * Phase 3: Rich Executive Summary Card rendered atop Morning/Evening Briefings and Budget Recaps.
+ * Displays hero metric, 2-column stat tiles, dynamic color-coded progress bars, and quick prompt chips.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun NexaSummaryCard(
+    card: InteractiveCardData,
+    hapticEnabled: Boolean,
+    onQuickPrompt: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val nexaColors = LocalNexaColors.current
+    val haptic = LocalHapticFeedback.current
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+
+    fun resolveToneColor(tone: String): Color = when (tone.uppercase()) {
+        "EMERALD" -> nexaColors.emerald
+        "AMBER" -> nexaColors.amber
+        "CRIMSON" -> nexaColors.crimson
+        "PRIMARY" -> primaryColor
+        else -> onSurfaceColor
+    }
+
+    val accentColor = resolveToneColor(card.accent)
+    val cardBg = if (nexaColors.isDark) {
+        Color(0xFF0B111A)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    }
+
+    val progressMetrics = card.metrics.filter { it.progress != null }
+    val statMetrics = card.metrics.filter { it.progress == null }
+
+    Surface(
+        color = cardBg,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = card.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (card.subtitle.isNotEmpty()) {
+                        Text(
+                            text = card.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (card.badge.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        color = accentColor.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = card.badge,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = accentColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+
+            if (card.heroValue.isNotEmpty()) {
+                val heroColor = when (card.heroTone) {
+                    "INCOME" -> nexaColors.emerald
+                    "EXPENSE" -> nexaColors.crimson
+                    "TRANSFER" -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
+                Text(
+                    text = card.heroValue,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    ),
+                    color = heroColor
+                )
+            }
+
+            // 2-column stat tiles (Briefing agenda/tasks/bills/goals)
+            if (statMetrics.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    statMetrics.chunked(2).forEach { rowItems ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            rowItems.forEach { metric ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(0.75.dp, nexaColors.cardBorder.copy(alpha = 0.55f)),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = metric.label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = metric.value,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = resolveToneColor(metric.tone),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                            if (rowItems.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Horizontal color-coded progress rows (Budget Recap)
+            if (progressMetrics.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    progressMetrics.forEach { metric ->
+                        val barColor = resolveToneColor(metric.tone)
+                        val pct = (metric.progress ?: 0).coerceIn(0, 100)
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = metric.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = metric.value,
+                                    style = NexaMonoTypography.codeLine.copy(fontSize = 10.5.sp),
+                                    color = barColor,
+                                    maxLines = 1
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { pct / 100f },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = barColor,
+                                trackColor = nexaColors.elevatedSurface
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Quick Follow-Up Prompt Chips
+            val promptActions = card.actions.filter { it.kind == "SEND_PROMPT" && it.prompt.isNotBlank() }
+            if (promptActions.isNotEmpty()) {
+                HorizontalDivider(
+                    thickness = 0.75.dp,
+                    color = nexaColors.cardBorder.copy(alpha = 0.5f)
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    promptActions.forEach { act ->
+                        CardActionButton(
+                            action = act,
+                            label = act.label,
+                            enabled = true,
+                            onClick = {
+                                if (hapticEnabled) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                onQuickPrompt(act.prompt)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Phase 3: Native Vault Metadata Editor Dialog.
+ * Allows Tuan to tap and edit any Vault field directly (plus add new fields) without typing `EDIT key: value;`.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun VaultMetadataEditDialog(
+    card: InteractiveCardData,
+    onSave: (category: String, edits: Map<String, String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    val presetCategories = remember { listOf("IDENTITAS", "DOKUMEN", "ARSIP", "STRUK", "LAINNYA") }
+    var selectedCategory by remember(card.cardId, card.metaJson) {
+        mutableStateOf(card.metaString("category", "ARSIP").ifBlank { "ARSIP" }.uppercase())
+    }
+    val fieldValues = remember(card.cardId, card.fields) {
+        mutableStateMapOf<String, String>().apply {
+            card.fields.forEach { put(it.key, it.value) }
+        }
+    }
+    var newFieldKey by remember(card.cardId) { mutableStateOf("") }
+    var newFieldValue by remember(card.cardId) { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit Vault Metadata",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Category",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    presetCategories.forEach { cat ->
+                        val isChosen = selectedCategory.equals(cat, ignoreCase = true)
+                        Surface(
+                            color = if (isChosen) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            } else {
+                                nexaColors.elevatedSurface
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isChosen) MaterialTheme.colorScheme.primary else nexaColors.cardBorder
+                            ),
+                            modifier = Modifier.clickable { selectedCategory = cat }
+                        ) {
+                            Text(
+                                text = cat,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isChosen) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(thickness = 0.75.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
+
+                card.fields.forEach { field ->
+                    OutlinedTextField(
+                        value = fieldValues[field.key] ?: "",
+                        onValueChange = { fieldValues[field.key] = it },
+                        label = { Text(field.label) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                HorizontalDivider(thickness = 0.75.dp, color = nexaColors.cardBorder.copy(alpha = 0.5f))
+                Text(
+                    text = "Add Field (optional)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = newFieldKey,
+                    onValueChange = { newFieldKey = it },
+                    label = { Text("Field Name (e.g. masa_berlaku)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = newFieldValue,
+                    onValueChange = { newFieldValue = it },
+                    label = { Text("Value") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val merged = LinkedHashMap<String, String>()
+                    fieldValues.forEach { (k, v) -> merged[k] = v.trim() }
+                    val extraKey = newFieldKey.trim()
+                    val extraVal = newFieldValue.trim()
+                    if (extraKey.isNotEmpty() && extraVal.isNotEmpty()) {
+                        merged[extraKey] = extraVal
+                    }
+                    onSave(selectedCategory, merged)
+                },
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Save Changes")
             }
         },
         dismissButton = {

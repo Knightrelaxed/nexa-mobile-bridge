@@ -206,6 +206,8 @@ fun ChatScreen(
     var activeMenuAnchor by remember { mutableStateOf<MessageMenuAnchor?>(null) }
     var activeCategoryPickerCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
     var activeFinanceEditCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
+    var activeVaultEditCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
+    val filteredSlashCommands = remember(draftText) { filterSlashCommands(draftText) }
     var hasMicPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -613,6 +615,12 @@ fun ChatScreen(
                                     },
                                     onOpenCategoryPicker = { card -> activeCategoryPickerCard = card },
                                     onOpenFinanceEdit = { card -> activeFinanceEditCard = card },
+                                    onOpenVaultEdit = { card -> activeVaultEditCard = card },
+                                    onQuickPrompt = { prompt ->
+                                        triggerHapticTick()
+                                        requestScrollToLatestOnSend()
+                                        viewModel.sendMessage(prompt)
+                                    },
                                     onTapBubble = { tapOffset ->
                                         if (selectionState.isActive) {
                                             triggerHapticTick()
@@ -723,6 +731,27 @@ fun ChatScreen(
                 }
             )
         } else {
+            AnimatedVisibility(
+                visible = voiceRecordingState.phase == VoiceRecordingPhase.IDLE && filteredSlashCommands.isNotEmpty(),
+                enter = fadeIn(tween(120)) + slideInVertically(initialOffsetY = { it / 3 }, animationSpec = tween(150)),
+                exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 3 }, animationSpec = tween(120))
+            ) {
+                SlashCommandPaletteCard(
+                    commands = filteredSlashCommands,
+                    onSelectCommand = { spec ->
+                        triggerHapticTick()
+                        if (spec.requiresArgument) {
+                            draftText = "${spec.command} "
+                        } else {
+                            draftText = ""
+                            isExpandedComposer = false
+                            requestScrollToLatestOnSend()
+                            viewModel.sendMessage(spec.command)
+                        }
+                    }
+                )
+            }
+
             ChatInputBar(
                 draftText = draftText,
                 onDraftChange = { draftText = it },
@@ -883,6 +912,28 @@ fun ChatScreen(
                     viewModel.submitCardAction(editCard.cardId, editCard.cardType, "update_fields", payload)
                 },
                 onDismiss = { activeFinanceEditCard = null }
+            )
+        }
+
+        val vaultCard = activeVaultEditCard
+        if (vaultCard != null) {
+            VaultMetadataEditDialog(
+                card = vaultCard,
+                onSave = { category, edits ->
+                    activeVaultEditCard = null
+                    triggerHapticConfirm()
+                    val editsObj = org.json.JSONObject()
+                    edits.forEach { (k, v) -> editsObj.put(k, v) }
+                    val payload = org.json.JSONObject().apply {
+                        put("vault_row_id", vaultCard.metaLong("vault_row_id", 0L))
+                        put("category", category)
+                        put("edits", editsObj)
+                        val status = vaultCard.metaString("vault_status")
+                        if (status.isNotEmpty()) put("vault_status", status)
+                    }
+                    viewModel.submitCardAction(vaultCard.cardId, vaultCard.cardType, "update_fields", payload)
+                },
+                onDismiss = { activeVaultEditCard = null }
             )
         }
     }
@@ -1655,6 +1706,8 @@ private fun AssistantChatBubble(
     onSubmitCardAction: (cardId: String, cardType: String, actionId: String, payload: org.json.JSONObject?) -> Unit = { _, _, _, _ -> },
     onOpenCategoryPicker: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
     onOpenFinanceEdit: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
+    onOpenVaultEdit: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
+    onQuickPrompt: (String) -> Unit = {},
     onTapBubble: (windowOffset: IntOffset) -> Unit,
     onLongPressBubble: () -> Unit
 ) {
@@ -1739,9 +1792,19 @@ private fun AssistantChatBubble(
                         hapticEnabled = hapticEnabled,
                         onSubmitAction = onSubmitCardAction,
                         onOpenCategoryPicker = onOpenCategoryPicker,
-                        onOpenFinanceEdit = onOpenFinanceEdit
+                        onOpenFinanceEdit = onOpenFinanceEdit,
+                        onOpenVaultEdit = onOpenVaultEdit,
+                        onQuickPrompt = onQuickPrompt
                     )
                 } else {
+                    if (interactiveCard != null && interactiveCard.presentation == "SUMMARY_CARD") {
+                        NexaSummaryCard(
+                            card = interactiveCard,
+                            hapticEnabled = hapticEnabled,
+                            onQuickPrompt = onQuickPrompt
+                        )
+                    }
+
                     if (displayContent.isEmpty() && isStreaming) {
                         Text(
                             text = "Thinking...",
@@ -1755,7 +1818,7 @@ private fun AssistantChatBubble(
                         )
                     }
 
-                    if (interactiveCard != null) {
+                    if (interactiveCard != null && interactiveCard.presentation != "SUMMARY_CARD") {
                         if (interactiveCard.presentation == "CHIPS") {
                             NexaQuickActionChips(
                                 card = interactiveCard,
@@ -1772,7 +1835,9 @@ private fun AssistantChatBubble(
                                 hapticEnabled = hapticEnabled,
                                 onSubmitAction = onSubmitCardAction,
                                 onOpenCategoryPicker = onOpenCategoryPicker,
-                                onOpenFinanceEdit = onOpenFinanceEdit
+                                onOpenFinanceEdit = onOpenFinanceEdit,
+                                onOpenVaultEdit = onOpenVaultEdit,
+                                onQuickPrompt = onQuickPrompt
                             )
                         }
                     }
