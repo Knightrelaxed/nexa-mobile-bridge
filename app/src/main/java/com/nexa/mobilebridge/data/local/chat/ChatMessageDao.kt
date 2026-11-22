@@ -59,7 +59,7 @@ interface ChatMessageDao {
     @Query(
         """
         SELECT * FROM chat_messages
-        WHERE role = 'assistant' AND executionMetadata LIKE '%' || :cardId || '%'
+        WHERE role = 'assistant' AND executionMetadata LIKE '%"card_id":"' || :cardId || '"%'
         ORDER BY timestamp DESC, rowid DESC
         LIMIT 1
         """

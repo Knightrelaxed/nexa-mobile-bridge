@@ -109,15 +109,27 @@ fun NexaInteractiveCard(
         }
         mutableLongStateOf(initial)
     }
+    var isLocallyExpired by remember(card.cardId, card.expiresAtMs, card.status) {
+        mutableStateOf(
+            card.isPending && card.expiresAtMs > 0L && System.currentTimeMillis() > card.expiresAtMs + 3_000L
+        )
+    }
     LaunchedEffect(card.cardId, card.expiresAtMs, card.status) {
         if (!card.isPending || card.expiresAtMs <= 0L) return@LaunchedEffect
         while (true) {
             val sec = ((card.expiresAtMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L)
             remainingSec = sec
-            if (sec <= 0L) break
+            if (sec <= 0L) {
+                delay(3_000L)
+                if (card.isPending) {
+                    isLocallyExpired = true
+                }
+                break
+            }
             delay(1_000L)
         }
     }
+    val effectiveIsPending = card.isPending && !isLocallyExpired
 
     // Local selection state for multi-select cards (MEMORY_HYGIENE)
     val selectionMap = remember(card.cardId, card.selectableItems) {
@@ -148,7 +160,7 @@ fun NexaInteractiveCard(
         shape = RoundedCornerShape(12.dp),
         border = BorderStroke(
             width = 1.dp,
-            color = if (card.isPending) accentColor.copy(alpha = 0.35f) else nexaColors.cardBorder.copy(alpha = 0.6f)
+            color = if (effectiveIsPending) accentColor.copy(alpha = 0.35f) else nexaColors.cardBorder.copy(alpha = 0.6f)
         ),
         modifier = modifier.fillMaxWidth()
     ) {
@@ -205,7 +217,7 @@ fun NexaInteractiveCard(
             }
 
             // 2. Hero Value (e.g., -Rp 45.000) + Live Countdown Strip
-            if (card.heroValue.isNotEmpty() || (card.isPending && card.expiresAtMs > 0L)) {
+            if (card.heroValue.isNotEmpty() || (effectiveIsPending && card.expiresAtMs > 0L)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -229,7 +241,7 @@ fun NexaInteractiveCard(
                         )
                     }
 
-                    if (card.isPending && card.expiresAtMs > 0L) {
+                    if (effectiveIsPending && card.expiresAtMs > 0L) {
                         val mins = remainingSec / 60L
                         val secs = remainingSec % 60L
                         val timerLabel = if (remainingSec > 0L) {
@@ -361,7 +373,7 @@ fun NexaInteractiveCard(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable(enabled = card.isPending && !isSubmitting) {
+                                .clickable(enabled = effectiveIsPending && !isSubmitting) {
                                     performTapHaptic()
                                     selectionMap[item.id] = !checked
                                 }
@@ -375,7 +387,7 @@ fun NexaInteractiveCard(
                             ) {
                                 Checkbox(
                                     checked = checked,
-                                    enabled = card.isPending && !isSubmitting,
+                                    enabled = effectiveIsPending && !isSubmitting,
                                     onCheckedChange = { next ->
                                         performTapHaptic()
                                         selectionMap[item.id] = next
@@ -417,7 +429,7 @@ fun NexaInteractiveCard(
             }
 
             // 8. Footer: Active Buttons OR Locked Resolved Banner
-            if (card.isPending) {
+            if (effectiveIsPending) {
                 HorizontalDivider(
                     thickness = 0.75.dp,
                     color = nexaColors.cardBorder.copy(alpha = 0.5f)
@@ -544,12 +556,17 @@ fun NexaInteractiveCard(
             } else {
                 // Resolved / Expired locked footer
                 val badgeText = card.resolvedBadge.ifEmpty {
-                    if (card.isExpired) "Expired" else "Resolved"
+                    when {
+                        card.isExpired -> "Expired"
+                        isLocallyExpired && card.expiresLabel.contains("Auto", ignoreCase = true) -> "Auto-saved"
+                        isLocallyExpired -> "Expired"
+                        else -> "Resolved"
+                    }
                 }
                 val isNegative = badgeText.contains("Cancel", ignoreCase = true) ||
                     badgeText.contains("Reject", ignoreCase = true) ||
                     badgeText.contains("Fail", ignoreCase = true)
-                val isMuted = card.isExpired || badgeText.contains("Auto", ignoreCase = true)
+                val isMuted = card.isExpired || isLocallyExpired || badgeText.contains("Auto", ignoreCase = true)
                 val statusColor = when {
                     isNegative -> nexaColors.crimson
                     isMuted -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -696,15 +713,27 @@ fun NexaQuickActionChips(
         }
         mutableLongStateOf(initial)
     }
+    var isLocallyExpired by remember(card.cardId, card.expiresAtMs, card.status) {
+        mutableStateOf(
+            card.isPending && card.expiresAtMs > 0L && System.currentTimeMillis() > card.expiresAtMs + 3_000L
+        )
+    }
     LaunchedEffect(card.cardId, card.expiresAtMs, card.status) {
         if (!card.isPending || card.expiresAtMs <= 0L) return@LaunchedEffect
         while (true) {
             val sec = ((card.expiresAtMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L)
             remainingSec = sec
-            if (sec <= 0L) break
+            if (sec <= 0L) {
+                delay(3_000L)
+                if (card.isPending) {
+                    isLocallyExpired = true
+                }
+                break
+            }
             delay(1_000L)
         }
     }
+    val effectiveIsPending = card.isPending && !isLocallyExpired
 
     Column(
         modifier = modifier
@@ -717,11 +746,16 @@ fun NexaQuickActionChips(
             color = nexaColors.cardBorder.copy(alpha = 0.55f)
         )
 
-        if (card.isPending) {
-            if (card.expiresAtMs > 0L && remainingSec > 0L) {
+        if (effectiveIsPending) {
+            if (card.expiresAtMs > 0L) {
                 val mins = remainingSec / 60L
                 val secs = remainingSec % 60L
                 val prefix = card.expiresLabel.ifEmpty { "Expires in" }
+                val timerText = if (remainingSec > 0L) {
+                    "$prefix ${String.format(Locale.US, "%02d:%02d", mins, secs)}"
+                } else {
+                    "Finalizing..."
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -733,7 +767,7 @@ fun NexaQuickActionChips(
                         modifier = Modifier.size(12.dp)
                     )
                     Text(
-                        text = "$prefix ${String.format(Locale.US, "%02d:%02d", mins, secs)}",
+                        text = timerText,
                         style = NexaMonoTypography.codeLine.copy(fontSize = 10.5.sp),
                         color = nexaColors.amber
                     )
@@ -793,12 +827,17 @@ fun NexaQuickActionChips(
             }
         } else {
             val badgeText = card.resolvedBadge.ifEmpty {
-                if (card.isExpired) "Expired" else "Resolved"
+                when {
+                    card.isExpired -> "Expired"
+                    isLocallyExpired && card.expiresLabel.contains("Auto", ignoreCase = true) -> "Auto-saved"
+                    isLocallyExpired -> "Expired"
+                    else -> "Resolved"
+                }
             }
             val isNegative = badgeText.contains("Cancel", ignoreCase = true) ||
                 badgeText.contains("Fail", ignoreCase = true) ||
                 badgeText.contains("Skip", ignoreCase = true)
-            val isMuted = card.isExpired || badgeText.contains("Kept", ignoreCase = true)
+            val isMuted = card.isExpired || isLocallyExpired || badgeText.contains("Kept", ignoreCase = true) || badgeText.contains("Auto", ignoreCase = true)
             val statusColor = when {
                 isNegative -> nexaColors.crimson
                 isMuted -> MaterialTheme.colorScheme.onSurfaceVariant
