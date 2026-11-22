@@ -1824,7 +1824,12 @@ private fun AssistantChatBubble(
                 .then(gestureModifier)
         ) {
             Column(
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+                modifier = Modifier.padding(
+                    start = if (interactiveCard != null && interactiveCard.presentation == "CARD") 14.dp else 12.dp,
+                    end = if (interactiveCard != null && interactiveCard.presentation == "CARD") 14.dp else 12.dp,
+                    top = if (interactiveCard != null && interactiveCard.presentation == "CARD") 12.dp else 8.dp,
+                    bottom = if (interactiveCard != null && interactiveCard.presentation == "CARD") 8.dp else 6.dp
+                ),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (interactiveCard != null && interactiveCard.presentation == "CARD") {
@@ -1839,7 +1844,8 @@ private fun AssistantChatBubble(
                         onOpenMethodPicker = onOpenMethodPicker,
                         onOpenFinanceEdit = onOpenFinanceEdit,
                         onOpenVaultEdit = onOpenVaultEdit,
-                        onQuickPrompt = onQuickPrompt
+                        onQuickPrompt = onQuickPrompt,
+                        framed = false
                     )
                 } else {
                     if (interactiveCard != null && interactiveCard.presentation == "SUMMARY_CARD") {

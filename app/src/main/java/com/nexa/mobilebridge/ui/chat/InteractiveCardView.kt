@@ -1,4 +1,4 @@
-package com.nexa.mobilebridge.ui.chat
+﻿package com.nexa.mobilebridge.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -27,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -37,6 +39,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -93,6 +96,7 @@ fun NexaInteractiveCard(
     onOpenMethodPicker: (InteractiveCardData) -> Unit = {},
     onOpenVaultEdit: (InteractiveCardData) -> Unit = {},
     onQuickPrompt: (String) -> Unit = {},
+    framed: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val nexaColors = LocalNexaColors.current
@@ -135,6 +139,27 @@ fun NexaInteractiveCard(
     }
     val effectiveIsPending = card.isPending && !isLocallyExpired
 
+    // Dedicated ultra-clean Receipt layout for FINANCE_TX (zero nested box clutter, direct-tap rows, 2-button footer)
+    if (card.cardType == "FINANCE_TX") {
+        FinanceTxReceiptCard(
+            card = card,
+            effectiveIsPending = effectiveIsPending,
+            isLocallyExpired = isLocallyExpired,
+            remainingSec = remainingSec,
+            isSubmitting = isSubmitting,
+            errorMessage = errorMessage,
+            framed = framed,
+            onTapHaptic = { performTapHaptic() },
+            onSubmitAction = onSubmitAction,
+            onOpenCategoryPicker = onOpenCategoryPicker,
+            onOpenAccountPicker = onOpenAccountPicker,
+            onOpenMethodPicker = onOpenMethodPicker,
+            onOpenFinanceEdit = onOpenFinanceEdit,
+            modifier = modifier
+        )
+        return
+    }
+
     // Local selection state for multi-select cards (MEMORY_HYGIENE)
     val selectionMap = remember(card.cardId, card.selectableItems) {
         mutableStateMapOf<String, Boolean>().apply {
@@ -159,19 +184,29 @@ fun NexaInteractiveCard(
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
     }
 
-    Surface(
-        color = cardBg,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(
+    val outerColor = if (framed) cardBg else Color.Transparent
+    val outerBorder = if (framed) {
+        BorderStroke(
             width = 1.dp,
             color = if (effectiveIsPending) accentColor.copy(alpha = 0.35f) else nexaColors.cardBorder.copy(alpha = 0.6f)
-        ),
+        )
+    } else {
+        null
+    }
+
+    Surface(
+        color = outerColor,
+        shape = RoundedCornerShape(12.dp),
+        border = outerBorder,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(
+                    horizontal = if (framed) 12.dp else 2.dp,
+                    vertical = if (framed) 10.dp else 2.dp
+                ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 1. Header: Title + Subtitle + Status/Badge Pill
@@ -894,7 +929,7 @@ fun NexaQuickActionChips(
                 )
                 Text(
                     text = if (card.resolvedDetail.isNotEmpty()) {
-                        "$badgeText · ${card.resolvedDetail}"
+                        "$badgeText Â· ${card.resolvedDetail}"
                     } else {
                         badgeText
                     },
@@ -1570,4 +1605,496 @@ fun VaultMetadataEditDialog(
             }
         }
     )
+}
+
+/**
+ * Ultra-clean Receipt-First layout for FINANCE_TX cards:
+ * - Zero nested borders (renders directly as the chat bubble surface when framed = false)
+ * - Hero nominal + subject/time at top for 0.5-second scanning
+ * - Direct-tap rows for Account, Method, and Category (no 6-button clutter)
+ * - Single 2-button footer: Cancel | Select Account (or Confirm)
+ */
+@Composable
+private fun FinanceTxReceiptCard(
+    card: InteractiveCardData,
+    effectiveIsPending: Boolean,
+    isLocallyExpired: Boolean,
+    remainingSec: Long,
+    isSubmitting: Boolean,
+    errorMessage: String?,
+    framed: Boolean,
+    onTapHaptic: () -> Unit,
+    onSubmitAction: (cardId: String, cardType: String, actionId: String, payload: JSONObject?) -> Unit,
+    onOpenCategoryPicker: (InteractiveCardData) -> Unit,
+    onOpenAccountPicker: (InteractiveCardData) -> Unit,
+    onOpenMethodPicker: (InteractiveCardData) -> Unit,
+    onOpenFinanceEdit: (InteractiveCardData) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val nexaColors = LocalNexaColors.current
+    val isTransfer = card.heroTone == "TRANSFER"
+    val accentColor = when (card.accent) {
+        "EMERALD" -> nexaColors.emerald
+        "AMBER" -> nexaColors.amber
+        "CRIMSON" -> nexaColors.crimson
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val heroColor = when (card.heroTone) {
+        "INCOME" -> nexaColors.emerald
+        "TRANSFER" -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+
+    val fieldByKey = remember(card.fields) { card.fields.associateBy { it.key } }
+    val rawAccount = card.metaString("account").ifBlank {
+        fieldByKey["account"]?.value?.takeIf { !it.equals("Not selected", true) && !it.equals("Unassigned", true) } ?: ""
+    }
+    val hasAccount = isTransfer || rawAccount.isNotBlank()
+    val rawMethod = card.metaString("payment_method").ifBlank {
+        fieldByKey["payment_method"]?.value?.takeIf { !it.equals("Not selected", true) && it != "-" } ?: ""
+    }
+    val hasMethod = rawMethod.isNotBlank()
+    val categoryVal = fieldByKey["category"]?.value?.ifBlank { card.metaString("category", "Lainnya") }
+        ?: card.metaString("category", "Lainnya")
+    val noteVal = card.metaString("note").ifBlank {
+        fieldByKey["note"]?.value?.takeIf { !it.equals("Pending note", true) && it != "-" } ?: ""
+    }
+    val merchantVal = fieldByKey["merchant"]?.value?.takeIf {
+        it.isNotBlank() && !it.equals("Unknown", true) && it != "-"
+    } ?: ""
+    val timeDisplay = (fieldByKey["time"]?.value ?: card.metaString("time_display"))
+        .replace(" WIB", "")
+        .replace(" Â· ", ", ")
+        .trim()
+    val adminFeeVal = fieldByKey["admin_fee"]?.value ?: ""
+
+    val subjectLine = remember(merchantVal, noteVal) {
+        when {
+            merchantVal.isNotEmpty() && noteVal.isNotEmpty() &&
+                !noteVal.contains(merchantVal, ignoreCase = true) -> "$merchantVal Â· $noteVal"
+            noteVal.isNotEmpty() -> noteVal
+            merchantVal.isNotEmpty() -> merchantVal
+            else -> ""
+        }
+    }
+
+    val cardBg = if (nexaColors.isDark) Color(0xFF0B111A) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val outerColor = if (framed) cardBg else Color.Transparent
+    val outerBorder = if (framed) {
+        BorderStroke(1.dp, if (effectiveIsPending) accentColor.copy(alpha = 0.35f) else nexaColors.cardBorder.copy(alpha = 0.6f))
+    } else null
+
+    Surface(
+        color = outerColor,
+        shape = RoundedCornerShape(12.dp),
+        border = outerBorder,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (framed) 12.dp else 0.dp, vertical = if (framed) 10.dp else 0.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // 1. Hero Row: Amount + Type Pill + Subtle Edit Pencil
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = card.heroValue.ifEmpty { card.title },
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp
+                    ),
+                    color = heroColor,
+                    maxLines = 1
+                )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (card.badge.isNotEmpty()) {
+                        Surface(
+                            color = accentColor.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = card.badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = accentColor,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    if (effectiveIsPending && !isSubmitting) {
+                        IconButton(
+                            onClick = {
+                                onTapHaptic()
+                                onOpenFinanceEdit(card)
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit transaction",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2. Calm Subject & Time Line (tap to edit note/time)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = effectiveIsPending && !isSubmitting) {
+                        onTapHaptic()
+                        onOpenFinanceEdit(card)
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val displaySubject = subjectLine.ifEmpty { "Tap to add note" }
+                val subjectColor = if (subjectLine.isNotEmpty()) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    nexaColors.amber
+                }
+                Text(
+                    text = displaySubject,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = subjectColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (timeDisplay.isNotEmpty()) {
+                    Text(
+                        text = " Â· $timeDisplay",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // 3. Single-Line Micro-Status (Auto-save paused OR live countdown)
+            if (effectiveIsPending) {
+                if (!hasAccount) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(nexaColors.amber)
+                        )
+                        Text(
+                            text = "Select account Â· auto-save paused",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = nexaColors.amber,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else if (card.expiresAtMs > 0L) {
+                    val mins = remainingSec / 60L
+                    val secs = remainingSec % 60L
+                    val timerLabel = if (remainingSec > 0L) {
+                        "Auto-saves in ${String.format(Locale.US, "%02d:%02d", mins, secs)}"
+                    } else {
+                        "Finalizing..."
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = nexaColors.amber,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = timerLabel,
+                            style = NexaMonoTypography.codeLine.copy(fontSize = 11.sp),
+                            color = nexaColors.amber
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = nexaColors.cardBorder.copy(alpha = 0.55f))
+
+            // 4. Direct-Tap Clean Rows (Account / Method / Category)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (isTransfer && merchantVal.isNotEmpty()) {
+                    FinanceReceiptRow(
+                        label = "Route",
+                        value = merchantVal,
+                        isPlaceholder = false,
+                        isRequiredMissing = false,
+                        interactive = false,
+                        onClick = {}
+                    )
+                } else {
+                    FinanceReceiptRow(
+                        label = "Account",
+                        value = if (hasAccount) rawAccount else "Select",
+                        isPlaceholder = !hasAccount,
+                        isRequiredMissing = !hasAccount,
+                        interactive = effectiveIsPending && !isSubmitting,
+                        onClick = {
+                            onTapHaptic()
+                            onOpenAccountPicker(card)
+                        }
+                    )
+                    FinanceReceiptRow(
+                        label = "Method",
+                        value = if (hasMethod) rawMethod else "Optional",
+                        isPlaceholder = !hasMethod,
+                        isRequiredMissing = false,
+                        interactive = effectiveIsPending && !isSubmitting,
+                        onClick = {
+                            onTapHaptic()
+                            onOpenMethodPicker(card)
+                        }
+                    )
+                }
+                FinanceReceiptRow(
+                    label = "Category",
+                    value = categoryVal,
+                    isPlaceholder = false,
+                    isRequiredMissing = false,
+                    interactive = effectiveIsPending && !isSubmitting,
+                    onClick = {
+                        onTapHaptic()
+                        onOpenCategoryPicker(card)
+                    }
+                )
+                if (adminFeeVal.isNotEmpty()) {
+                    FinanceReceiptRow(
+                        label = "Admin Fee",
+                        value = adminFeeVal,
+                        isPlaceholder = false,
+                        isRequiredMissing = false,
+                        interactive = false,
+                        onClick = {}
+                    )
+                }
+            }
+
+            if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = nexaColors.crimson
+                )
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = nexaColors.cardBorder.copy(alpha = 0.55f))
+
+            // 5. Clean 2-Button Footer OR Single-Line Resolved Status
+            if (effectiveIsPending) {
+                if (isSubmitting) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Saving...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onTapHaptic()
+                                val metaPayload = try { JSONObject(card.metaJson) } catch (_: Exception) { JSONObject() }
+                                onSubmitAction(card.cardId, card.cardType, "cancel", metaPayload)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, nexaColors.crimson.copy(alpha = 0.55f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = nexaColors.crimson),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(0.38f)
+                                .heightIn(min = 38.dp)
+                        ) {
+                            Text("Cancel", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Button(
+                            onClick = {
+                                onTapHaptic()
+                                if (!hasAccount) {
+                                    onOpenAccountPicker(card)
+                                } else {
+                                    val metaPayload = try { JSONObject(card.metaJson) } catch (_: Exception) { JSONObject() }
+                                    onSubmitAction(card.cardId, card.cardType, "confirm", metaPayload)
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = nexaColors.primaryButtonFill,
+                                contentColor = nexaColors.onPrimaryButtonFill
+                            ),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(0.62f)
+                                .heightIn(min = 38.dp)
+                        ) {
+                            Text(
+                                text = if (!hasAccount) "Select Account" else "Confirm",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            } else {
+                val badgeText = card.resolvedBadge.ifEmpty {
+                    when {
+                        card.isExpired -> "Expired"
+                        isLocallyExpired && card.expiresLabel.contains("Auto", ignoreCase = true) -> "Auto-saved"
+                        isLocallyExpired -> "Expired"
+                        else -> "Recorded"
+                    }
+                }
+                val isNegative = badgeText.contains("Cancel", ignoreCase = true) ||
+                    badgeText.contains("Fail", ignoreCase = true)
+                val isMuted = card.isExpired || isLocallyExpired || badgeText.contains("Auto", ignoreCase = true)
+                val statusColor = when {
+                    isNegative -> nexaColors.crimson
+                    isMuted -> MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> nexaColors.emerald
+                }
+                val statusIcon = when {
+                    isNegative -> Icons.Default.Cancel
+                    isMuted -> Icons.Default.Schedule
+                    else -> Icons.Default.CheckCircle
+                }
+                val cleanDetail = card.resolvedDetail
+                    .replace(Regex("^[âœ…âŒâš ï¸â³ðŸ”„\\s]+"), "")
+                    .trim()
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = statusIcon,
+                        contentDescription = null,
+                        tint = statusColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (cleanDetail.isNotEmpty()) "$badgeText Â· $cleanDetail" else badgeText,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = statusColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FinanceReceiptRow(
+    label: String,
+    value: String,
+    isPlaceholder: Boolean,
+    isRequiredMissing: Boolean,
+    interactive: Boolean,
+    onClick: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = interactive, onClick = onClick)
+            .padding(vertical = 5.dp, horizontal = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (isPlaceholder && interactive) {
+            val pillColor = if (isRequiredMissing) nexaColors.amber else MaterialTheme.colorScheme.onSurfaceVariant
+            Surface(
+                color = pillColor.copy(alpha = if (isRequiredMissing) 0.14f else 0.10f),
+                shape = RoundedCornerShape(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 8.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)
+                ) {
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isRequiredMissing) FontWeight.SemiBold else FontWeight.Medium,
+                        color = pillColor
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = pillColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (interactive) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+        }
+    }
 }
