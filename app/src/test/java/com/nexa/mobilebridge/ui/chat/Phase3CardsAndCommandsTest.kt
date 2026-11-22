@@ -112,4 +112,49 @@ class Phase3CardsAndCommandsTest {
         assertTrue(filterSlashCommands("beli kopi 25rb").isEmpty())
         assertTrue(filterSlashCommands("").isEmpty())
     }
+
+    @Test
+    fun `InteractiveCardCodec round-trips FINANCE_TX prompt_text field tone accounts and payment_methods`() {
+        val raw = """
+            {
+              "version": 1,
+              "card_id": "fin_9000_unknown",
+              "card_type": "FINANCE_TX",
+              "status": "PENDING",
+              "title": "New Transaction Detected",
+              "subtitle": "Details needed",
+              "badge": "Expense",
+              "accent": "AMBER",
+              "hero_value": "-Rp 9.000",
+              "hero_tone": "EXPENSE",
+              "prompt_text": "Satu hal lagi Tuan, akun bank/dompet dan metode pembayarannya belum dipilih.",
+              "fields": [
+                {"key": "time", "label": "Time", "value": "22 Nov · 09:01 WIB"},
+                {"key": "account", "label": "Account", "value": "Not selected", "tone": "AMBER"},
+                {"key": "payment_method", "label": "Method", "value": "Not selected", "tone": "AMBER"}
+              ],
+              "accounts": ["Bank Mandiri", "Bank Jago", "Tunai"],
+              "payment_methods": ["QRIS", "Direct Debit", "Transfer bank", "Tunai"],
+              "actions": [
+                {"id": "confirm", "label": "Confirm", "style": "PRIMARY"},
+                {"id": "account", "label": "Set Account", "style": "SECONDARY", "kind": "PICK_ACCOUNT"},
+                {"id": "payment_method", "label": "Set Method", "style": "SECONDARY", "kind": "PICK_METHOD"}
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = InteractiveCardCodec.parseFromJsonString(raw)!!
+        assertTrue(parsed.promptText.contains("akun bank/dompet"))
+        assertEquals("AMBER", parsed.fields[1].tone)
+        assertEquals(listOf("Bank Mandiri", "Bank Jago", "Tunai"), parsed.accounts)
+        assertEquals(listOf("QRIS", "Direct Debit", "Transfer bank", "Tunai"), parsed.paymentMethods)
+
+        val roundTripped = InteractiveCardCodec.parseFromExecutionMetadata(
+            InteractiveCardCodec.toExecutionMetadataJson(parsed)
+        )!!
+        assertEquals(parsed.promptText, roundTripped.promptText)
+        assertEquals(parsed.accounts, roundTripped.accounts)
+        assertEquals(parsed.paymentMethods, roundTripped.paymentMethods)
+        assertEquals(parsed.fields, roundTripped.fields)
+    }
 }

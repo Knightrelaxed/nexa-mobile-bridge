@@ -205,6 +205,8 @@ fun ChatScreen(
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var activeMenuAnchor by remember { mutableStateOf<MessageMenuAnchor?>(null) }
     var activeCategoryPickerCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
+    var activeAccountPickerCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
+    var activeMethodPickerCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
     var activeFinanceEditCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
     var activeVaultEditCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
     val filteredSlashCommands = remember(draftText) { filterSlashCommands(draftText) }
@@ -614,6 +616,8 @@ fun ChatScreen(
                                         viewModel.submitCardAction(cardId, cardType, actionId, payload)
                                     },
                                     onOpenCategoryPicker = { card -> activeCategoryPickerCard = card },
+                                    onOpenAccountPicker = { card -> activeAccountPickerCard = card },
+                                    onOpenMethodPicker = { card -> activeMethodPickerCard = card },
                                     onOpenFinanceEdit = { card -> activeFinanceEditCard = card },
                                     onOpenVaultEdit = { card -> activeVaultEditCard = card },
                                     onQuickPrompt = { prompt ->
@@ -896,16 +900,53 @@ fun ChatScreen(
             )
         }
 
+        val accCard = activeAccountPickerCard
+        if (accCard != null) {
+            FinanceAccountPickerSheet(
+                card = accCard,
+                onSelectAccount = { selectedAccount ->
+                    activeAccountPickerCard = null
+                    triggerHapticTick()
+                    val payload = org.json.JSONObject().apply {
+                        put("account", selectedAccount)
+                        val key = accCard.metaString("composite_key")
+                        if (key.isNotEmpty()) put("composite_key", key)
+                    }
+                    viewModel.submitCardAction(accCard.cardId, accCard.cardType, "update_account", payload)
+                },
+                onDismiss = { activeAccountPickerCard = null }
+            )
+        }
+
+        val methodCard = activeMethodPickerCard
+        if (methodCard != null) {
+            FinancePaymentMethodPickerSheet(
+                card = methodCard,
+                onSelectMethod = { selectedMethod ->
+                    activeMethodPickerCard = null
+                    triggerHapticTick()
+                    val payload = org.json.JSONObject().apply {
+                        put("payment_method", selectedMethod)
+                        val key = methodCard.metaString("composite_key")
+                        if (key.isNotEmpty()) put("composite_key", key)
+                    }
+                    viewModel.submitCardAction(methodCard.cardId, methodCard.cardType, "update_payment_method", payload)
+                },
+                onDismiss = { activeMethodPickerCard = null }
+            )
+        }
+
         val editCard = activeFinanceEditCard
         if (editCard != null) {
             FinanceQuickEditDialog(
                 card = editCard,
-                onSave = { note, nominal ->
+                onSave = { note, nominal, dateText ->
                     activeFinanceEditCard = null
                     triggerHapticConfirm()
                     val payload = org.json.JSONObject().apply {
                         if (note.isNotEmpty()) put("note", note)
                         if (nominal.isNotEmpty()) put("nominal", nominal)
+                        if (dateText.isNotEmpty()) put("date_text", dateText)
                         val key = editCard.metaString("composite_key")
                         if (key.isNotEmpty()) put("composite_key", key)
                     }
@@ -1705,6 +1746,8 @@ private fun AssistantChatBubble(
     hapticEnabled: Boolean = true,
     onSubmitCardAction: (cardId: String, cardType: String, actionId: String, payload: org.json.JSONObject?) -> Unit = { _, _, _, _ -> },
     onOpenCategoryPicker: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
+    onOpenAccountPicker: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
+    onOpenMethodPicker: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
     onOpenFinanceEdit: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
     onOpenVaultEdit: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
     onQuickPrompt: (String) -> Unit = {},
@@ -1792,6 +1835,8 @@ private fun AssistantChatBubble(
                         hapticEnabled = hapticEnabled,
                         onSubmitAction = onSubmitCardAction,
                         onOpenCategoryPicker = onOpenCategoryPicker,
+                        onOpenAccountPicker = onOpenAccountPicker,
+                        onOpenMethodPicker = onOpenMethodPicker,
                         onOpenFinanceEdit = onOpenFinanceEdit,
                         onOpenVaultEdit = onOpenVaultEdit,
                         onQuickPrompt = onQuickPrompt

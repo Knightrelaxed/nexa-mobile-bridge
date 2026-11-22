@@ -19,7 +19,8 @@ import kotlinx.serialization.json.put
 data class CardField(
     val key: String,
     val label: String,
-    val value: String
+    val value: String,
+    val tone: String = "NEUTRAL" // NEUTRAL | PRIMARY | EMERALD | AMBER | CRIMSON
 )
 
 data class CardDiff(
@@ -63,11 +64,14 @@ data class InteractiveCardData(
     val heroTone: String = "NEUTRAL", // EXPENSE | INCOME | TRANSFER | NEUTRAL
     val expiresAtMs: Long = 0L,
     val expiresLabel: String = "",
+    val promptText: String = "",
     val confidence: Int? = null,
     val diff: CardDiff? = null,
     val fields: List<CardField> = emptyList(),
     val metrics: List<CardMetricItem> = emptyList(),
     val categories: List<String> = emptyList(),
+    val accounts: List<String> = emptyList(),
+    val paymentMethods: List<String> = emptyList(),
     val selectableItems: List<CardSelectableItem> = emptyList(),
     val actions: List<CardActionItem> = emptyList(),
     val metaJson: String = "{}",
@@ -151,7 +155,12 @@ object InteractiveCardCodec {
             val label = f.str("label").trim()
             val value = f.str("value").trim()
             if (label.isEmpty() && value.isEmpty()) null
-            else CardField(key = f.str("key", "f_$idx"), label = label, value = value)
+            else CardField(
+                key = f.str("key", "f_$idx"),
+                label = label,
+                value = value,
+                tone = f.str("tone", "NEUTRAL").uppercase()
+            )
         } ?: emptyList()
 
         val metrics = (obj["metrics"] as? JsonArray)?.mapNotNull { elem ->
@@ -168,6 +177,14 @@ object InteractiveCardCodec {
         } ?: emptyList()
 
         val categories = (obj["categories"] as? JsonArray)?.mapNotNull { elem ->
+            (elem as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        } ?: emptyList()
+
+        val accounts = (obj["accounts"] as? JsonArray)?.mapNotNull { elem ->
+            (elem as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        } ?: emptyList()
+
+        val paymentMethods = (obj["payment_methods"] as? JsonArray)?.mapNotNull { elem ->
             (elem as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
         } ?: emptyList()
 
@@ -223,11 +240,14 @@ object InteractiveCardCodec {
             heroTone = obj.str("hero_tone", "NEUTRAL").uppercase(),
             expiresAtMs = obj.long("expires_at", 0L),
             expiresLabel = obj.str("expires_label").trim(),
+            promptText = obj.str("prompt_text").trim(),
             confidence = confidence,
             diff = diff,
             fields = fields,
             metrics = metrics,
             categories = categories,
+            accounts = accounts,
+            paymentMethods = paymentMethods,
             selectableItems = selectableItems,
             actions = actions,
             metaJson = metaObj?.toString() ?: "{}",
@@ -256,6 +276,7 @@ object InteractiveCardCodec {
             put("hero_tone", card.heroTone)
             if (card.expiresAtMs > 0L) put("expires_at", card.expiresAtMs)
             if (card.expiresLabel.isNotEmpty()) put("expires_label", card.expiresLabel)
+            if (card.promptText.isNotEmpty()) put("prompt_text", card.promptText)
             if (card.confidence != null) put("confidence", card.confidence)
             if (card.diff != null) {
                 put("diff", buildJsonObject {
@@ -269,6 +290,7 @@ object InteractiveCardCodec {
                         put("key", f.key)
                         put("label", f.label)
                         put("value", f.value)
+                        if (f.tone != "NEUTRAL") put("tone", f.tone)
                     })
                 }
             })
@@ -287,6 +309,16 @@ object InteractiveCardCodec {
             if (card.categories.isNotEmpty()) {
                 put("categories", buildJsonArray {
                     card.categories.forEach { add(JsonPrimitive(it)) }
+                })
+            }
+            if (card.accounts.isNotEmpty()) {
+                put("accounts", buildJsonArray {
+                    card.accounts.forEach { add(JsonPrimitive(it)) }
+                })
+            }
+            if (card.paymentMethods.isNotEmpty()) {
+                put("payment_methods", buildJsonArray {
+                    card.paymentMethods.forEach { add(JsonPrimitive(it)) }
                 })
             }
             if (card.selectableItems.isNotEmpty()) {

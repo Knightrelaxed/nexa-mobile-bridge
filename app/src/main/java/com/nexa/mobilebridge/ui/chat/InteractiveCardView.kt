@@ -89,6 +89,8 @@ fun NexaInteractiveCard(
     onSubmitAction: (cardId: String, cardType: String, actionId: String, payload: JSONObject?) -> Unit,
     onOpenCategoryPicker: (InteractiveCardData) -> Unit,
     onOpenFinanceEdit: (InteractiveCardData) -> Unit,
+    onOpenAccountPicker: (InteractiveCardData) -> Unit = {},
+    onOpenMethodPicker: (InteractiveCardData) -> Unit = {},
     onOpenVaultEdit: (InteractiveCardData) -> Unit = {},
     onQuickPrompt: (String) -> Unit = {},
     modifier: Modifier = Modifier
@@ -341,6 +343,13 @@ fun NexaInteractiveCard(
             if (card.fields.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     card.fields.forEach { field ->
+                        val fieldValueColor = when (field.tone.uppercase()) {
+                            "AMBER" -> nexaColors.amber
+                            "EMERALD" -> nexaColors.emerald
+                            "CRIMSON" -> nexaColors.crimson
+                            "PRIMARY" -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurface
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -355,13 +364,30 @@ fun NexaInteractiveCard(
                             Text(
                                 text = field.value,
                                 style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (field.tone == "AMBER") FontWeight.SemiBold else FontWeight.Medium,
+                                color = fieldValueColor,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
+                }
+            }
+
+            // 5b. Telegram-parity Proactive Clarification Banner when missing info (account/method/note)
+            if (effectiveIsPending && card.promptText.isNotEmpty()) {
+                Surface(
+                    color = nexaColors.amber.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.75.dp, nexaColors.amber.copy(alpha = 0.40f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = card.promptText,
+                        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
                 }
             }
 
@@ -527,6 +553,8 @@ fun NexaInteractiveCard(
                                         performTapHaptic()
                                         when (act.kind) {
                                             "PICK_CATEGORY" -> onOpenCategoryPicker(card)
+                                            "PICK_ACCOUNT" -> onOpenAccountPicker(card)
+                                            "PICK_METHOD" -> onOpenMethodPicker(card)
                                             "EDIT_FINANCE" -> onOpenFinanceEdit(card)
                                             "EDIT_VAULT" -> onOpenVaultEdit(card)
                                             "SEND_PROMPT" -> if (act.prompt.isNotBlank()) onQuickPrompt(act.prompt)
@@ -967,12 +995,158 @@ fun FinanceCategoryPickerSheet(
 }
 
 /**
- * Native Quick Edit Dialog for FINANCE_TX note and nominal fields.
+ * Native 1-tap Account Picker Modal Bottom Sheet for FINANCE_TX cards.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun FinanceAccountPickerSheet(
+    card: InteractiveCardData,
+    onSelectAccount: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    val currentAccount = card.metaString("account")
+    val accounts = remember(card.accounts) {
+        if (card.accounts.isNotEmpty()) {
+            card.accounts
+        } else {
+            listOf("Bank Mandiri", "Bank Jago", "Shopee Pay", "Dana", "Gopay", "Tunai")
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Select Account",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                accounts.forEach { acc ->
+                    val isSelected = acc.equals(currentAccount, ignoreCase = true)
+                    Surface(
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            nexaColors.elevatedSurface
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else nexaColors.cardBorder
+                        ),
+                        modifier = Modifier.clickable { onSelectAccount(acc) }
+                    ) {
+                        Text(
+                            text = acc,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+/**
+ * Native 1-tap Payment Method Picker Modal Bottom Sheet for FINANCE_TX cards.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun FinancePaymentMethodPickerSheet(
+    card: InteractiveCardData,
+    onSelectMethod: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val nexaColors = LocalNexaColors.current
+    val currentMethod = card.metaString("payment_method")
+    val methods = remember(card.paymentMethods) {
+        if (card.paymentMethods.isNotEmpty()) {
+            card.paymentMethods
+        } else {
+            listOf("QRIS", "Direct Debit", "Transfer bank", "Kartu Kredit", "Tunai")
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Select Payment Method",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                methods.forEach { method ->
+                    val isSelected = method.equals(currentMethod, ignoreCase = true)
+                    Surface(
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            nexaColors.elevatedSurface
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) MaterialTheme.colorScheme.primary else nexaColors.cardBorder
+                        ),
+                        modifier = Modifier.clickable { onSelectMethod(method) }
+                    ) {
+                        Text(
+                            text = method,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+/**
+ * Native Quick Edit Dialog for FINANCE_TX note, nominal, and natural Indonesian time expression.
  */
 @Composable
 fun FinanceQuickEditDialog(
     card: InteractiveCardData,
-    onSave: (note: String, nominal: String) -> Unit,
+    onSave: (note: String, nominal: String, dateText: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var noteInput by remember(card.cardId, card.metaJson) { mutableStateOf(card.metaString("note")) }
@@ -980,6 +1154,7 @@ fun FinanceQuickEditDialog(
         val n = card.metaLong("nominal", 0L)
         mutableStateOf(if (n > 0L) n.toString() else "")
     }
+    var dateTextInput by remember(card.cardId, card.metaJson) { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1007,11 +1182,19 @@ fun FinanceQuickEditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = dateTextInput,
+                    onValueChange = { dateTextInput = it },
+                    label = { Text("Time (optional: tadi malam, jam 8 pagi)") },
+                    placeholder = { Text(card.metaString("time_display").ifEmpty { "Leave blank to keep" }) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(noteInput.trim(), nominalInput.trim()) },
+                onClick = { onSave(noteInput.trim(), nominalInput.trim(), dateTextInput.trim()) },
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Text("Update")
