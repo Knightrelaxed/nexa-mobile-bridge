@@ -21,8 +21,17 @@ class ChatVisibilityTracker @Inject constructor() {
     private val _unreadCount = MutableStateFlow(0)
     private val _openTabRequest = MutableStateFlow<NexaMainTab?>(null)
 
+    val visibleTab: StateFlow<NexaMainTab?> = _visibleTab.asStateFlow()
     val unreadCount: StateFlow<Int> = _unreadCount.asStateFlow()
     val openTabRequest: StateFlow<NexaMainTab?> = _openTabRequest.asStateFlow()
+
+    @Volatile
+    var lastExternalIntentLaunchedAtMs: Long = 0L
+        private set
+
+    fun markExternalIntentLaunched() {
+        lastExternalIntentLaunchedAtMs = System.currentTimeMillis()
+    }
 
     /** True only while the app is in the foreground AND the CHAT tab is the visible surface. */
     val chatVisible: kotlinx.coroutines.flow.Flow<Boolean> =

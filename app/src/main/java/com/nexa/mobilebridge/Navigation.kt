@@ -6,8 +6,6 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -59,14 +57,19 @@ fun MainNavigation(
     val openTabRequest by chatVisibilityTracker.openTabRequest.collectAsStateWithLifecycle()
 
     fun navigateSingleTop(destination: NavKey) {
-        val existingIdx = backStack.indexOf(destination)
-        if (existingIdx >= 0) {
-            while (backStack.size > existingIdx + 1) {
+        if (destination == MainShell) {
+            while (backStack.size > 1) {
                 backStack.removeLastOrNull()
             }
-        } else {
-            backStack.add(destination)
+            return
         }
+        if (backStack.lastOrNull() == destination) return
+        // Keep backStack at max 2 levels ([MainShell, ActiveSecondaryScreen]) so previous
+        // secondary screens and their GPU RenderNodes are disposed immediately.
+        while (backStack.size > 1) {
+            backStack.removeLastOrNull()
+        }
+        backStack.add(destination)
     }
 
     fun startVoiceCall() {
@@ -96,7 +99,14 @@ fun MainNavigation(
 
     val topRoute = backStack.lastOrNull()
     LaunchedEffect(topRoute) {
-        chatVisibilityTracker.setVisibleTab(if (topRoute == MainShell) NexaMainTab.CHAT else null)
+        val activeTab = when (topRoute) {
+            MainShell -> NexaMainTab.CHAT
+            BridgeStatus -> NexaMainTab.HUD
+            ServerLogs -> NexaMainTab.LOGS
+            RemoteTerminal -> NexaMainTab.SHELL
+            else -> null
+        }
+        chatVisibilityTracker.setVisibleTab(activeTab)
     }
 
     NavDisplay(
@@ -110,25 +120,15 @@ fun MainNavigation(
             slideInHorizontally(
                 animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
                 initialOffsetX = { fullWidth -> fullWidth }
-            ) togetherWith (
-                slideOutHorizontally(
-                    animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
-                    targetOffsetX = { fullWidth -> -fullWidth / 4 }
-                ) + fadeOut(
-                    animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
-                    targetAlpha = 0.82f
-                )
+            ) togetherWith slideOutHorizontally(
+                animationSpec = tween(NAV_FORWARD_DURATION_MS, easing = FastOutSlowInEasing),
+                targetOffsetX = { fullWidth -> -fullWidth / 4 }
             )
         },
         popTransitionSpec = {
-            (
-                slideInHorizontally(
-                    animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
-                    initialOffsetX = { fullWidth -> -fullWidth / 4 }
-                ) + fadeIn(
-                    animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
-                    initialAlpha = 0.82f
-                )
+            slideInHorizontally(
+                animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
+                initialOffsetX = { fullWidth -> -fullWidth / 4 }
             ) togetherWith slideOutHorizontally(
                 animationSpec = tween(NAV_POP_DURATION_MS, easing = FastOutSlowInEasing),
                 targetOffsetX = { fullWidth -> fullWidth }
@@ -137,14 +137,9 @@ fun MainNavigation(
         predictivePopTransitionSpec = { swipeEdge ->
             // Track thumb direction physically: left-edge swipe slides right; right-edge swipe slides left.
             val exitDirection = if (swipeEdge == NavigationEvent.EDGE_RIGHT) -1 else 1
-            (
-                slideInHorizontally(
-                    animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
-                    initialOffsetX = { fullWidth -> -exitDirection * (fullWidth / 4) }
-                ) + fadeIn(
-                    animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
-                    initialAlpha = 0.82f
-                )
+            slideInHorizontally(
+                animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
+                initialOffsetX = { fullWidth -> -exitDirection * (fullWidth / 4) }
             ) togetherWith slideOutHorizontally(
                 animationSpec = tween(NAV_PREDICTIVE_POP_DURATION_MS, easing = LinearEasing),
                 targetOffsetX = { fullWidth -> exitDirection * fullWidth }

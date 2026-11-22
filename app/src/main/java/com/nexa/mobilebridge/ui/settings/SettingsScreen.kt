@@ -37,11 +37,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -190,6 +189,7 @@ fun SettingsScreen(
     val soundPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
+        com.nexa.mobilebridge.MainActivity.clearExternalPickerLaunched()
         if (uri != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
@@ -346,7 +346,6 @@ fun SettingsScreen(
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -411,27 +410,29 @@ fun SettingsScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .imePadding()
-                .navigationBarsPadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .navigationBarsPadding(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             if (!uiState.statusNotice.isNullOrBlank()) {
-                SettingsNoticeBanner(
-                    message = uiState.statusNotice.orEmpty(),
-                    onDismiss = { viewModel.clearStatusNotice() }
-                )
+                item(key = "status_notice") {
+                    SettingsNoticeBanner(
+                        message = uiState.statusNotice.orEmpty(),
+                        onDismiss = { viewModel.clearStatusNotice() }
+                    )
+                }
             }
 
             // =================================================================
             // 1. SUMMARY
             // =================================================================
-            Column {
+            item(key = "section_summary") {
+                Column {
                 SettingsGroupCard {
                     Row(
                         modifier = Modifier
@@ -561,10 +562,12 @@ fun SettingsScreen(
                     }
                 }
             }
+            }
 
             // =================================================================
             // 2. APPEARANCE
             // =================================================================
+            item(key = "section_appearance") {
             Column {
                 SettingsGroupHeader(title = "Appearance")
                 SettingsGroupCard {
@@ -693,10 +696,12 @@ fun SettingsScreen(
                     }
                 }
             }
+            }
 
             // =================================================================
             // 3. NOTIFICATIONS & FEEDBACK
             // =================================================================
+            item(key = "section_notifications") {
             Column {
                 SettingsGroupHeader(title = "Notifications & Feedback")
                 SettingsGroupCard {
@@ -725,7 +730,10 @@ fun SettingsScreen(
                         subtitle = uiState.chatNotificationSoundLabel.let {
                             if (it == "Default Sistem") "System default" else it
                         },
-                        onClick = { soundPickerLauncher.launch(arrayOf("audio/*")) },
+                        onClick = {
+                            com.nexa.mobilebridge.MainActivity.markExternalPickerLaunched()
+                            soundPickerLauncher.launch(arrayOf("audio/*"))
+                        },
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (uiState.chatNotificationSoundUri.isNotBlank()) {
@@ -791,6 +799,7 @@ fun SettingsScreen(
                         subtitle = "Sound, vibration, and lock screen per channel",
                         showChevron = true,
                         onClick = {
+                            com.nexa.mobilebridge.MainActivity.markExternalPickerLaunched()
                             val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
                                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
                             }
@@ -800,10 +809,12 @@ fun SettingsScreen(
                     )
                 }
             }
+            }
 
             // =================================================================
             // 4. SERVER CONNECTION (View-first; Edit behind fingerprint)
             // =================================================================
+            item(key = "section_server_connection") {
             Column {
                 val showLockHeaderAction = uiState.isServerEditMode &&
                     uiState.enrollmentStatus == "ACTIVE" &&
@@ -978,10 +989,12 @@ fun SettingsScreen(
                     }
                 }
             }
+            }
 
             // =================================================================
             // 5. DEVICE SECURITY
             // =================================================================
+            item(key = "section_device_security") {
             Column {
                 SettingsGroupHeader(title = "Device Security")
                 SettingsGroupCard {
@@ -1020,10 +1033,12 @@ fun SettingsScreen(
                     )
                 }
             }
+            }
 
             // =================================================================
             // 6. DIAGNOSTICS
             // =================================================================
+            item(key = "section_diagnostics") {
             Column {
                 SettingsGroupHeader(title = "Diagnostics")
                 SettingsGroupCard {
@@ -1062,10 +1077,12 @@ fun SettingsScreen(
                     )
                 }
             }
+            }
 
             // =================================================================
             // 7. ADVANCED
             // =================================================================
+            item(key = "section_advanced") {
             Column {
                 SettingsGroupHeader(title = "Advanced")
                 SettingsGroupCard {
@@ -1187,8 +1204,11 @@ fun SettingsScreen(
                     }
                 }
             }
+            }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            item(key = "bottom_spacer") {
+                Spacer(modifier = Modifier.height(8.dp))
+            }
         }
     }
 
