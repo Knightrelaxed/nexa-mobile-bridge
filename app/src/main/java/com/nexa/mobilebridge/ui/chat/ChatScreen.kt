@@ -1823,14 +1823,16 @@ private fun AssistantChatBubble(
                 .widthIn(max = 336.dp)
                 .then(gestureModifier)
         ) {
+            val isRichCardBubble = interactiveCard != null &&
+                (interactiveCard.presentation == "CARD" || interactiveCard.presentation == "SUMMARY_CARD")
             Column(
                 modifier = Modifier.padding(
-                    start = if (interactiveCard != null && interactiveCard.presentation == "CARD") 14.dp else 12.dp,
-                    end = if (interactiveCard != null && interactiveCard.presentation == "CARD") 14.dp else 12.dp,
-                    top = if (interactiveCard != null && interactiveCard.presentation == "CARD") 12.dp else 8.dp,
-                    bottom = if (interactiveCard != null && interactiveCard.presentation == "CARD") 8.dp else 6.dp
+                    start = if (isRichCardBubble) 14.dp else 12.dp,
+                    end = if (isRichCardBubble) 14.dp else 12.dp,
+                    top = if (isRichCardBubble) 12.dp else 8.dp,
+                    bottom = if (isRichCardBubble) 8.dp else 6.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(if (interactiveCard?.presentation == "SUMMARY_CARD") 10.dp else 6.dp)
             ) {
                 if (interactiveCard != null && interactiveCard.presentation == "CARD") {
                     NexaInteractiveCard(
@@ -1847,15 +1849,35 @@ private fun AssistantChatBubble(
                         onQuickPrompt = onQuickPrompt,
                         framed = false
                     )
-                } else {
-                    if (interactiveCard != null && interactiveCard.presentation == "SUMMARY_CARD") {
-                        NexaSummaryCard(
-                            card = interactiveCard,
-                            hapticEnabled = hapticEnabled,
-                            onQuickPrompt = onQuickPrompt
+                } else if (interactiveCard != null && interactiveCard.presentation == "SUMMARY_CARD") {
+                    NexaSummaryCard(
+                        card = interactiveCard,
+                        hapticEnabled = hapticEnabled,
+                        onQuickPrompt = onQuickPrompt,
+                        framed = false,
+                        showActions = false
+                    )
+
+                    val cleanSummaryBody = remember(displayContent) {
+                        stripCardEmojisPreserveLines(displayContent)
+                    }
+                    if (cleanSummaryBody.isNotEmpty()) {
+                        HorizontalDivider(
+                            thickness = 0.6.dp,
+                            color = nexaColors.cardBorder.copy(alpha = 0.55f)
+                        )
+                        IncrementalMarkdownText(
+                            rawText = cleanSummaryBody,
+                            highlightColor = MaterialTheme.colorScheme.primary
                         )
                     }
 
+                    NexaSummaryActionBar(
+                        card = interactiveCard,
+                        hapticEnabled = hapticEnabled,
+                        onQuickPrompt = onQuickPrompt
+                    )
+                } else {
                     if (displayContent.isEmpty() && isStreaming) {
                         Text(
                             text = "Thinking...",
@@ -1869,7 +1891,7 @@ private fun AssistantChatBubble(
                         )
                     }
 
-                    if (interactiveCard != null && interactiveCard.presentation != "SUMMARY_CARD") {
+                    if (interactiveCard != null) {
                         if (interactiveCard.presentation == "CHIPS") {
                             NexaQuickActionChips(
                                 card = interactiveCard,
@@ -1886,6 +1908,8 @@ private fun AssistantChatBubble(
                                 hapticEnabled = hapticEnabled,
                                 onSubmitAction = onSubmitCardAction,
                                 onOpenCategoryPicker = onOpenCategoryPicker,
+                                onOpenAccountPicker = onOpenAccountPicker,
+                                onOpenMethodPicker = onOpenMethodPicker,
                                 onOpenFinanceEdit = onOpenFinanceEdit,
                                 onOpenVaultEdit = onOpenVaultEdit,
                                 onQuickPrompt = onQuickPrompt

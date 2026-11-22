@@ -1255,10 +1255,11 @@ fun NexaSummaryCard(
     card: InteractiveCardData,
     hapticEnabled: Boolean,
     onQuickPrompt: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    framed: Boolean = true,
+    showActions: Boolean = true
 ) {
     val nexaColors = LocalNexaColors.current
-    val haptic = LocalHapticFeedback.current
     val primaryColor = MaterialTheme.colorScheme.primary
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
 
@@ -1280,62 +1281,111 @@ fun NexaSummaryCard(
     val progressMetrics = card.metrics.filter { it.progress != null }
     val statMetrics = card.metrics.filter { it.progress == null }
 
+    // Normalize legacy verbose titles/subtitles so cached Room DB briefings look clean too
+    val displayTitle = when (card.title) {
+        "Morning Executive Brief" -> "Morning Brief"
+        "Evening Reflection" -> "Evening Brief"
+        "Monthly Budget Recap" -> "Monthly Budget"
+        "Weekly Budget Recap" -> "Weekly Budget"
+        else -> card.title
+    }
+    val legacySplit = remember(card.subtitle, card.badge) {
+        val sep = " \u00B7 "
+        if (card.badge.equals("Safe to Spend", ignoreCase = true) && card.subtitle.contains(sep)) {
+            val idx = card.subtitle.indexOf(sep)
+            Pair(card.subtitle.substring(0, idx).trim(), card.subtitle.substring(idx + sep.length).trim())
+        } else {
+            Pair("", card.subtitle)
+        }
+    }
+    val headerRightText = when {
+        legacySplit.first.isNotEmpty() -> legacySplit.first
+        card.badge.equals("Safe to Spend", ignoreCase = true) || card.badge.equals("Briefing", ignoreCase = true) -> ""
+        else -> card.badge
+    }
+    val isStatusPill = headerRightText.equals("On Track", ignoreCase = true) ||
+        headerRightText.equals("Over Limit", ignoreCase = true)
+    val displaySubtitle = legacySplit.second.takeIf {
+        it.isNotEmpty() && !it.equals(headerRightText, ignoreCase = true)
+    } ?: ""
+
+    val heroLabel = card.metaString("hero_label").ifBlank {
+        when {
+            card.badge.equals("Safe to Spend", ignoreCase = true) -> "Safe to spend today"
+            card.cardType == "BUDGET_RECAP" && card.heroTone == "EXPENSE" -> "Over budget"
+            card.cardType == "BUDGET_RECAP" -> "Net remaining"
+            else -> ""
+        }
+    }
+
+    val outerColor = if (framed) cardBg else Color.Transparent
+    val outerBorder = if (framed) BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)) else null
+
     Surface(
-        color = cardBg,
+        color = outerColor,
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+        border = outerBorder,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = if (framed) 12.dp else 0.dp, vertical = if (framed) 10.dp else 0.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+            // 1. Clean Editorial Header (Title + Date/Status + Subtitle)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = card.title,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (headerRightText.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (isStatusPill) {
+                            Surface(
+                                color = accentColor.copy(alpha = 0.14f),
+                                shape = RoundedCornerShape(7.dp)
+                            ) {
+                                Text(
+                                    text = headerRightText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = accentColor,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = headerRightText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                if (displaySubtitle.isNotEmpty()) {
+                    Text(
+                        text = displaySubtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (card.subtitle.isNotEmpty()) {
-                        Text(
-                            text = card.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (card.badge.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        color = accentColor.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = card.badge,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = accentColor,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
                 }
             }
 
+            // 2. Labeled Hero Metric (e.g. SAFE TO SPEND TODAY / Rp 150.000)
             if (card.heroValue.isNotEmpty()) {
                 val heroColor = when (card.heroTone) {
                     "INCOME" -> nexaColors.emerald
@@ -1343,39 +1393,62 @@ fun NexaSummaryCard(
                     "TRANSFER" -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.onSurface
                 }
-                Text(
-                    text = card.heroValue,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp
-                    ),
-                    color = heroColor
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (heroLabel.isNotEmpty()) {
+                        Text(
+                            text = heroLabel.uppercase(Locale.US),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                letterSpacing = 0.6.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = card.heroValue,
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 22.sp
+                        ),
+                        color = heroColor,
+                        maxLines = 1
+                    )
+                }
             }
 
-            // 2-column stat tiles (Briefing agenda/tasks/bills/goals)
+            // 3. Borderless Tonal Stat Strip (Zero nested card borders)
             if (statMetrics.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     statMetrics.chunked(2).forEach { rowItems ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Surface(
+                            color = nexaColors.elevatedSurface.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            rowItems.forEach { metric ->
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = BorderStroke(0.75.dp, nexaColors.cardBorder.copy(alpha = 0.55f)),
-                                    modifier = Modifier.weight(1f)
-                                ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                rowItems.forEachIndexed { idx, metric ->
+                                    if (idx > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(horizontal = 10.dp)
+                                                .width(0.75.dp)
+                                                .height(26.dp)
+                                                .background(nexaColors.cardBorder.copy(alpha = 0.55f))
+                                        )
+                                    }
                                     Column(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                        modifier = Modifier.weight(1f),
                                         verticalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
                                         Text(
                                             text = metric.label,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -1390,22 +1463,22 @@ fun NexaSummaryCard(
                                         )
                                     }
                                 }
-                            }
-                            if (rowItems.size == 1) {
-                                Spacer(modifier = Modifier.weight(1f))
+                                if (rowItems.size == 1) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Horizontal color-coded progress rows (Budget Recap)
+            // 4. Horizontal color-coded progress rows (Budget Recap)
             if (progressMetrics.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     progressMetrics.forEach { metric ->
                         val barColor = resolveToneColor(metric.tone)
                         val pct = (metric.progress ?: 0).coerceIn(0, 100)
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1432,8 +1505,8 @@ fun NexaSummaryCard(
                                 progress = { pct / 100f },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(5.dp)
-                                    .clip(RoundedCornerShape(3.dp)),
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
                                 color = barColor,
                                 trackColor = nexaColors.elevatedSurface
                             )
@@ -1442,35 +1515,113 @@ fun NexaSummaryCard(
                 }
             }
 
-            // Quick Follow-Up Prompt Chips
-            val promptActions = card.actions.filter { it.kind == "SEND_PROMPT" && it.prompt.isNotBlank() }
-            if (promptActions.isNotEmpty()) {
-                HorizontalDivider(
-                    thickness = 0.75.dp,
-                    color = nexaColors.cardBorder.copy(alpha = 0.5f)
+            if (showActions) {
+                NexaSummaryActionBar(
+                    card = card,
+                    hapticEnabled = hapticEnabled,
+                    onQuickPrompt = onQuickPrompt
                 )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth()
+            }
+        }
+    }
+}
+
+/**
+ * Single-row balanced quick-action bar placed cleanly at the bottom of SUMMARY_CARD bubbles.
+ */
+@Composable
+fun NexaSummaryActionBar(
+    card: InteractiveCardData,
+    hapticEnabled: Boolean,
+    onQuickPrompt: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val nexaColors = LocalNexaColors.current
+    val haptic = LocalHapticFeedback.current
+    val promptActions = remember(card.actions) {
+        card.actions.filter { it.kind == "SEND_PROMPT" && it.prompt.isNotBlank() }
+    }
+    if (promptActions.isEmpty()) return
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        HorizontalDivider(
+            thickness = 0.6.dp,
+            color = nexaColors.cardBorder.copy(alpha = 0.55f)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            promptActions.forEach { act ->
+                val shortLabel = when (act.label) {
+                    "Full Detail" -> "Detail"
+                    "Today's Tasks" -> "Tasks"
+                    "Budget Recap" -> "Budget"
+                    "Tomorrow's Schedule" -> "Tomorrow"
+                    "Skip Reflection" -> "Skip"
+                    "Recent Transactions" -> "Transactions"
+                    "Monthly Analytics" -> "Analytics"
+                    else -> act.label
+                }
+                Surface(
+                    onClick = {
+                        if (hapticEnabled) {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        onQuickPrompt(act.prompt)
+                    },
+                    shape = RoundedCornerShape(9.dp),
+                    color = nexaColors.elevatedSurface.copy(alpha = 0.65f),
+                    border = BorderStroke(0.75.dp, nexaColors.cardBorder.copy(alpha = 0.65f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
                 ) {
-                    promptActions.forEach { act ->
-                        CardActionButton(
-                            action = act,
-                            label = act.label,
-                            enabled = true,
-                            onClick = {
-                                if (hapticEnabled) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                }
-                                onQuickPrompt(act.prompt)
-                            }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 6.dp)
+                    ) {
+                        Text(
+                            text = shortLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
         }
     }
+}
+
+fun stripCardEmojisPreserveLines(raw: String): String {
+    if (raw.isEmpty()) return ""
+    val sb = StringBuilder(raw.length)
+    var i = 0
+    while (i < raw.length) {
+        val cp = raw.codePointAt(i)
+        val charCount = Character.charCount(cp)
+        val isEmoji = (cp in 0x1F000..0x1FAFF) ||
+            (cp in 0x2600..0x27BF) ||
+            (cp in 0x2300..0x23FF) ||
+            cp == 0xFE0F ||
+            cp == 0x200D
+        if (!isEmoji) {
+            sb.appendCodePoint(cp)
+        }
+        i += charCount
+    }
+    return sb.toString()
+        .lines()
+        .joinToString("\n") { line -> line.replace(Regex("[ \\t]{2,}"), " ").trimEnd() }
+        .trim()
 }
 
 /**
