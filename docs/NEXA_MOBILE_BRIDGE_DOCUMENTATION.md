@@ -1,642 +1,271 @@
-# N.E.X.A Mobile Bridge — Architecture & Technical Documentation
+# N.E.X.A Mobile Bridge - Architecture & Technical Documentation
 
-**Document Version:** 1.0 (Super Complete / Production Edition)  
-**Target Device Hardware:** Samsung Galaxy A33 5G (Android 16 / One UI 8)  
-**Package Name:** `com.nexa.mobilebridge`  
-**Project Path:** `d:\nexa-mobile-bridge`
+| | |
+|---|---|
+| **Document Version** | 3.0 (AI Control Center & Native Interactive Cards Edition - 22 November 2026) |
+| **Target Device** | Samsung Galaxy A33 5G (`SM-A336E`), Android 16 (API 36), One UI 8.0 (`arm64-v8a`, `PAGE_SIZE = 4096`) |
+| **Package Name** | `com.nexa.mobilebridge` |
+| **Workspace Path** | `c:\workspace\nexa-mobile-bridge` |
+| **Related Docs** | [RAM_USAGE_AUDIT_REPORT.md](./RAM_USAGE_AUDIT_REPORT.md), [JSON_PROTOCOL_SPECIFICATION.md](./JSON_PROTOCOL_SPECIFICATION.md), [MOBILE_BRIDGE_TESTING_REPORT.md](./MOBILE_BRIDGE_TESTING_REPORT.md) |
 
 ---
 
 ## 1. Executive Summary & Architectural Philosophy
 
-**N.E.X.A Mobile Bridge** adalah jembatan eksekutif seluler Android (*Thin-Client Executive Bridge*) yang menghubungkan smartphone pribadi pengguna dengan **N.E.X.A (Cloud / Local Server)** secara real-time via bidirectional WebSocket protocol.
+**N.E.X.A Mobile Bridge** telah berevolusi dari jembatan perangkat keras (*Thin-Client Executive Bridge*) menjadi **AI Control Center Native** yang menghubungkan smartphone pemilik langsung ke **N.E.X.A Server** melalui protokol Dual-WebSocket aman tanpa ketergantungan pada aplikasi chat pihak ketiga maupun WebView.
 
-### 🌟 Tiga Pilar Utama Arsitektur:
-1. **Thin-Client Logic (Server-Centric Processing):**
-   Aplikasi Android tidak memproses logika AI, pengambil keputusan, atau pembentukan teks percakapan. Seluruh otak N.E.X.A berada di server. Perangkat Android berfungsi sebagai **Interface & Executor Level Hardware** (kamera, lokasi, notifikasi, kontrol volume, interupsi audio, UI overlay, dan sensor).
-2. **Resiliensi Immortality Tanpa Root (Knox & Warranty Safe):**
-   Aplikasi mengeksploitasi izin akses tertinggi resmi Android (*Special Access / Privilege APIs*) seperti `NotificationListenerService`, `AccessibilityService`, `SYSTEM_ALERT_WINDOW`, dan `Notification Policy Access (DND)` tanpa perlu melakukan root pada Samsung Galaxy A33 5G (One UI 8).
-3. **Ketahanan 24/7 & Efisiensi Daya:**
-   Menjalankan `Foreground Service` bertanda `START_NOT_STICKY` dikombinasikan dengan `Partial WakeLock` dan sistem *smart exponential backoff* agar dapat bertahan hidup 24/7 di latar belakang tanpa dibunuh oleh manajemen memori OS dan tanpa menguras daya baterai.
+### Empat Pilar Arsitektur Utama:
+1. **100% Native Jetpack Compose (Zero WebView):**
+   Seluruh antarmuka Chat AI, 12 Kartu Interaktif, Palette Perintah Slash (`/`), Log Monitor, Terminal PTY, hingga Pengaturan dirender native dengan Compose + Canvas OLED. Tidak memakai Chromium/WebView sehingga hemat RAM dan bebas *thermal throttling* pada Exynos 1280.
+2. **Dual-WebSocket Terisolasi (`/ws` JSON + Binary PCM vs `/io/*` Sidecar Biner):**
+   - **Koneksi A (`/ws` -> Node.js Core):** Tetap hidup 24 jam di `NexaBridgeService` untuk eksekusi perintah hardware, telemetri adaptif, challenge/tiket autentikasi, AI Chat streaming, Voice Note, Kartu Interaktif, Step-Up Keuangan, serta audio PCM Live Voice.
+   - **Koneksi B (`/io/logs` & `/io/term` -> Go Sidecar `nexa-io`):** Bersifat **on-demand** (hanya terbuka saat tab Logs atau Terminal tampil di layar dan dihentikan otomatis saat keluar layar atau layar mati), memakai frame biner berkinerja tinggi `[ch:u8][op:u8][payload]` serta tiket Ed25519 terikat biometrik.
+3. **M-Banking Safe & Hardware-Backed Security (Tanpa Root & Tanpa AccessibilityService):**
+   Seluruh kode dan manifest `NexaAccessibilityService` telah dihapus (`FR-CORE-03`) agar aplikasi mobile banking tidak memblokir perangkat. Deteksi aplikasi aktif bermigrasi ke `UsageStatsManager` (`AppUsageTracker.kt`), sementara perintah sensitif keuangan, akses log, dan shell VPS dilindungi kunci perangkat keras **Android Keystore ECDSA P-256** + `BiometricPrompt` (`BIOMETRIC_STRONG`).
+4. **Arsitektur Dua Lapis untuk Efisiensi RAM & Baterai 24/7:**
+   - **Lapis 1 (Mesin Background Abadi):** `NexaBridgeService` (`START_STICKY`) beserta komponen `@Singleton` Hilt (WebSocket-A, `DeviceCommandDispatcher`, `ChatRepository`, `ChatNotificationManager`, TTS, Geofence, `BridgePowerLockManager` on-demand) bertahan di RAM fisik **~50,0 MB** saat standby.
+   - **Lapis 2 (Kanvas Visual & GPU On-Demand):** `MainActivity` melepaskan cache GPU (`TRIM_MEMORY_UI_HIDDEN`) secara instan saat ke Home/layar mati dan melakukan *Standby UI Hibernation* (`finish()`) setelah masa tenggang aman, mengembalikan jumlah `ViewRootImpl` menjadi `0` tanpa mengganggu panggilan suara, step-up biometrik, atau masa resume terminal 120 detik.
 
 ---
 
 ## 2. Peta Lengkap Struktur Proyek & Modul (`com.nexa.mobilebridge`)
 
-```
-d:\nexa-mobile-bridge\app\src\main\java\com\nexa\mobilebridge\
- ├── NexaBridgeApp.kt                   --> Root Application Class (Hilt @HiltAndroidApp)
- ├── MainActivity.kt                    --> UI Window Host Activity & Edge-to-Edge Container
- ├── Navigation.kt & NavigationKeys.kt  --> Jetpack Compose Navigation Graph
- ├── NexaBridgeService.kt               --> Main Foreground Service & Core Controller Loop
- ├── NexaAccessibilityService.kt        --> System Accessibility Service (Screenshot & Global Actions)
- ├── TransparentCameraActivity.kt       --> Background CameraX Capture Activity (Transparent UI)
+```text
+c:\workspace\nexa-mobile-bridge\app\src\main\java\com\nexa\mobilebridge\
+ ├── NexaBridgeApp.kt                     --> Root Application (@HiltAndroidApp)
+ ├── MainActivity.kt                      --> Single-Activity Compose Host, Deep-Link, & Standby UI Hibernation
+ ├── Navigation.kt & NavigationKeys.kt    --> Navigation 3 NavDisplay (MainShell, BridgeStatus, Settings, ServerLogs, RemoteTerminal)
+ ├── NexaBridgeService.kt                 --> Main Foreground Service (connectedDevice|specialUse|microphone, START_STICKY)
+ ├── TransparentCameraActivity.kt         --> Background CameraX Capture Activity (Translucent UI)
  │
- ├── core/                              --> Core Engine Components
+ ├── core/
+ │    ├── auth/
+ │    │    └── TicketAuthRepository.kt    --> Challenge-Response Nonce -> Keystore ECDSA -> Ed25519 Ticket (/io/logs & /io/term)
  │    ├── context/
- │    │    └── ContextEngine.kt         --> Multi-Sensor Synthesis Engine & Rule Assessor
- │    ├── sensor/
- │    │    ├── SensorObserverManager.kt --> Hardware Sensor Listener (Light, Motion, Pickup, Step Counter)
- │    │    ├── GeofenceManager.kt       --> Google Play Services Geofencing Orchestrator
- │    │    └── GeofenceBroadcastReceiver.kt --> Background Geofence Transition Receiver
+ │    │    └── ContextEngine.kt           --> Multi-Sensor & Geofence Context Synthesis Engine
  │    ├── di/
- │    │    ├── AppModule.kt             --> Hilt Dependency Injection (Context, DataStore)
- │    │    └── NetworkModule.kt          --> Hilt OkHttpClient & Json Serialization Config
+ │    │    ├── AppModule.kt               --> Hilt DI (Context, DataStore, Room NexaDatabase & DAO)
+ │    │    └── NetworkModule.kt           --> Hilt DI (OkHttpClient ping 20s, kotlinx.serialization Json)
  │    ├── network/
- │    │    ├── NexaWebSocketClient.kt   --> OkHttp WebSocket Client & HMAC verification router
- │    │    ├── NexaHttpClient.kt        --> HTTP Client Helper
- │    │    └── ReconnectOrchestrator.kt  --> 4-Phase Tiered Smart Reconnect State Engine
+ │    │    ├── NexaWebSocketClient.kt     --> WS-A Router (Chat, Cards, Voice Notes, Step-Up, Commands, Live Voice PCM)
+ │    │    └── ReconnectOrchestrator.kt   --> 4-Phase Tiered Smart Reconnect State Engine
+ │    ├── power/
+ │    │    └── BridgePowerLockManager.kt  --> Reference-Counted On-Demand WakeLock & WifiLock (15s cmd / 30m call cap)
+ │    ├── receiver/
+ │    │    └── BootCompletedReceiver.kt   --> Auto-Start NexaBridgeService on BOOT_COMPLETED / QUICKBOOT_POWERON
  │    ├── security/
- │    │    └── HmacVerifier.kt          --> HMAC-SHA256 Signature Validation Engine (GodMode)
+ │    │    ├── BiometricAuthHelper.kt     --> BiometricPrompt STRONG wrapper & CryptoObject signing
+ │    │    ├── DeviceKeystoreManager.kt   --> Hardware ECDSA secp256r1 Keypair, SPKI DER & SHA-256 fingerprint
+ │    │    ├── HmacVerifier.kt            --> HMAC-SHA256 validation for privileged server commands
+ │    │    ├── SecretKeyStoreCipher.kt    --> AES-GCM Keystore encryption for locally stored tokens/secrets
+ │    │    └── WindowSecureEffect.kt      --> Reference-counted FLAG_SECURE controller via findActivity()
+ │    ├── sensor/
+ │    │    ├── GeofenceManager.kt         --> Play Services GeofencingClient orchestrator
+ │    │    ├── GeofenceModel.kt           --> Dynamic geofence data models
+ │    │    ├── GeofenceBroadcastReceiver.kt --> Background geofence transition handler
+ │    │    └── SensorObserverManager.kt   --> Controlled on-demand sensor lifecycle manager
+ │    ├── usage/
+ │    │    └── AppUsageTracker.kt         --> M-Banking safe active app discipline monitor via UsageStatsManager
  │    └── util/
- │         └── ConnectionState.kt      --> Sealed Class for UI Connection Status
+ │         └── ConnectionState.kt         --> Sealed connection & phase state models
  │
- ├── data/                              --> Data Persistence Layer
- │    ├── DataRepository.kt             --> DataStore Preferences Accessor
- │    └── local/                        --> Preferences keys definition
+ ├── data/
+ │    ├── chat/
+ │    │    ├── ChatCopyText.kt            --> Clean text/markdown copy sanitizer
+ │    │    ├── ChatRepository.kt          --> Offline-first Room + Paging 3, stream router, card updates & step-up handler
+ │    │    ├── ChatStreamConsumer.kt      --> Per-stream Channel (~33 ms UI batching + 5s checkpoint + NonCancellable)
+ │    │    ├── ChatVisibilityTracker.kt   --> Visible tab state, unread counter & notification deep-link router
+ │    │    ├── InteractiveCardModels.kt   --> InteractiveCardCodec & 12 card models (CardField, Metric, Action, etc.)
+ │    │    ├── VoiceNoteMetadata.kt       --> Voice note audio metadata & 48-bar waveform codec
+ │    │    ├── VoiceNotePlayer.kt         --> MediaPlayer wrapper with progress polling & cleanup
+ │    │    └── VoiceNoteRecorder.kt       --> OGG/M4A/WebM/WAV voice note recorder (max 3 min / 1.5 MB)
+ │    ├── local/
+ │    │    ├── NexaPreferencesDataStore.kt --> Theme, accent, heartbeat (60s/120s), TTS/haptic, & terminal font prefs
+ │    │    └── chat/
+ │    │         ├── ChatMessageEntity.kt  --> Room table (unique index on clientMsgId + role)
+ │    │         ├── ChatMessageDao.kt     --> PagingSource, checkpoints, exact card_id lookup, & cleanup queries
+ │    │         └── NexaDatabase.kt       --> Room database (`nexa_control_center.db`)
+ │    ├── logs/
+ │    │    ├── CircularLogBuffer.kt       --> Fixed 2.000-entry thread-safe ring buffer with monotonic stableId
+ │    │    ├── LogBinaryProtocol.kt       --> 13-byte binary header parser/encoder (unit_id, prio, cat_flags)
+ │    │    └── SidecarLogsClient.kt       --> On-demand WSS `/io/logs` client with credit window flow control
+ │    └── terminal/
+ │         ├── ModifierState.kt           --> Shared IDLE / ONCE / LOCKED state for CTRL & ALT
+ │         ├── SidecarTerminalClient.kt   --> On-demand WSS `/io/term` client + 64 KiB credit + RESUME offset
+ │         ├── TerminalBinaryProtocol.kt  --> Binary PTY codec (OPEN, DATA, CREDIT, RESIZE, RESUME, CLOSE, ERR)
+ │         └── Vt100TerminalEmulator.kt   --> Native ANSI xterm-256color / UTF-8 / cursor / 1.000-line scrollback engine
  │
- ├── dispatcher/                        --> Command Execution Layer
- │    ├── DeviceCommandDispatcher.kt   --> Main Router for incoming WebSocket commands
- │    └── handler/                      --> 11 Modular Hardware Command Handlers
- │         ├── AppLauncherHandler.kt   --> App Launching & Intent Resolver
- │         ├── BatteryHandler.kt       --> Battery Level & Charging Status Sensor
- │         ├── CameraHandler.kt        --> Front/Back Transparent CameraX Trigger
- │         ├── FlashlightHandler.kt    --> Torch Light Switch via CameraManager
- │         ├── LocationHandler.kt      --> GPS/Network Location & Geocoder Address Resolver
- │         ├── NetworkHandler.kt       --> Wi-Fi State & Network Telemetry Sensor
- │         ├── OverlayHandler.kt       --> System Alert Window Launcher
- │         ├── ScreenHandler.kt        --> Home, Back, Recents Navigation Actions
- │         ├── ScreenshotHandler.kt    --> Base64 Screenshot via Accessibility API
- │         ├── TtsHandler.kt           --> Text-to-Speech Engine with Indonesian Locale
- │         └── VolumeHandler.kt        --> Multi-Stream Volume & DND Interruption Filter
+ ├── dispatcher/
+ │    ├── DeviceCommandDispatcher.kt      --> Central router for hardware, sensor, audio, call & deprecated stubs
+ │    └── handler/ (16 Modular Handlers)
+ │         ├── AppLauncherHandler.kt, AudioPlayerHandler.kt, BatteryHandler.kt, CameraHandler.kt,
+ │         ├── ClipboardHandler.kt, FakeCallHandler.kt, FlashlightHandler.kt, GeofenceHandler.kt,
+ │         ├── IntentHandler.kt, LightSensorHandler.kt, LocationHandler.kt, NetworkHandler.kt,
+ │         ├── OverlayHandler.kt, ScreenHandler.kt, ScreenshotHandler.kt, TtsHandler.kt,
+ │         └── VolumeHandler.kt (+ VoiceRecorderHandler.kt, VoiceStreamHandler.kt)
  │
- ├── protocol/                          --> Data Exchange Protocols (Models)
- │    ├── NexaCommand.kt               --> Incoming Command JSON Structure
- │    ├── CommandResult.kt             --> Execution Result JSON Structure
- │    ├── NexaActions.kt               --> Command Action String Constants (16 Actions)
- │    ├── TelemetryReport.kt           --> Periodic Telemetry JSON Payload Model
- │    └── ContextReport.kt             --> High-Level Real-Time Context Update Event Payload
+ ├── notification/
+ │    ├── ChatNotificationManager.kt      --> MessagingStyle conversation notifications, 3 priority channels & Step-Up alert
+ │    └── ChatNotificationActionReceiver.kt --> Background Inline Direct Reply & Mark-as-Read handler
  │
- ├── service/                           --> Background Listening Services
- │    └── NexaNotifListenerService.kt  --> Intercept System Notification Events (Alarm Dismiss for Morning Briefing)
+ ├── protocol/
+ │    ├── CallEvent.kt, CommandResult.kt, ContextReport.kt, NexaActions.kt, NexaCommand.kt, TelemetryReport.kt
  │
- └── ui/                                --> Modern Jetpack Compose UI
+ ├── service/
+ │    ├── NexaNotifListenerService.kt     --> Clock Alarm Dismiss listener for Morning Briefing
+ │    ├── ScreenCaptureService.kt         --> MediaProjection screen capture service for live inspection
+ │    └── FloatingOverlayManager.kt & FloatingLifecycleOwner.kt --> System overlay lifecycle support
+ │
+ ├── theme/
+ │    └── Color.kt, Theme.kt, Type.kt     --> NexaCyberDark OLED (#0A0E14) & Light theme + JetBrains Mono typography
+ │
+ └── ui/
+      ├── call/
+      │    ├── FakeCallActivity.kt        --> Lockscreen-capable Live Voice & 6-state call UI
+      │    └── NexaExpressiveEyes.kt      --> OLED animated visor eyes (pauses when Lifecycle < STARTED)
+      ├── chat/
+      │    ├── ChatScreen.kt              --> Chat-First LazyColumn (reverseLayout), markdown, voice bar & TTS controls
+      │    ├── ChatViewModel.kt           --> Paging 3, draft/voice recording, reply/selection, card & step-up flows
+      │    ├── ChatMessageActions.kt      --> Selection top bar, reply preview, contextual action menu
+      │    ├── InteractiveCardView.kt     --> Renderers for all 12 native interactive cards, Bottom Sheets & Edit Dialogs
+      │    ├── FinanceStepUpBottomSheet.kt --> Biometric Finance Authorization Modal Bottom Sheet (30s countdown)
+      │    └── SlashCommandPalette.kt     --> Floating `/` command autocomplete palette
+      ├── components/
+      │    └── NexaChrome.kt              --> Unified Top AppBar (NexaExpressiveEyes, connection status, Call & Settings)
       ├── hud/
-      │    ├── HudScreen.kt             --> Main Executive Dashboard UI
-      │    └── HudViewModel.kt          --> HUD State Holder & Connection Toggle
+      │    └── HudScreen.kt & HudViewModel.kt --> Bridge Status dashboard, live telemetry, redacted Command Log & service stop guard
+      ├── logs/
+      │    └── LogViewerScreen.kt & LogViewerViewModel.kt --> Realtime log viewer (ALL / FINANCE / BRIDGE / ERRORS ONLY)
       ├── overlay/
-      │    └── OverlayActivity.kt       --> Dynamic System Overlay Dialog with Dynamic Server Options
-      └── settings/
-           ├── SettingsScreen.kt        --> Configuration Screen (WS URL, Token, HMAC Secret)
-           └── SettingsViewModel.kt     --> Settings DataStore ViewModel
+      │    └── OverlayActivity.kt         --> Server-driven floating decision dialog
+      ├── settings/
+      │    └── SettingsScreen.kt, SettingsComponents.kt, SettingsSheetsAndDialogs.kt, SettingsViewModel.kt
+      └── terminal/
+           └── TerminalScreen.kt, TerminalViewModel.kt, TerminalAccessoryBar.kt, TerminalInputSink.kt
 ```
 
 ---
 
-## 3. Subsystem & Analisis Alur Kerja (Workflow Systems)
+## 3. Navigasi & Antarmuka Chat-First (`Navigation.kt` & `NexaChrome.kt`)
 
-### 3.1. Smart Reconnect Subsystem (4-Phase Tiered Retry)
+Aplikasi mengusung arsitektur **Pure Chat-First** (tanpa Bottom Navigation Bar permanen):
+- **Root Screen (`MainShell`):** Langsung menampilkan **Chat AI Native** dengan `NexaTopBar` yang memuat kapsul mata OLED `NexaExpressiveEyes`, indikator status koneksi WS-A, tombol cepat `Live Voice Call`, dan tombol `Settings`.
+- **Akses Diagnostik Terpusat lewat `Settings` (atau Notifikasi Deep-Link):**
+  - `BridgeStatus` (HUD Telemetri & Kontrol Service)
+  - `ServerLogs` (Log Monitor On-Demand)
+  - `RemoteTerminal` (Shell PTY VPS)
+- **Disiplin Tumpukan Memori (`backStack`):**
+  - Berpindah antar layar diagnostik (`BridgeStatus`, `ServerLogs`, `RemoteTerminal`) selalu membersihkan layar sekunder sebelumnya sehingga stack tetap maksimal 2 lapis `[MainShell, LayarAktif]`.
+  - Pengecualian aman: membuka `Settings` dari dalam `RemoteTerminal` (misal untuk mengubah ukuran font terminal) menumpuk `Settings` di atas `RemoteTerminal` sementara agar tombol `Back` langsung kembali ke sesi terminal yang masih aktif.
+  - Transisi halaman memakai slide horizontal murni tanpa *offscreen alpha compositing layer* (`fadeIn`/`fadeOut` dihapus demi hemat GPU Exynos 1280).
 
-Sistem ini mencegah pengurasan baterai dan kelelahan koneksi saat N.E.X.A Server luring/down, sekaligus memberikan transparansi lengkap kepada pengguna melalui **Bilah Notifikasi Sistem** dan **Narasi Suara (TTS)**.
+---
 
-```
-[KONEKSI TERPUTUS]
-       │
-       ▼
-FASE 1 — Immediate (20x Attempt | Exponential Backoff 1s ➔ 30s)
-       │
-       └── Semua 20x Gagal ➔ Tunggu 1 Jam (Silence)
-                                  │
-                                  ▼
-                     FASE 2 — +1 Jam (20x Attempt)
-                                  │
-                                  └── Gagal ➔ 🔔 Heads-up Notif + 🎙️ TTS ➔ Tunggu 6 Jam
-                                                                                │
-                                                                                ▼
-                                                                  FASE 3 — +6 Jam (20x Attempt)
-                                                                                │
-                                                                                └── Gagal ➔ 🔔 Heads-up Notif + 🎙️ TTS ➔ Tunggu 24 Jam
-                                                                                                                              │
-                                                                                                                              ▼
-                                                                                                                FASE 4 — +24 Jam (20x Attempt)
-                                                                                                                              │
-                                                                                                                              └── Gagal ➔ ❌ Notif Final + 🎙️ TTS ➔ BERHENTI TOTAL
-```
+## 4. Pilar 1: Chat AI Native, Voice Notes, Slash Commands & 12 Kartu Interaktif
 
-#### Klasifikasi Exception Otomatis:
-| Exceptions Class | Identifikasi Tipe Error | Narasi Suara (TTS) |
+### 4.1. Alur Pesan & Ketahanan Offline-First (`ChatRepository.kt` & `ChatStreamConsumer.kt`)
+- **Penyimpanan Lokal (Room + Paging 3):** Tabel `chat_messages` di `nexa_control_center.db` memiliki indeks unik `(clientMsgId, role)` dan indeks `timestamp`. Paging 3 menggunakan `pageSize = 20`, `prefetchDistance = 5`, `maxSize = 100`.
+- **Batching Stream (~33 ms) & Checkpoint (5 detik):** Token `STREAMING_CHUNK` dikumpulkan dalam `Channel<StreamToken>` khusus per stream (~30 pembaruan UI/detik agar bebas GC jank) dan di-checkpoint ke Room setiap ~5 detik. Finalisasi dijalankan di konteks `NonCancellable` (`SENT`, `INTERRUPTED`, atau `FAILED`).
+- **Offline Queue & Resume (`CHAT_RESUME`):** Pesan `SENDING` otomatis terkirim ulang secara idempoten dengan `client_msg_id` yang sama saat koneksi pulih. Saat reconnect di tengah stream, klien mengirim `CHAT_RESUME { client_msg_id, last_seq }` untuk melanjutkan chunk yang tertinggal.
+- **Voice Notes (`CHAT_VOICE_SEND`):** Merekam audio OGG/M4A/WebM/WAV (maksimal 3 menit / 1,5 MB) dengan visualisasi waveform 48 bar (`VoiceNoteMetadata.kt`). Di server, audio ditranskrip terlebih dahulu lalu masuk ke jalur NLU & interceptor yang **100% sama** dengan pesan teks (`executeAndStreamChat`), termasuk mampu memicu dan memperbarui kartu interaktif.
+- **Reply Kontekstual, Text Selection, & TTS Lokal:** Setiap bubble N.E.X.A mendukung swipe-to-reply, tap menu aksi (Reply, Copy bersih, Delete, Read Aloud TTS `id-ID`), serta multi-select.
+
+### 4.2. Palette Perintah Slash (`SlashCommandPalette.kt`)
+Mengetik `/` di kolom input memunculkan palette perintah cepat di atas bar input tanpa perlu mengetik manual, dieksekusi langsung di server tanpa membebani LLM router:
+
+| Perintah | Deskripsi | Output UI |
 |---|---|---|
-| `UnknownHostException` | Tidak Ada Internet / DNS Gagal | *"H P tidak dapat menemukan server N E X A. Pastikan koneksi internet aktif"* |
-| `ConnectException` | Server Offline / Koneksi Ditolak | *"Server N E X A tidak dapat dihubungi. Server kemungkinan sedang offline atau dalam pemeliharaan"* |
-| `SocketTimeoutException` | Request Timeout | *"Koneksi ke server N E X A habis waktu tunggu. Server mungkin sedang kelebihan beban"* |
-| `SSLException` | SSL / Security Certificate Error | *"Koneksi gagal karena masalah keamanan S S L. Periksa konfigurasi sertifikat server"* |
-| *Lainnya* | Unclassified Error | *"Koneksi N E X A gagal dengan error: [tech message]"* |
+| `/briefing` *(atau `/morning`, `/evening`)* | Ringkasan pagi / refleksi malam, cuaca, agenda, tugas & safe-to-spend | Kartu `BRIEFING_SUMMARY` + narasi bersih |
+| `/budget` *(atau `/anggaran`, `/rekap`)* | Rekap anggaran bulanan/mingguan lengkap per kategori | Kartu `BUDGET_RECAP` + progress bar |
+| `/vault` | Meninjau & menyunting metadata arsip dokumen Vault terbaru | Kartu `VAULT_METADATA` |
+| `/search <kata kunci>` | Mencari riwayat percakapan lampau dari memori jangka panjang | Hasil pencarian riwayat chat |
+| `/playbook` | Memeriksa aturan playbook adaptif aktif atau `undo <INTENT>` | Status playbook |
+| `/capabilities` | Menampilkan daftar kapabilitas resmi modul N.E.X.A & versi server | Daftar kapabilitas |
+| `/trigger_weekly` | Menjalankan Weekly Cognitive Identity Inference secara manual | Konfirmasi + push kartu proaktif |
 
-> 💡 **Aturan Volume TTS Alert:**  
-> Peringatan suara kegagalan koneksi menggunakan **volume media yang sedang aktif saat itu** tanpa memaksanya naik ke 100%, sehingga tidak mengejutkan pengguna jika HP sedang di-mute atau volume rendah.
+### 4.3. Sistem Kartu Interaktif Native (12 Jenis Kartu)
+Kartu dikirim dari `card_handler.js` melalui field `card` pada `STREAM_FINAL` / `CHAT_PROACTIVE`, disimpan di kolom `executionMetadata` Room (`InteractiveCardCodec`), dan diperbarui secara live di chat tanpa bubble duplikat melalui frame **`CARD_UPDATE`**. Interaksi tombol dari HP dikirim lewat **`CARD_ACTION`**.
 
----
+| No | `card_type` | Presentasi | Fungsi & Interaksi Native |
+|:---:|---|---|---|
+| 1 | `FINANCE_TX` | `CARD` | **Struk Keuangan Receipt-First:** Nominal monospace besar, pill tipe (`Expense`/`Income`/`Transfer`), baris tap langsung (`Account`, `Method`, `Category`), ikon pensil untuk dialog edit lengkap (nominal, waktu alami Indonesia seperti *"tadi malam jam 8"*, *"kemarin sore"*, catatan), 1-tap Picker Bottom Sheet (`Account`, `Method`, `Category`), banner pengingat info kurang, dan 2 tombol footer (`Cancel` \| `Select Account` / `Confirm`). Dilengkapi **Hard Account Gate**: auto-save 5 menit dan Confirm diblokir jika `Account` belum dipilih. Pembaruan lewat teks/voice menerapkan **Opsi A**: kartu di atas langsung ter-update live sementara balasan chat hanya 1 kalimat ringkas bebas emoji dan menampilkan saldo akun terkini. |
+| 2 | `BRIEFING_SUMMARY` | `SUMMARY_CARD` | **Editorial Morning / Evening Brief:** Menampilkan tanggal di kanan atas, cuaca, hero metric berlabel (`SAFE TO SPEND TODAY`), strip statistik tanpa border bertumpuk (`Agenda Today`, `Tasks Due`, `Upcoming Bills`, `Active Goals`), divider ke narasi briefing bebas emoji, serta 1 baris tombol cepat simetris (`Detail`, `Tasks`, `Budget`). |
+| 3 | `BUDGET_RECAP` | `SUMMARY_CARD` | **Rekap Anggaran:** Menampilkan badge status (`On Track` / `Over Limit`), hero net remaining/over, daftar kategori dengan `LinearProgressIndicator` berwarna semantik (Emerald <80%, Amber >=80%, Crimson >=100%), dan tombol cepat riwayat/analisa. |
+| 4 | `VAULT_METADATA` | `CARD` | **Arsip Dokumen Vault:** Menampilkan kategori & key-value metadata dokumen dengan `VaultMetadataEditDialog` (ubah kategori, edit semua field, tambah field baru), tombol `Re-extract`, dan `Confirm & Save`. |
+| 5 | `CALENDAR_CONFLICT` | `CHIPS` | Strip tombol cepat di bawah chat saat jadwal baru bentrok dengan agenda Google Calendar (`Force Create` / `Cancel`). |
+| 6 | `FINANCE_DELETE` | `CHIPS` | Tombol konfirmasi cepat hapus transaksi (`Delete` / `Keep`). |
+| 7 | `TASK_CONFIRM` | `CHIPS` | Tombol konfirmasi cepat pembuatan tugas (`Confirm Sync`, `Duration`, atau `List`). |
+| 8 | `PROACTIVE_TASKS` | `INLINE_CARD` | Kartu checklist interaktif dengan `Checkbox` untuk memilih tugas persiapan agenda mana saja yang ingin dibuat. |
+| 9 | `RECURRING_BILL` | `CARD` | Kartu approval tagihan rutin otomatis (`Approve` / `Reject`). |
+| 10 | `IDENTITY_PROPOSAL` | `CARD` | Kartu persetujuan pembaruan profil/identitas mingguan dengan dialog penolakan opsional (`Reject` + alasan). |
+| 11 | `MEMORY_HYGIENE` | `CARD` | Kartu checklist untuk memilih memori usang mana yang diarsipkan dan mana yang dipertahankan aktif. |
+| 12 | `DISCIPLINE_CHECK` | `CARD` | Kartu intervensi distraksi dari `AppUsageTracker` (`Valid Research`, `+10 Min`, atau blokir). |
 
-### 3.2. Tasker Replacement & Notification Intercept Subsystem
-
-Menggantikan aplikasi pihak ketiga seperti Tasker dengan menangkap event sistem secara real-time via `NexaNotifListenerService`.
-
-1. **Morning Briefing Interception (`onNotificationRemoved`) [FITUR AKTIF]:**
-   - Mengawasi package jam Samsung (`com.sec.android.app.clockpackage`) dan Google Clock (`com.google.android.deskclock`).
-   - Ketika alarm selesai berbunyi dan pengguna memencet tombol **Dismiss** (notifikasi hilang), service memancarkan event `ALARM_DISMISSED` via WebSocket.
-   - N.E.X.A Server menangkap event ini dan langsung membalas dengan perintah `SPEAK_TEXT` berisi *Morning Briefing* (cuaca, berita, agenda) dengan volume 100%.
-
-2. **Catatan Arsitektur Finansial (Finance Interception - UNUSED / DEPRECATED):**
-   - *Penting:* Fitur penangkapan notifikasi transaksi bank (`onNotificationPosted` untuk BCA, GoPay, OVO, ShopeePay, Mandiri, BNI) pada aplikasi Android **tidak digunakan** di ekosistem N.E.X.A.
-   - **Alasan Arsitektur:** Seluruh logika transaksi keuangan dikendalikan secara terpusat oleh **Server-Side N.E.X.A (`src/domain/Finance_Engine.js`)** menggunakan:
-     1. **Mandiri Email Auto-Sync (`Gmail_Client.js`):** Memantau e-statement / notifikasi transaksi resmi via polling Gmail dengan *Zero-Duplication Engine*.
-     2. **Manual & Voice Entry (`TELEGRAM_MANUAL`):** AI Router & Whisper mendeteksi input transaksi dari percakapan suara/teks Telegram pengguna dan langsung mencatatnya ke database Supabase.
-
----
-
-### 3.3. Command Dispatcher & Handlers (28 Perintah Hardware & Aksesibilitas Terimplementasi)
-
-`DeviceCommandDispatcher` menerima `NexaCommand` dari WebSocket dan merutekannya secara otomatis ke modul handler eksekusi yang sesuai:
-
-| No | Action Name | Handler / Service | Deskripsi & API Android | Return Data |
-|:---:|---|---|---|---|
-| 1 | `TOGGLE_FLASHLIGHT` | `FlashlightHandler` | Mengontrol lampu kilat (LED Kamera) via `CameraManager.setTorchMode()`. | `enabled: Boolean` |
-| 2 | `SET_VOLUME` | `VolumeHandler` | Mengubah volume audio (`STREAM_MUSIC`, `STREAM_RING`, `STREAM_ALARM`, `STREAM_NOTIFICATION`, `STREAM_SYSTEM`). | `targetVolume`, `maxVolume` |
-| 3 | `FORCE_DND` | `VolumeHandler` | Mengubah mode Do Not Disturb via `NotificationManager.setInterruptionFilter()`. | Status `ENABLED` / `DISABLED` |
-| 4 | `GET_BATTERY_STATUS` | `BatteryHandler` | Membaca status baterai, persentase, dan mode pengisian via `ACTION_BATTERY_CHANGED`. | `battery_level`, `charging` |
-| 5 | `GO_HOME_SCREEN` | `ScreenHandler` | Mengirim Intent `ACTION_MAIN` dengan kategori `CATEGORY_HOME`. | Success Message |
-| 6 | `GO_BACK` | `ScreenHandler` | Menavigasi kembali via `AccessibilityService.GLOBAL_ACTION_BACK`. | Success Message |
-| 7 | `SHOW_RECENTS` | `ScreenHandler` | Membuka app switcher via `AccessibilityService.GLOBAL_ACTION_RECENTS`. | Success Message |
-| 8 | `LOCK_SCREEN` | `ScreenHandler` | Perintah kunci layar (Device Admin). | Status Info |
-| 9 | `LAUNCH_APP` | `AppLauncherHandler` | Membuka aplikasi Android berdasarkan `package_name` via `PackageManager.getLaunchIntentForPackage()`. | Success Message |
-| 10 | `TOGGLE_WIFI` | `NetworkHandler` | Mengontrol/membaca status Wi-Fi via `WifiManager`. | Status Info |
-| 11 | `GET_NETWORK_INFO` | `NetworkHandler` | Membaca status koneksi data/Wi-Fi aktif via `ConnectivityManager` (SSID, RSSI dBm). | `type`, `connected`, `ssid`, `rssi` |
-| 12 | `GET_LOCATION` | `LocationHandler` | Membaca koordinat GPS/Network via `LocationManager` + Resolusi alamat via `Geocoder`. | `latitude`, `longitude`, `accuracy`, `provider`, `address` |
-| 13 | `SPEAK_TEXT` | `TtsHandler` | Membaca suara via Android `TextToSpeech` (Locale `id-ID` / Fallback `en-US`), otomatis memastikan volume terdengar. | Status `SUCCESS` / `FAILURE` |
-| 14 | `TAKE_PHOTO` | `CameraHandler` | Membuka `TransparentCameraActivity` (CameraX) tanpa animasi UI, mengambil foto kamera depan/belakang, resize max 1280px. | `image_base64` |
-| 15 | `TAKE_SCREENSHOT` | `ScreenshotHandler` | Mengambil tangkapan layar penuh via `NexaAccessibilityService.takeScreenshot()`, resize max 1280px, kompres JPEG 60%. | `image_base64` |
-| 16 | `SHOW_OVERLAY_MSG` | `OverlayHandler` | Meluncurkan `OverlayActivity` di atas semua aplikasi dengan dialog Compose bermaterial gelap dan tombol pilihan dinamis server. | Selected Action (`action`) |
-| 17 | `GET_CLIPBOARD` | `ClipboardHandler` | Membaca teks papan klip (*clipboard*) sistem HP. | `text: String` |
-| 18 | `SET_CLIPBOARD` | `ClipboardHandler` | Menuliskan teks ke papan klip (*clipboard*) sistem HP. | Success Message |
-| 19 | `OPEN_INTENT` | `IntentHandler` | Membuka URL di browser, koordinat Google Maps (`geo:`), atau bagikan teks. | Success Message |
-| 20 | `DUMP_UI_HIERARCHY` | `NexaAccessibilityService` | **Mata (UI Inspector):** Memindai seluruh struktur elemen UI layar HP menjadi hierarki JSON (Bounds, ID, Text, Class). | `data.nodes: Array<UiNode>` |
-| 21 | `ACCESSIBILITY_CLICK` | `NexaAccessibilityService` | **Tangan (Click Controller):** Mengeklik elemen berdasarkan ID/Text atau koordinat piksel `(x, y)` via `dispatchGesture`. | Success Message |
-| 22 | `ACCESSIBILITY_INPUT_TEXT` | `NexaAccessibilityService` | **Input Teks Automasi:** Memasukkan teks otomatis ke form input yang sedang aktif atau difokuskan. | Success Message |
-| 23 | `ACCESSIBILITY_SCROLL` | `NexaAccessibilityService` | **Usap Layar (Scroll Controller):** Memutar/menggeser layar ke atas atau bawah (`FORWARD` / `BACKWARD`). | Success Message |
-| 24 | `PLAY_RINGTONE` | `AudioPlayerHandler` | Memutar ringtone darurat alarm sistem dengan volume max 100%. | Status `SUCCESS` |
-| 25 | `PLAY_MEDIA` | `AudioPlayerHandler` | Memutar file audio media via MediaPlayer. | Status `SUCCESS` |
-| 26 | `STOP_MEDIA` | `AudioPlayerHandler` | Menghentikan pemutaran audio/ringtone darurat. | Status `SUCCESS` |
-| 27 | `SIMULATE_INCOMING_CALL` | `FakeCallHandler` / `FakeCallActivity` | Memunculkan layar panggilan interaktif 6-state (Ringing, Speaking, 10s Voice Recording, Waiting, Reply). | Event `CALL_ACCEPTED` / `REJECTED` / `AUDIO_REPLY` |
-| 28 | `PLAY_AUDIO_STREAM` | `AudioPlayerHandler` | Memutar stream balasan audio PCM dari server atau sinyal penutupan panggilan interaktif. | Status `SUCCESS` / Event `CALL_REPLY_COMPLETE` |
-| 29 | `GET_SCREEN_STATUS` | `ScreenHandler` | Membaca status interaktif layar HP via `PowerManager.isInteractive` secara on-demand tanpa spam sinyal. | `screen_on: Boolean`, `screen_state: "ON"\|"OFF"`, `is_interactive: Boolean` |
-| 30 | `GET_LIGHT_STATUS` | `LightSensorHandler` | Mengukur lux intensitas cahaya ruangan on-demand via `Sensor.TYPE_LIGHT` dengan auto-unregister sekejap (<1 detik). | `lux: Float`, `state: "DARK"\|"NORMAL"\|"BRIGHT"` |
+> **Kebersihan Tampilan Kartu (`stripCardEmojis` & Local Expiry):**
+> Setiap kartu yang selesai (`Recorded`, `Auto-saved`, `Cancelled`, `Expired`) hanya menampilkan ikon native Material + label status, membersihkan emoji mentah dan titik korup (`\u00B7`), serta mengunci tombol secara lokal bila `expiresAtMs` telah terlewati.
 
 ---
 
-### 3.4. Dynamic System Overlay (`OverlayActivity.kt`)
+## 5. Keamanan Perangkat, Biometrik & Engine Notifikasi
 
-Dialog pop-up interaktif yang muncul melayang di atas aplikasi apa pun (*System Alert Window*):
-- **Opsi Dinamis:** Menerima JSON `options` dari server. Server dapat menentukan jumlah tombol, label teks, kode warna hex (misal `#00E676` hijau), dan `action` yang dihasilkan saat diklik.
-- **Fallback Default:** Jika server tidak mengirimi `options`, ia otomatis merender 3 tombol standar: `TIDAK` (`NO`), `BICARA` (`VOICE`), dan `YA` (`YES`).
-- **Resiliensi Format Warna:** Dilengkapi `try-catch` saat mem-parse warna Hex untuk mencegah crash jika format warna dari server tidak valid.
+### 5.1. Otorisasi Hardware-Backed (`TicketAuthRepository` & `FinanceStepUpBottomSheet`)
+1. **Enrollment & Kunci ECDSA P-256 (`DeviceKeystoreManager.kt`):**
+   Membuat pasangan kunci `secp256r1` di Android Keystore (`AUTH_BIOMETRIC_STRONG`, wajib verifikasi biometrik per penggunaan, otomatis gugur bila sidik jari baru ditambahkan di OS). Kunci publik SPKI DER didaftarkan ke server melalui CLI `nexa-enroll` (ditampilkan SHA-256 32 oktet penuh di Settings).
+2. **Tiket Akses Sidecar (`Logs` & `Terminal`):**
+   `TICKET_REQ` -> server mengirim `CHALLENGE` (`nonce` 32 byte, `sid`, `exp`) -> HP menandatangani `"nexa-ticket-v1\n$nonce\n$scope\n$sid"` via `BiometricPrompt.CryptoObject` -> `CHALLENGE_RESP` -> server mengembalikan `TICKET` Ed25519 (TTL 45 detik, sekali pakai `jti`).
+3. **Finance Step-Up Bottom Sheet (`ACTION_PENDING` -> `ACTION_AUTH` -> `ACTION_RESULT`):**
+   Untuk eksekusi finansial sensitif dari tool server, `ChatScreen` memunculkan `FinanceStepUpBottomSheet` dengan **`FLAG_SECURE`**, menutup IME otomatis, menonaktifkan input chat, menampilkan detail penerima lengkap (nama utuh tanpa ellipsis, bank, 4-6 digit rekening terakhir, status whitelist, sisa batas harian, `action_id`, timer 30 detik), dan menandatangani payload kanonis dengan sidik jari.
 
----
-
-### 3.5. Security Engine (GodMode HMAC SHA-256)
-
-Mencegah perintah berbahaya dijalankan dari sumber tak dikenal jika koneksi terintersepsi.
-- **`HmacVerifier.kt`:** Memverifikasi payload perintah ber-Privilege tinggi (level ≥ 3).
-- **Formula Signature:** `HMAC-SHA256(timestamp + "." + level, hmacSecret)`.
-- Jika signature tidak cocok dengan rahasia yang tersimpan di `DataStore` aplikasi, perintah **ditolak mentah-mentah** oleh `NexaWebSocketClient`.
-
----
-
-### 3.6. System Lifecycle & Safety Mechanisms (WebSocket Immortality Protocol)
-
-- **Single Scope Lifecycle:** `serviceScope` di dalam `NexaBridgeService` diciptakan ulang pada `onCreate()` dan dibatalkan penuh pada `onDestroy()` menggunakan `serviceScope.cancel()`.
-- **Anti-Duplikasi Loop (`isServiceStarted`):** Bendera boolean memastikan bahwa panggilan `onStartCommand` yang berulang (misal dari spamming switch UI) tidak mencetuskan *consumer loop* ganda.
-- **State Reset:** Method `orchestrator.reset()` dipanggil setiap kali koneksi baru dipicu dari UI agar state percobaan lama benar-benar bersih.
-- **Pencegahan Out-Of-Memory (OOM):** `resizeBitmap(bitmap, 1280)` membatasi ukuran gambar kamera & screenshot sebelum diubah menjadi string Base64.
-- **Boot Completed Auto-Start (`BootCompletedReceiver.kt`):** Mendaftarkan `ACTION_BOOT_COMPLETED` & `ACTION_QUICKBOOT_POWERON` agar service Bridge otomatis menyala di latar belakang saat HP di-restart tanpa perlu membuka aplikasi secara manual.
-- **Bi-Directional Keepalive (Anti-NAT / Caddy Timeout):**
-  - **Android Client:** `OkHttpClient.pingInterval(20, TimeUnit.SECONDS)` secara proaktif mengirim 2-byte ping frame setiap 20 detik, mencegah router Wi-Fi rumah dan Caddy Reverse Proxy memutus jalur NAT yang sedang diam/idle.
-  - **Node.js Server:** `heartbeatInterval` (25s) secara berkala memeriksa kesehatan soket klien. Jika tidak ada respons `pong`, server langsung mengeksekusi pembersihan.
-- **Instant Zombie Socket Termination (`ws.terminate()`):**
-  - Menggantikan `ws.close()` yang lambat/menggantung saat koneksi baru masuk (*client replacement*).
-  - Server langsung memutus koneksi lama di level kernel TCP (`socket.destroy()`), mengeliminasi kode error `1006` (Abnormal Closure) dan mencegah kebocoran memori di PM2.
-- **Client-Side Stale Socket Abort & Listener Guarding:**
-  - `NexaWebSocketClient.kt` memanggil `webSocket?.cancel()` sebelum membuka soket baru untuk membunuh thread pool usang.
-  - `WebSocketListener` dilengkapi *instance guarding* (`ws !== this@NexaWebSocketClient.webSocket`) agar event `onFailure`/`onClosed` dari soket lama yang mati tidak merusak status koneksi soket baru yang sehat.
-- **Samsung One UI `WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY`):**
-  - `NexaBridgeService` mengakuisisi `WifiManager.WifiLock` bersamaan dengan `PARTIAL_WAKE_LOCK` untuk mencegah OS Samsung menidurkan chip radio Wi-Fi saat layar HP terkunci di meja.
-- **Network Watcher Debounce (1500ms):**
-  - `ConnectivityManager.NetworkCallback.onAvailable()` dilengkapi timer debounce 1.5 detik untuk meredam osilasi sinyal cepat saat berpindah antara Wi-Fi ↔ 4G, mencegah *reconnect storm*.
+### 5.2. Smart Conversation Notifications (`ChatNotificationManager.kt`)
+- **3 Channel Prioritas:** `nexa_chat_urgent` (P0), `nexa_chat_messages` (P1, mendukung nada kustom SAF dari Settings), dan `nexa_chat_silent` (P2).
+- **Supresi Cerdas (`ChatVisibilityTracker`):** Tidak membunyikan notifikasi bila tab `Chat` sedang aktif terlihat di layar atau saat panggilan Live Voice berlangsung.
+- **Inline Direct Reply & Mark-as-Read (`ChatNotificationActionReceiver.kt`):** Tuan dapat membalas pesan N.E.X.A langsung dari bilah notifikasi atau menandai terbaca tanpa membuka aplikasi.
+- **Notifikasi Step-Up Darurat:** Jika `ACTION_PENDING` masuk ketika layar `Chat` tertutup, notifikasi prioritas tinggi muncul dengan tombol `Verify` dan auto-expire 30 detik.
 
 ---
 
-### 3.7. Context Synthesis Engine & Sensor Observer Subsystem (Top 5 Sensors)
+## 6. Pilar 2 & 3: Log Monitor On-Demand & Terminal PTY
 
-Subsistem ini mengubah data mentah dari 5 sensor prioritas utama menjadi konteks situasional cerdas (*High-Level Context Reports*) yang dikirimkan secara real-time ke N.E.X.A Server via WebSocket (`ContextReport`).
+### 6.1. Log Monitor Biner (`SidecarLogsClient.kt` & `LogViewerScreen.kt`)
+- Membuka koneksi WSS `/io/logs` **hanya** saat `LogViewerScreen` berada di state `ON_START` (`LifecycleStartEffect`), memakai tiket scope `logs` + `FLAG_SECURE`.
+- Saat layar mati atau pindah tab (`ON_STOP`), stream otomatis dihentikan, `CLOSE` dikirim, dan `CircularLogBuffer` (kapasitas tetap 2.000 entri) dikosongkan.
+- Mendukung protokol biner header **13 byte** (`LogBinaryProtocol.kt`), filter sisi server (`ALL`, `FINANCE`, `BRIDGE`, `ERRORS ONLY`), badge kategori terpisah, Pause/Resume berbasis kredit (`CREDIT`), baris sintetis `SKIPPED`, Auto-Scroll, dan Clear Local Buffer.
 
-```
-[HARDWARE SENSORS]
- ├── Light Sensor ──────────► [Dual-Threshold Hysteresis + 600ms Debounce] ──┐
- ├── Step Counter ──────────► [Cumulative Step Tracking] ──────────────────┤
- ├── Pickup Gesture ────────► [Vendor Hardware ID Fallback (ID 25)] ───────┼──► [ContextEngine.kt] ──► WebSocket
- ├── Motion Detector ───────► [Significant Motion Filter] ─────────────────┤      (Rule Synthesis)      (ContextReport)
- └── GPS Geofencing ────────► [GeofenceBroadcastReceiver (Foreground Svc)] ┘
-```
-
-#### Detail Arsitektur & Robustness 5 Sensor Utama:
-
-1. **Light Sensor (Cahaya Ambient):**
-   - **Problem:** Threshold tunggal menyebabkan *jitter/spamming* ratusan log saat nilai cahaya berada di batas ambang (misal 9.9 lux ↔ 10.1 lux).
-   - **Solusi Rekayasa:** Menggunakan **Dual-Threshold Hysteresis** (Batas Gelap: `< 10 lux`, Batas Terang: `> 15 lux`) dikombinasikan dengan **600ms Debounce Timer**. Menghilangkan event spam secara total dan menjamin stabilitas.
-   - **Event Output:** `LIGHT_CHANGED` (`DARK`, `NORMAL`, `BRIGHT`).
-
-2. **Pickup Gesture (Perangkat Diangkat):**
-   - **Problem:** `Sensor.TYPE_PICK_UP_GESTURE` sering menyebabkan `NullPointerException` pada SDK vendor tertentu (misal Samsung Knox/One UI).
-   - **Solusi Rekayasa:** Menggunakan `@Suppress("DEPRECATION")` dengan pembacaan langsung Hardware Sensor ID `25` jika ID konstanta standar tidak mengembalikan instance.
-   - **Event Output:** `PHONE_PICKUP`.
-
-3. **Step Counter (Penghitung Langkah):**
-   - **Mekanisme:** Mendengarkan `Sensor.TYPE_STEP_COUNTER` untuk mengukur aktivitas fisik pengguna secara kumulatif tanpa menyedot daya CPU.
-   - **Event Output:** `STEP_COUNTER`.
-
-4. **Activity & Significant Motion (Deteksi Pergerakan):**
-   - **Mekanisme:** Menggunakan `Sensor.TYPE_SIGNIFICANT_MOTION` untuk mendeteksi kapan pengguna mulai bergerak (berjalan/berkendara) atau diam.
-   - **Event Output:** `USER_MOVING`, `USER_STATIONARY`.
-
-5. **GPS Geofencing (Presensi Area):**
-   - **Mekanisme:** Menggunakan Google Play Services `GeofencingClient` dengan radius 100m (Rumah/Kantor).
-   - **Ketahanan Android 8+ (Anti-Crash):** `GeofenceBroadcastReceiver` memanggil `ContextCompat.startForegroundService()` alih-alih `startService()` biasa. Ini mencegah `IllegalStateException` saat OS membangunkan receiver di latar belakang saat HP tertidur/terkunci.
-   - **Event Output:** `USER_ARRIVED_HOME`, `USER_LEFT_HOME`, `USER_ARRIVED_WORK`, `USER_LEFT_WORK`.
-
-#### Sintesis Konteks Majemuk (`ContextEngine.kt` Rules):
-ContextEngine melakukan kombinasi multi-signal secara real-time:
-- **`ROOM_DARK_NIGHT`**: Terpemicu jika Light Sensor = `DARK` **DAN** Waktu Lokal = Malam Hari (18:00 - 06:00).
-- **`PHONE_PICKUP_MORNING`**: Terpemicu jika `PHONE_PICKUP` terdeteksi pada pagi hari (05:00 - 09:00).
-- **`WALKING_AT_NIGHT`**: Terpemicu jika `USER_MOVING` terdeteksi pada malam hari.
+### 6.2. Remote Interactive Terminal (`SidecarTerminalClient.kt` & `TerminalScreen.kt`)
+- Membuka koneksi WSS `/io/term` dengan tiket scope `term` ber-`sid` otoritatif server + `FLAG_SECURE`.
+- **Emulator Native (`Vt100TerminalEmulator.kt`):** Mendukung ANSI 256 warna / TrueColor, UTF-8, atribut tebal/garis bawah, posisi kursor, `SIGWINCH` `RESIZE`, dan scrollback 1.000 baris.
+- **Input Samsung Keyboard (`TerminalInputSink.kt`):** Menggunakan `KeyboardType.Password` + `autoCorrectEnabled = false` dengan sentinel `\u200B` yang terbukti di Galaxy A33 One UI 8 mematikan saran kata & swipe typing, sekaligus meneruskan `Enter` (`0x0D`), `Backspace` (`0x7F`), dan `Tab` (`0x09`).
+- **Accessory Bar 2 Baris (`TerminalAccessoryBar.kt`):** Baris 1 berisi 9 tombol ukuran `44x48 dp` (`ESC`, `TAB`, `CTRL`, `ALT`, panah `← ↓ ↑ →` dengan key-repeat, dan `⋯`), terhubung ke `ModifierState` tunggal (`IDLE` / `ONCE` / `LOCKED`).
+- **Flow Control & Resume (`0x09 RESUME`):** Jendela kredit awal 64 KiB dan dukungan resume berbasis `received_offset` dalam batas masa tenggang server 120 detik.
 
 ---
 
-## 4. Matriks Akses Khusus Android (Privilege Matrix)
+## 7. Command Dispatcher, Live Voice Full-Duplex & Smart Power Management
 
-| Nama Izin / Special Access | Fungsi Fitur | Lokasi Aktivasi di Samsung One UI 8 |
+### 7.1. Command Dispatcher Aktif (`DeviceCommandDispatcher.kt`)
+Semua perintah dijalankan konkuren dengan batas penguncian daya on-demand 15 detik (`BridgePowerLockManager.withActiveTransferLock`):
+
+| Kategori | Action Terimplementasi Aktif | Handler |
 |---|---|---|
-| `android.permission.BIND_NOTIFICATION_LISTENER_SERVICE` | Intersep Alarm Dismiss (Samsung/Google Clock) | Settings > Special Access > Notification Access > Nexa Mobile Bridge |
-| `android.permission.BIND_ACCESSIBILITY_SERVICE` | Screenshot Base64 & Navigasi Back/Recents | Settings > Accessibility > Installed Apps > Nexa Mobile Bridge |
-| `android.permission.SYSTEM_ALERT_WINDOW` | Tampilan Overlay Interaktif | Settings > Special Access > Appear on top > Nexa Mobile Bridge |
-| `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Mencegah OS Membunuh Service 24/7 | Settings > Apps > Nexa Mobile Bridge > Battery > Unrestricted |
-| `android.permission.ACCESS_NOTIFICATION_POLICY` | Mengontrol Mode Do Not Disturb (DND) | Settings > Special Access > Do Not Disturb Permission |
-| `android.permission.CAMERA` | Mengambil foto latar belakang (CameraX) | Prompt Izin Aplikasi (Standard Permission) |
-| `android.permission.ACCESS_FINE_LOCATION` | Pelacakan Lokasi GPS & Alamat | Prompt Izin Aplikasi (Standard Permission) |
-| `android.permission.ACCESS_BACKGROUND_LOCATION` | Pelacakan Geofence di Latar Belakang | Settings > Apps > Nexa Mobile Bridge > Permissions > Location > "Allow all the time" |
-| `android.permission.ACTIVITY_RECOGNITION` | Membaca Step Counter & Significant Motion | Prompt Izin Aplikasi (Standard Permission) |
+| **Hardware & Layar** | `TOGGLE_FLASHLIGHT`, `SET_VOLUME`, `FORCE_DND`, `TOGGLE_WIFI`, `LOCK_SCREEN`, `GO_HOME_SCREEN` | `FlashlightHandler`, `VolumeHandler`, `NetworkHandler`, `ScreenHandler` |
+| **Sensor & Telemetri On-Demand** | `GET_BATTERY_STATUS`, `GET_SCREEN_STATUS`, `GET_LIGHT_STATUS`, `GET_NETWORK_INFO`, `GET_LOCATION` | `BatteryHandler`, `ScreenHandler`, `LightSensorHandler`, `NetworkHandler`, `LocationHandler` |
+| **Media, TTS & Panggilan** | `SPEAK_TEXT`, `PLAY_RINGTONE`, `PLAY_MEDIA`, `STOP_MEDIA`, `SIMULATE_INCOMING_CALL`, `PLAY_AUDIO_STREAM`, `END_CALL`, `HANGUP` | `TtsHandler`, `AudioPlayerHandler`, `FakeCallHandler` |
+| **Kamera, Overlay & Intent** | `TAKE_PHOTO` (`TransparentCameraActivity`), `SHOW_OVERLAY_MSG` (`OverlayActivity`), `LAUNCH_APP`, `OPEN_INTENT`, `GET_CLIPBOARD`, `SET_CLIPBOARD` | `CameraHandler`, `OverlayHandler`, `AppLauncherHandler`, `IntentHandler`, `ClipboardHandler` |
+| **Dynamic Geofencing** | `SET_GEOFENCE`, `MARK_GEOFENCE_HERE`, `REMOVE_GEOFENCE`, `LIST_GEOFENCES` | `GeofenceHandler`, `GeofenceManager` |
+| **Deprecated (Security Policy `FR-CORE-03`)** | `TAKE_SCREENSHOT` (Accessibility path), `DUMP_UI_HIERARCHY`, `ACCESSIBILITY_CLICK`, `ACCESSIBILITY_INPUT_TEXT`, `ACCESSIBILITY_SCROLL` | Mengembalikan kegagalan eksplisit karena `AccessibilityService` dihapus demi keamanan M-Banking. |
+
+### 7.2. Real-Time Live Voice Call (`FakeCallActivity.kt` & `VoiceStreamHandler.kt`)
+Mendukung panggilan AI interaktif full-duplex (`CALL_ACCEPTED` -> `CALL_LIVE_READY` -> `CALL_AUDIO_STREAM` uplink PCM 16 kHz / `CALL_AUDIO_PLAY` downlink PCM 24 kHz -> `CALL_FINISHED`), dibangun di atas `taskAffinity="com.nexa.mobilebridge.call"` dan `launchMode="singleInstance"` agar dapat membangunkan lockscreen dan kembali bersih ke aplikasi sebelumnya (`finishAndRemoveTask()`).
+
+### 7.3. Smart Reconnect & Manajemen Daya/RAM Modern
+1. **4-Phase Reconnect + Modern NetworkWatcher:**
+   `ReconnectOrchestrator` tetap menjalankan retry 4 fase berjenjang (Immediate -> +1h -> +6h -> +24h) dengan alert TTS lokal menggunakan volume media aktif. `registerDefaultNetworkCallback` memicu reconnect cepat (800 ms debounce) saat berganti antara Wi-Fi dan Seluler sambil selalu memuat konfigurasi terbaru dari DataStore terenkripsi.
+2. **On-Demand Power Locks (`BridgePowerLockManager.kt`):**
+   Menggantikan `WakeLock`/`WifiLock` permanen lama. Kunci hanya diambil sementara saat mengeksekusi perintah/transfer aktif (maks 15 detik) atau selama panggilan suara berlangsung (batas aman 30 menit).
+3. **Interval Heartbeat & Telemetri Adaptif:**
+   Delta-driven + heartbeat yang dapat diatur di Settings (default **60 detik** saat layar menyala, **120 detik** saat layar mati), ditambah pembersihan antrean non-kritis bila antrean kirim OkHttp >= 16 KiB (`NFR-BAT-03`).
+4. **Standby UI Hibernation (`MainActivity.kt`):**
+   Saat aplikasi keluar ke Home atau layar mati (`ACTION_SCREEN_OFF`), cache GPU langsung di-trim (`TRIM_MEMORY_UI_HIDDEN`), lalu `MainActivity` dilepas (`finish()`) setelah **20 detik** di Home (**5 detik** saat layar mati, **130 detik** bila ada sesi Terminal di stack, dan dibatalkan bila sedang Voice Call, Step-Up Biometrik, streaming Chat, atau membuka file picker). Detail benchmark nyata tersedia di [RAM_USAGE_AUDIT_REPORT.md](./RAM_USAGE_AUDIT_REPORT.md).
 
 ---
-
-## 5. Model Schema Payload Protocol (JSON Exchange)
-
-### A. Format Perintah dari Server (`NexaCommand`)
-```json
-{
-  "type": "COMMAND",
-  "command_id": "cmd_10023",
-  "action": "SHOW_OVERLAY_MSG",
-  "timestamp": 1785970000000,
-  "signature": "a8f9c... (opsional untuk GodMode)",
-  "params": {
-    "message": "Konfirmasi tindakan keamanan",
-    "options": [
-      { "label": "BATAL", "action": "CANCEL", "color": "#FF5252" },
-      { "label": "PROSES", "action": "CONFIRM", "color": "#00E676" }
-    ]
-  }
-}
-```
-
-### B. Format Respon dari Client (`CommandResult`)
-```json
-{
-  "type": "COMMAND_RESULT",
-  "command_id": "cmd_10023",
-  "status": "SUCCESS",
-  "message": "User selected: CONFIRM",
-  "data": {
-    "action": "CONFIRM"
-  },
-  "timestamp": 1785970005000
-}
-```
-
-### C. Format Telemetri Periodik (`TelemetryReport`)
-```json
-{
-  "type": "TELEMETRY",
-  "battery_level": 85,
-  "battery_charging": true,
-  "network_type": "WIFI",
-  "network_strength": -55,
-  "motion_state": "STATIONARY",
-  "screen_on": true,
-  "timestamp": 1785970060000
-}
-```
-
-### D. Format Context Report Real-Time (`ContextReport`)
-```json
-{
-  "type": "CONTEXT_UPDATE",
-  "event": "USER_ARRIVED_HOME",
-  "summary": "Pengguna telah tiba di rumah",
-  "details": {
-    "geofence_id": "HOME",
-    "transition": "ENTER"
-  },
-  "timestamp": 1785993934365
-}
-```
-
----
-
-## 6. Riwayat Audit & Verifikasi Kinerja
-
-- **Audit Concurrency & Thread-Safety:** LULUS. Seluruh mutable state (`isStopped`, `currentPhase`, `attemptInPhase`) terisolasi di coroutine scope atau ber-annotation `@Volatile`.
-- **Audit Coroutine Leakage:** LULUS. `serviceScope.cancel()` dipanggil pada `onDestroy()`.
-- **Audit UI Resiliency:** LULUS. Overlay parser dilengkapi fallback aman untuk semua tipe data string/JSON yang rusak.
-- **Pengujian Terbukti (Live Tested & Verified):**
-  1. *Morning Briefing Intercept* terbukti sukses 100% saat alarm Samsung di-dismiss.
-  2. *Smart Reconnect* terbukti sukses melakukan backoff bertingkat dan menyuarakan error spesifik.
-  3. *CameraX Transparent Activity* terbukti mengambil foto secara hening dan mengembalikan Base64 JPEG.
-  4. *Sensor Hysteresis & Debounce:* Teruji via `test_context_engine_server.js` — fluktuasi cahaya sekitar 4-10 lux terisolasi tanpa event spam/jitter.
-  5. *Pickup Gesture Samsung One UI:* Teruji mendeteksi gerakan angkat HP (`PHONE_PICKUP`) dengan fallback Hardware Sensor ID 25 secara presisi.
-  6. *GPS Geofencing Integration:* Teruji via `GeofenceManager` & `GeofenceBroadcastReceiver` terkompilasi bersih dan aman dari background service crash di Android 8+ (One UI 8).
-
----
-
-## 7. Ekstensi "Hands & Eyes" (UI Inspector, Accessibility Controller & Agentic Loop)
-
-### 7.1. Konsep Utama: "Bridge adalah Tangan & Mata Nexa"
-Sesuai filosofi arsitektur *Thin-Client Executive Bridge*, Android Bridge diperluas dengan kemampuan persepsi UI (*Mata*) dan eksekusi aksi manusia (*Tangan*) tanpa membengkakkan aplikasi Android dengan AI.
-
-```
-[ SERVER N.E.X.A (Agentic LLM Loop) ]
-       │                               ▲
-       │ 1. EXECUTE_COMMAND            │ 2. COMMAND_RESULT / UI JSON
-       ▼                               │
-┌─────────────────────────────────────────────┐
-│ NEXA MOBILE BRIDGE (Android Accessibility)  │
-│  ├── 👁️ Mata: DUMP_UI_HIERARCHY             │
-│  ├── 🖐️ Tangan: ACCESSIBILITY_CLICK (x, y)  │
-│  ├── ⌨️ Ketik: ACCESSIBILITY_INPUT_TEXT      │
-│  ├── 📋 Klip: GET / SET_CLIPBOARD           │
-│  └── 🚀 Intent: OPEN_INTENT (URL/Geo/Share) │
-└─────────────────────────────────────────────┘
-```
-
-### 7.2. Perintah Baru "Hands & Eyes"
-| Action Name | Handler / Service | Deskripsi & Kemampuan Hardware | Parameter Input / Output |
-|---|---|---|---|
-| `DUMP_UI_HIERARCHY` | `NexaAccessibilityService` | **Mata (UI Inspector):** Memindai seluruh struktur elemen UI di layar aktif HP menjadi hierarki JSON (Node, Bounds, ID, Text, Class, Clickable, Editable). | `data.nodes: Array<UiNode>` |
-| `ACCESSIBILITY_CLICK` | `NexaAccessibilityService` | **Tangan (Click Controller):** Mengeklik elemen layar berdasarkan target ID/Text atau koordinat piksel presisi `(x, y)` via `dispatchGesture`. | `type: "coordinate"\|"node"`, `x`, `y`, `target` |
-| `ACCESSIBILITY_INPUT_TEXT` | `NexaAccessibilityService` | **Ketukan Teks (Input Engine):** Memasukkan teks secara otomatis ke form input yang sedang aktif atau berdasarkan target Node (`ACTION_SET_TEXT`). | `text: String`, `target: String?` |
-| `ACCESSIBILITY_SCROLL` | `NexaAccessibilityService` | **Usap Layar (Scroll Controller):** Melakukan gulir layar ke atas atau ke bawah (`ACTION_SCROLL_FORWARD` / `BACKWARD`). | `direction: "FORWARD"\|"BACKWARD"` |
-| `GET_CLIPBOARD` / `SET_CLIPBOARD` | `DeviceCommandDispatcher` | **Clipboard Engine:** Membaca atau menulis teks papan klip (*clipboard*) sistem Android. | `text: String` |
-| `OPEN_INTENT` | `AppLauncherHandler` | **Intent Engine:** Membuka URL web (e.g. `google.com`), Google Maps (`geo:lat,lng`), atau Share Text. | `type: "OPEN_URL"\|"OPEN_MAPS"\|"SHARE_TEXT"`, `url`, `text` |
-
-### 7.3. Audit Kinerja & Hardening Keamanan Aksesibilitas
-1. **Pencegahan Memory Leak Native (`AccessibilityNodeInfo`):**
-   Pada traversal rekursif UI tree (`traverseNode`), setiap child `AccessibilityNodeInfo` dipastikan dipanggil `.recycle()` untuk mencegah kebocoran memori native OS.
-2. **Gesture Stroke Fixing (0-Length Path Protection):**
-   `clickCoordinates(x, y)` mematenkan path stroke minimal dengan `lineTo(x + 1f, y + 1f)` agar gesture click tidak pernah ditolak Android OS akibat koordinat awal dan akhir identik (length = 0).
-3. **Penyelarasan Izin XML Manifest:**
-   Konfigurasi `accessibility_service_config.xml` dilengkapi dengan `android:canPerformGestures="true"` agar izin gestur tingkat sistem diaktifkan penuh.
-4. **Resiliensi CountDownLatch Callback:**
-   Panggilan `dispatchGesture` menjamin penanganan status gagal (*resultCallback.onCancelled*) agar `CountDownLatch` tidak pernah dead-lock atau memicu timeout service.
-
-### 7.4. Pengujian Real-Time Agentic Loop (Cerebras Gemma 4 31B & Key Rotation)
-- **Integrasi LLM Terbaru:** Teruji menggunakan model ultra-cepat terbaru **Cerebras Gemma 4 31B (`gemma-4-31b`)** dalam arsitektur *ReAct Loop* (Reasoning + Acting).
-- **Mekanisme API Key Rotation (1-2-3-4):** Mengatasi pembatasan ketat Rate Limit (RPM / Requests Per Minute) pada API Cerebras gratis dengan memutar 4 buah API Key secara berurutan (`CEREBRAS_API_KEY_1` s/d `4`) pada setiap giliran berpikir LLM (`currentKeyIndex = (currentKeyIndex + 1) % 4`).
-- **Auto-Retry & Resiliensi Server Load:** Ditambahkan penanganan otomatis fallback saat server mengalami *high traffic / queue_exceeded* dengan jeda 2 detik tanpa memutuskan siklus agent.
-- **Analisis Kebutuhan Vision LLM:** Pengujian membuktikan bahwa LLM Teks mencoba menebak atribut ID HTML (seperti `q`, `google-search-input`) saat berada di dalam WebView. Untuk navigasi UI presisi 100%, sistem disiapkan untuk dipasangkan dengan Vision LLM untuk mengekstrak koordinat spasial `(x, y)`.
-
----
-
-## 8. Fitur & Arsitektur Call Interaction v2.0 (Bidirectional Voice Interruption & VoiceRecorder Engine)
-
-### 8.1. Filosofi Penciptaan & Interupsi Keabaikan ("Good Distraction Interruption")
-Fitur **Panggilan Masuk Interaktif N.E.X.A (Jarvis-Level Call Flow)** diciptakan berdasarkan motivasi utama pengguna: menghadirkan asisten pribadi yang memiliki otoritas untuk memecah distraksi pengguna demi kebaikan (misalnya: memutus doom-scrolling, mengingatkan waktu fokus/ibadah, atau menegur secara lisan melalui antarmuka telepon penuh).
-
-### 8.2. Arsitektur 6-State Machine (`FakeCallActivity.kt`)
-Antarmuka panggilan dibangun menggunakan Jetpack Compose dengan arsitektur State Machine 6 tahap yang sangat tangguh:
-
-```
-┌───────────┐     Swipe Hijau     ┌───────────────────┐               ┌─────────────────┐
-│  RINGING  │ ──────────────────► │ ACCEPTED_SPEAKING │ ────────────► │    RECORDING    │
-└───────────┘                     └───────────────────┘  TTS Selesai  └─────────────────┘
-      │                                                                        │
-      │ Swipe Merah                                                            │ 10 Detik
-      ▼                                                                        ▼
-┌───────────────────┐                                                 ┌─────────────────┐
-│ REJECTED_SPEAKING │                                                 │  WAITING_REPLY  │
-└───────────────────┘                                                 └─────────────────┘
-      │                                                                        │
-      │ TTS Selesai                                                            │ PLAY_AUDIO_STREAM
-      └───────────────────────────► ┌───────────┐ ◄────────────────────────────┘
-                                    │ FINISHED  │ (Activity Finish)
-                                    └───────────┘
-```
-
-1. **`RINGING`:** Layar panggilan melayang bertema *Dark Navy / Neon Cyan* (`#0A0F24`) dengan getaran (*haptic feedback*) dan ringtone suara. Tombol swipe cyan (Angkat) & merah (Tolak).
-2. **`ACCEPTED_SPEAKING`:** Mengirim `CALL_ACCEPTED` ke server. Tombol hilang, N.E.X.A membacakan pesan pembuka lisan via `TtsHandler`.
-3. **`RECORDING`:** Mikrofon aktif merekam suara pengguna 10 detik (`VoiceRecorderHandler`) dengan timer `00:10` -> `00:00`.
-4. **`WAITING_REPLY`:** Tampilan memunculkan spinner "MENUNGGU BALASAN N.E.X.A" sembari mengkripsi suara Base64 (128.000 Bytes) lalu mengirimkannya via WebSocket (`CALL_AUDIO_REPLY`).
-5. **`REJECTED_SPEAKING`:** Mengirim `CALL_REJECTED` beserta `rejection_count`. N.E.X.A membaca kalimat perpisahan singkat. Server dapat menilai tingkat urgensi untuk memutuskan apakah akan menelpon ulang atau mentolerir penolakan.
-6. **`FINISHED`:** Layar ditutup secara bersih via `BroadcastReceiver` yang menerima sinyal internal `CALL_REPLY_COMPLETE` atau timeout.
-
-### 8.3. Komponen General-Purpose `VoiceRecorderHandler.kt`
-Modul perekam suara dirancang terpisah dan **100% Reusable** untuk seluruh kebutuhan perekaman audio N.E.X.A (Panggilan, Voice Command, Voice Memo, Ambient Capture):
-- **Spesifikasi Format:** Mono 16-bit PCM pada sampel rate 16kHz (`AudioFormat.ENCODING_PCM_16BIT`, `AudioFormat.CHANNEL_IN_MONO`). Ini adalah standar universal API STT (Whisper, Google STT, Azure).
-- **Parameter Fleksibel:** `record(durationMs = 10_000L, onTickMs = { elapsed -> ... })`.
-
-### 8.4. Pengerasan Sistem & Perbaikan Bug (Hardening)
-1. **Pencegahan Echo Gema TTS (700ms Silence Gap):**
-   - *Problem:* Saat N.E.X.A selesai bicara via TTS dan mikrofon langsung dibuka, sisa gema speaker HP terrekam oleh `AudioRecord` dan salah ditranskripsikan oleh Whisper menjadi kata "So".
-   - *Solusi:* Menambahkan `delay(700L)` antara akhir TTS dan pembukaan mikrofon di `FakeCallActivity.kt` agar sesi audio bersih dari gema.
-2. **Perbaikan Serialisasi JSON (`CallEvent.kt`):**
-   - *Problem:* Default value `val type: String = "CALL_EVENT"` membuat `kotlinx.serialization` menghilangkan field `type` dalam string JSON.
-   - *Solusi:* Menghapus default value agar field `"type": "CALL_EVENT"` dipaksa terkirim eksplisit dalam setiap payload WebSocket.
-
-### 8.5. Spesifikasi Lengkap Protokol JSON Call Interaction v2.0
-
-#### A. Inbound (Server ➔ Nexa Bridge HP)
-- **`SIMULATE_INCOMING_CALL`:**
-  ```json
-  {
-    "type": "EXECUTE_COMMAND",
-    "command_id": "cmd_call_1786003061219",
-    "action": "SIMULATE_INCOMING_CALL",
-    "params": {
-      "caller_name": "N.E.X.A Assistant",
-      "message": "Tuan Faqih, waktu fokus Anda telah tiba. Apakah ada tanggapan?",
-      "play_ringtone": true
-    }
-  }
-  ```
-- **`PLAY_AUDIO_STREAM` / `CALL_AUDIO_PLAY` (Downlink PCM 24kHz):**
-  ```json
-  {
-    "type": "CALL_AUDIO_PLAY",
-    "pcm_chunk": "UklGRi... (String Base64 PCM 24kHz 16-bit Mono ~40-80ms Audio Frame)"
-  }
-  ```
-- **`CALL_LIVE_READY`:**
-  ```json
-  {
-    "type": "CALL_LIVE_READY",
-    "sessionId": "cmd_call_1787103580837_p9blho",
-    "model": "models/gemini-3.1-flash-live-preview"
-  }
-  ```
-
-#### B. Outbound (Nexa Bridge HP ➔ Server)
-- **`CALL_ACCEPTED`:**
-  ```json
-  {
-    "type": "CALL_EVENT",
-    "event": "CALL_ACCEPTED",
-    "command_id": "cmd_call_1787103580837_p9blho",
-    "caller_name": "N.E.X.A Assistant",
-    "device_name": "Samsung_A33_5G",
-    "timestamp": 1787103581000
-  }
-  ```
-- **`CALL_AUDIO_STREAM` (Uplink PCM 16kHz Realtime Mic):**
-  ```json
-  {
-    "type": "CALL_AUDIO_STREAM",
-    "command_id": "cmd_call_1787103580837_p9blho",
-    "pcm_chunk": "V2F2Z... (String Base64 PCM 16kHz 16-bit Mono ~32ms Audio Frame)"
-  }
-  ```
-- **`CALL_FINISHED`:**
-  ```json
-  {
-    "type": "CALL_EVENT",
-    "event": "CALL_FINISHED",
-    "command_id": "cmd_call_1787103580837_p9blho",
-    "device_name": "Samsung_A33_5G",
-    "timestamp": 1787103620000
-  }
-  ```
-
----
-
-## 6. Real-Time Multimodal Live Voice Architecture (Full-Duplex PCM Stream)
-
-Sistem Panggilan N.E.X.A 3.0 berevolusi dari model *Turn-Based TTS* konvensional menjadi **Real-Time Multimodal Voice Engine** berkecepatan tinggi dengan latensi respons sub-detik (**TTFA <600ms**).
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Tuan as 🗣️ Tuan Faqih (Mic HP)
-    participant Android as 📱 Nexa Mobile Bridge (VoiceStreamHandler)
-    participant Relay as 🌐 Cloudflare Worker Relay (nexa-relay)
-    participant Server as ☁️ N.E.X.A Core (Live_Voice_Engine)
-    participant Google as 🧠 Google Gemini Live API (BidiGenerateContent)
-    participant DB as 🗄️ Supabase / Local Memory Cache
-
-    Note over Tuan,Google: FASE 1: HANDSHAKE & STREAMING PCM
-    Android->>Server: CALL_ACCEPTED (cmd_id)
-    Server->>Relay: WSS Handshake via wss://nexa-relay.../ws/...
-    Relay->>Google: BidiGenerateContent (Gemini 3.1 Flash Live Preview)
-    Google-->>Server: setupComplete: {}
-    Server-->>Android: CALL_LIVE_READY (Session Active)
-
-    Note over Tuan,Google: FASE 2: PERCAKAPAN DUA ARAH (TURN-AWARE DUPLEX)
-    Tuan->>Android: "Catat pengeluaran 20 ribu beli bensin pakai Cash"
-    Android->>Server: CALL_AUDIO_STREAM (16kHz PCM Base64)
-    Server->>Google: realtimeInput.audio { mimeType: "audio/pcm;rate=16000", data }
-    
-    Note over Google,DB: FASE 3: REAL-TIME TOOL CALLING (INTENT EXECUTION)
-    Google-->>Server: toolCall: recordExpense(amount: 20000, desc: "bensin", method: "Cash")
-    Server->>DB: writeTransaction() -> Supabase Insert (1ms)
-    DB-->>Server: { status: "SUCCESS", transaction_id: "trx_99182" }
-    Server-->>Google: toolResponse: { status: "SUCCESS", message: "Tersimpan" }
-    
-    Note over Google,Tuan: FASE 4: VOKAL RESPON FENRIR
-    Google-->>Server: modelTurn.parts[].inlineData (24kHz PCM Base64)
-    Server-->>Android: CALL_AUDIO_PLAY (24kHz PCM Base64)
-    Android->>Tuan: 🔊 Loudspeaker / Earpiece Suara Fenrir Bersuara Lancar
-```
-
-### 6.1. Turn-Aware Duplex State Machine & Anti-Feedback
-* **Downlink Priority (Saat N.E.X.A Berbicara):**
-  Mic input di-pause sementara agar suara dari speaker bawah tidak masuk ke mikrofon dan tidak membingungkan server-side VAD Google (*mencegah False Barge-In*).
-* **Uplink Priority (Saat Giliran Tuan Berbicara):**
-  Mic langsung terbuka 100% sensitif dengan threshold 0 RMS. Setiap bisikan atau ucapan Tuan seketika diteruskan ke Google.
-* **Hardware Session Pairing:**
-  `AudioRecord` dan `AudioTrack` dikunci pada satu `hardwareSessionId` yang sama, memungkinkan chip DSP Samsung Exynos (`AcousticEchoCanceler` & `NoiseSuppressor`) meredam gema secara hardware.
-* **Software PCM 16-Bit Gain Booster:**
-  Algoritma penguat amplitudo 2.2x dengan proteksi *soft clipping* menghasilkan suara vokal yang tebal, jernih, dan bertenaga.
-
----
-
-## 7. Desain Panggilan Mirip WhatsApp (Lockscreen Wake & Zero-Footprint Task)
-
-Sistem panggilan `FakeCallActivity` dirancang untuk meniru pengalaman panggilan native WhatsApp:
-
-1. **Layar Bangun Otomatis Saat Terkunci (*Screen Bright WakeLock*):**
-   - Menggunakan `PowerManager.SCREEN_BRIGHT_WAKE_LOCK`, `setShowWhenLocked(true)`, `setTurnScreenOn(true)`, `FLAG_KEEP_SCREEN_ON`, dan `requestDismissKeyguard()`.
-   - Ketika HP dalam keadaan tidur/terkunci di meja, layar seketika menyala terang dan menampilkan layar panggilan di atas lockscreen tanpa perlu membuka kunci PIN/sidik jari.
-2. **Kembali Mulus Tanpa Membuka Aplikasi Nexa (*Zero-Footprint Task Stack*):**
-   - `FakeCallActivity` berjalan di task stack terisolasi (`taskAffinity="com.nexa.mobilebridge.call"` + `launchMode="singleInstance"`).
-   - Saat panggilan dimatikan, sistem mengeksekusi `finishAndRemoveTask()`.
-   - **Hasil:** Jika pengguna sebelumnya sedang membuka Galeri, layar langsung kembali ke Galeri; jika sedang di YouTube/WhatsApp, langsung kembali ke YouTube/WhatsApp tanpa pernah memunculkan dashboard Nexa Bridge.
-3. **UI Minimalis Ikonik (*Icon-Only Floating Buttons*):**
-   - **Tombol Kiri (Speaker Toggle):** Ikon Speaker Minimalis Tergaris Miring Merah (Earpiece / Speaker Atas) $\leftrightarrow$ Ikon Speaker Berpendar Cyan dengan Gelombang Suara (Loudspeaker / Speaker Utama).
-   - **Tombol Kanan (End Call):** Lingkaran merah elegan untuk menutup panggilan seketika.
-
----
-
-## 8. Battery Preservation & On-Demand Sensor Protocol (Arsitektur Hemat Daya Baterai)
-
-Untuk memastikan aplikasi Nexa Bridge dapat bertahan hidup 24/7 di latar belakang tanpa menguras baterai Samsung Galaxy A33 5G dan tanpa menimbulkan beban jaringan yang sia-sia, diterapkan arsitektur **Strict On-Demand Sensing**:
-
-### 8.1. Deaktivasi Sensor Background Proaktif
-* **Sensor Angkat HP (`PHONE_PICKUP` / Sensor ID 25):**
-  Pendaftaran listener background secara terus-menerus di `SensorObserverManager.kt` dinonaktifkan (`// Continuous registration disabled`). Sensor fisik tidak lagi memicu *wake event* saat ponsel diangkat atau bergetar di atas meja.
-* **Sensor Cahaya Ambient (`Sensor.TYPE_LIGHT`):**
-  Sensor cahaya tidak lagi melakukan streaming nilai lux secara proaktif ke WebSocket saat terjadi perubahan intensitas ruangan.
-* **Receiver Perubahan Layar (`screenStateReceiver`):**
-  Broadcast intent `ACTION_SCREEN_ON` dan `ACTION_SCREEN_OFF` tidak lagi memancarkan payload ke WebSocket secara otomatis setiap kali layar padam atau menyala.
-
-### 8.2. Protokol Sensor On-Demand (Hanya Aktif Saat Diminta)
-* **`GET_SCREEN_STATUS` (On-Demand Layar):**
-  - Mengakses `PowerManager.isInteractive` secara langsung di Android.
-  - Membedakan secara presisi antara kondisi *Dozing / Always-On Display (AOD) / Layar Terkunci Padam* (`screen_on: false`) dan kondisi *Awake / Layar Aktif* (`screen_on: true`).
-  - Menghilangkan bug historis di mana nilai `screen_on` sempat ter-hardcode bernilai `true` pada telemetri awal.
-* **`GET_LIGHT_STATUS` (On-Demand Cahaya):**
-  - Ditangani oleh `LightSensorHandler.kt`.
-  - Mendaftarkan `Sensor.TYPE_LIGHT` sekejap pada saat perintah diterima.
-  - Mengambil pembacaan lux akurat pertama, mengklasifikasikan status (`DARK < 15 lux`, `NORMAL 15-100 lux`, `BRIGHT > 100 lux`), lalu **langsung mengeksekusi `sensorManager.unregisterListener(this)`**.
-  - Dilengkapi *failsafe timeout* 1.5 detik jika sensor hardware lambat merespons.
-  - Hardware sensor langsung kembali dalam kondisi tidur/daya rendah.
-
-### 8.3. Pelaporan Telemetri Adaptif (Delta-Based Heartbeat)
-* `launchTelemetryReporter()` di `NexaBridgeService.kt` tidak lagi melakukan spam broadcast setiap 30 detik tanpa henti.
-* Telemetri kini hanya dikirimkan jika:
-  1. Terjadi perubahan signifikan pada persentase baterai (`battery_level` berubah $\ge 1\%$), ATAU
-  2. Batas waktu keep-alive 3 menit tercapai (sebagai detak jantung minimum untuk memverifikasi soket tetap segar).
-
-### 8.4. Integrasi Protokol Safe-Sleep pada Cron 01:00 WIB (Midnight Check-in)
-* Pada pukul 01:00 WIB, server Nexa mengeksekusi `adapter.getScreenStatus()` secara on-demand ke perangkat.
-* **Protokol Safe-Sleep Default:**
-  - Jika layar terdeteksi mati (`screen_on: false`), cron langsung dilewati (*zero noise, zero interruption*).
-  - Jika perangkat offline atau query mengalami timeout, sistem secara default mengasumsikan pengguna sedang tidur dan membatalkan sapaan.
-  - Sapaan jam 1 malam HANYA dikirimkan jika layar HP terbukti secara fisik sedang menyala (`screen_on: true`).
-
----
-*Dokumentasi Resmi Ekosistem N.E.X.A Assistant & Nexa Mobile Bridge (Update Terakhir: 2026).*
-
+*Dokumentasi Resmi Ekosistem N.E.X.A Mobile Bridge v3.0 (Diperbarui: 22 November 2026).*
