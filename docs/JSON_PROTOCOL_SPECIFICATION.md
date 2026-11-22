@@ -1,24 +1,36 @@
-# 📑 N.E.X.A Mobile Bridge — Complete JSON Protocol & Data Exchange Specification
+# 📑 N.E.X.A Mobile Bridge: Complete JSON & Binary Protocol Specification
 
 **Document ID:** `NEXA-MB-PROTO-001`  
-**Version:** 2.0 (Production Edition)  
-**Target Hardware:** Samsung Galaxy A33 5G (`SM-A336E`) — Android 16 (One UI 8 / API 36)  
-**Transport:** Bidirectional WebSocket (`ws://` / `wss://`)  
+**Version:** 4.0.0 (Sovereign AI Control Center Edition, Control Center v3.1)  
+**Target Hardware:** Samsung Galaxy A33 5G (`SM-A336E`), Android 16 (One UI 8 / API 36)  
+**Transport:** Dual-WebSocket Architecture:
+- **Connection A (`wss://<host>/ws`):** Bidirectional JSON Frames (Chat, 12 Interactive Cards, Voice Notes, Hardware Commands, Telemetry, Keystore ECDSA P-256 Auth, Finance Step-Up) & Live Voice PCM
+- **Connection B (`wss://<host>/io/logs` & `wss://<host>/io/term`):** 13-Byte Big-Endian Binary Frames to Go 1.22 Sidecar (`nexa-io`) with Offline Ed25519 Ticket Auth  
 **Package:** `com.nexa.mobilebridge`  
 
 ---
 
 ## 📌 1. Executive Summary & Protocol Overview
 
-Dokumen ini merupakan **spesifikasi referensi teknis lengkap (Single Source of Truth)** untuk seluruh format payload JSON yang dipertukarkan antara **N.E.X.A Cloud/Local Server** dan **N.E.X.A Mobile Bridge (Android Client)**.
+Dokumen ini merupakan **spesifikasi referensi teknis lengkap (Single Source of Truth)** untuk seluruh format payload JSON (Connection A `/ws`) maupun protokol bingkai biner 13-byte (Connection B `/io/logs` & `/io/term`) yang dipertukarkan antara **N.E.X.A Cloud Core v4.0.0** dan **N.E.X.A Mobile Bridge (Android Control Center)**.
 
-### 🔄 Alur Komunikasi Dua Arah (Bidirectional Flow):
-1. **Inbound Commands (`Server ➔ Mobile Bridge`):**  
-   Peladen mengirimkan instruksi perangkat keras dalam format amplop `NexaCommand`.
+### 🔄 Alur Komunikasi Multi-Jalur (Dual-WebSocket Flow):
+1. **Inbound Hardware Commands (`Server ➔ Mobile Bridge`):**  
+   Peladen mengirimkan instruksi perangkat keras dalam format amplop `NexaCommand` (`COMMAND` / `EXECUTE_COMMAND`).
 2. **Outbound Command Results (`Mobile Bridge ➔ Server`):**  
-   Setiap eksekusi command akan membalas secara sinkron atau asinkron dengan amplop `CommandResult`.
+   Setiap eksekusi command membalas secara sinkron atau asinkron dengan amplop `CommandResult`.
 3. **Autonomous Outbound Events (`Mobile Bridge ➔ Server`):**  
-   Peristiwa yang dipicu secara mandiri oleh HP (Telemetri Periodik, Multi-Sensor Context Engine, Interupsi Panggilan Telepon, Intersepsi Alarm/Notifikasi, dan Pemicu Geofence).
+   Peristiwa mandiri dari ponsel: Telemetri Periodik (`TELEMETRY_REPORT`), UsageStats App Discipline (`APP_USAGE_TELEMETRY`), Multi-Sensor Context Engine (`CONTEXT_UPDATE`), Interupsi Panggilan (`CALL_EVENT`), dan Intersepsi Alarm/Notifikasi (`ALARM_DISMISSED`, `NOTIFICATION_EVENT`).
+4. **Zero-Trust Hardware Enrollment & Ed25519 Session Tickets (`/ws`):**  
+   Pendaftaran kunci perangkat keras Android Keystore ECDSA P-256 (`ENROLL_SUBMIT` -> `ENROLL_OK`) dan penerbitan tiket sesi pendek Ed25519 (`TICKET_REQ` -> `CHALLENGE` -> `CHALLENGE_RESP` -> `TICKET`).
+5. **Native AI Chat, Voice Notes & 10-Minute Replay (`/ws`):**  
+   Percakapan streaming real-time (`CHAT_SEND`, `CHAT_VOICE_SEND`, `CHAT_ACK`, `CHAT_CHUNK`, `CHAT_RESUME`, `CHAT_STOP`, `CHAT_PROACTIVE`, `CHAT_READ`).
+6. **12 Native Interactive Cards & Live Mutation (`/ws`):**  
+   Kartu UI interaktif di dalam bubble chat (`FINANCE_TX` dengan informasi `Balance` real-time, `BRIEFING_SUMMARY`, `BUDGET_RECAP`, dll.) melalui `CARD_ACTION` dan `CARD_UPDATE`.
+7. **Hardware Biometric Finance Step-Up Gate (`/ws`):**  
+   Otorisasi transaksi finansial sensitif via tanda tangan perangkat keras ECDSA P-256 (`ACTION_PENDING` -> `ACTION_AUTH` / `ACTION_CANCEL` -> `ACTION_RESULT`).
+8. **Connection B Binary Sidecars (`/io/logs` & `/io/term`):**  
+   Streaming log `journald` tersedot-rahasia dan terminal PTY VT100 interaktif dengan buffer replay 64 KB.
 
 ---
 
@@ -344,9 +356,9 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 ---
 
 #### 9. `TAKE_SCREENSHOT`
-*Mengambil tangkapan layar penuh via Accessibility API (JPEG 60%, max 1280px).*
-* **Handler:** `ScreenshotHandler.kt` / `NexaAccessibilityService.kt`
-* **Izin Terkait:** `BIND_ACCESSIBILITY_SERVICE`
+*Mengambil tangkapan layar penuh secara on-demand via MediaProjection API (bebas AccessibilityService).*
+* **Handler:** `ScreenshotHandler.kt` / `ScreenCaptureService.kt`
+* **Izin Terkait:** `FOREGROUND_SERVICE_MEDIA_PROJECTION` (On-Demand MediaProjection Grant)
 
 **Inbound (Server ➔ HP):**
 ```json
@@ -754,7 +766,7 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 * **Handler:** `IntentHandler.kt`
 * **Types:** `"OPEN_URL"`, `"OPEN_MAPS"`, `"SHARE_TEXT"`.
 
-**Inbound A — Buka URL (Server ➔ HP):**
+**Inbound A - Buka URL (Server ➔ HP):**
 ```json
 {
   "type": "COMMAND",
@@ -767,7 +779,7 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 }
 ```
 
-**Inbound B — Buka Google Maps (Server ➔ HP):**
+**Inbound B - Buka Google Maps (Server ➔ HP):**
 ```json
 {
   "type": "COMMAND",
@@ -782,7 +794,7 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 }
 ```
 
-**Inbound C — Bagikan Teks (Server ➔ HP):**
+**Inbound C - Bagikan Teks (Server ➔ HP):**
 ```json
 {
   "type": "COMMAND",
@@ -873,12 +885,12 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 
 ---
 
-### 👁️ GRUP E: Hands & Eyes UI Inspector & Automasi Aksesibilitas
+### 👁️ GRUP E: Eks-Aksesibilitas (Deprecated di v4.0.0 Demi Keamanan M-Banking / `FR-CORE-03`)
 
-#### 25. `DUMP_UI_HIERARCHY`
-*Mengekstrak seluruh pohon elemen antarmuka layar HP aktif ke format JSON terstruktur.*
-* **Handler:** `NexaAccessibilityService.kt`
-* **Izin Terkait:** `BIND_ACCESSIBILITY_SERVICE`
+> **Catatan Arsitektur v4.0.0 (`FR-CORE-03`):** Layanan `NexaAccessibilityService` telah **dihapus permanen** dari `AndroidManifest.xml` dan codebase agar aplikasi perbankan (*Livin' by Mandiri, Bank Jago, BCA mobile, BRImo*) tidak pernah mendeteksi layanan aksesibilitas aktif sebagai ancaman *overlay/screen-reader*. Pemantauan disiplin aplikasi kini beralih sepenuhnya ke `UsageStatsManager` (`AppUsageTracker.kt`). Keempat aksi di bawah ini tetap dikenali oleh `DeviceCommandDispatcher.kt` demi kompatibilitas protokol mundur, namun secara deterministik mengembalikan `status: "FAILURE"`.
+
+#### 25. `DUMP_UI_HIERARCHY` *(Deprecated - Banking-Safe Guard)*
+* **Handler:** `DeviceCommandDispatcher.kt` (`deprecatedAccessibilityCommand`)
 
 **Inbound (Server ➔ HP):**
 ```json
@@ -889,31 +901,14 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 }
 ```
 
-**Outbound (HP ➔ Server - Success):**
+**Outbound (HP ➔ Server - Deterministic Deprecation Response):**
 ```json
 {
   "type": "COMMAND_RESULT",
   "command_id": "cmd_dump_01",
-  "status": "SUCCESS",
-  "data": {
-    "nodes": [
-      {
-        "text": "Cari di YouTube",
-        "desc": "Kotak Penelusuran",
-        "id": "com.google.android.youtube:id/search_edit_text",
-        "class": "EditText",
-        "clickable": true,
-        "editable": true,
-        "bounds": {
-          "left": 120,
-          "top": 84,
-          "right": 960,
-          "bottom": 168
-        }
-      }
-    ]
-  },
-  "message": "UI Hierarchy dumped successfully.",
+  "status": "FAILURE",
+  "data": null,
+  "message": "Command DUMP_UI_HIERARCHY is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03).",
   "device_name": "Samsung_A33_5G",
   "timestamp": 1786000001500
 }
@@ -921,111 +916,27 @@ Setiap kali HP selesai memproses perintah, amplop ini akan dikirimkan kembali ke
 
 ---
 
-#### 26. `ACCESSIBILITY_CLICK`
-*Mengeklik elemen UI berdasarkan Target ID / Teks atau Koordinat Piksel Spasial `(x, y)`.*
-* **Handler:** `NexaAccessibilityService.kt`
+#### 26. `ACCESSIBILITY_CLICK` *(Deprecated - Banking-Safe Guard)*
+* **Handler:** `DeviceCommandDispatcher.kt` (`deprecatedAccessibilityCommand`)
 
-**Inbound A — Klik Berdasarkan Teks/ID (Server ➔ HP):**
-```json
-{
-  "type": "COMMAND",
-  "command_id": "cmd_clk_01",
-  "action": "ACCESSIBILITY_CLICK",
-  "params": {
-    "target": "com.google.android.youtube:id/search_edit_text"
-  }
-}
-```
-
-**Inbound B — Klik Berdasarkan Koordinat Spasial `(x, y)` (Server ➔ HP):**
-```json
-{
-  "type": "COMMAND",
-  "command_id": "cmd_clk_02",
-  "action": "ACCESSIBILITY_CLICK",
-  "params": {
-    "x": 540.0,
-    "y": 1200.0
-  }
-}
-```
-
-**Outbound (HP ➔ Server - Success):**
-```json
-{
-  "type": "COMMAND_RESULT",
-  "command_id": "cmd_clk_01",
-  "status": "SUCCESS",
-  "data": null,
-  "message": "Clicked node: com.google.android.youtube:id/search_edit_text",
-  "device_name": "Samsung_A33_5G",
-  "timestamp": 1786000001200
-}
-```
+**Outbound (HP ➔ Server):**
+Mengembalikan `status: "FAILURE"` dengan pesan `"Command ACCESSIBILITY_CLICK is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."`
 
 ---
 
-#### 27. `ACCESSIBILITY_INPUT_TEXT`
-*Mengisikan teks secara otomatis ke form input yang sedang aktif atau berdasarkan target Node.*
-* **Handler:** `NexaAccessibilityService.kt`
+#### 27. `ACCESSIBILITY_INPUT_TEXT` *(Deprecated - Banking-Safe Guard)*
+* **Handler:** `DeviceCommandDispatcher.kt` (`deprecatedAccessibilityCommand`)
 
-**Inbound (Server ➔ HP):**
-```json
-{
-  "type": "COMMAND",
-  "command_id": "cmd_inp_01",
-  "action": "ACCESSIBILITY_INPUT_TEXT",
-  "params": {
-    "text": "Tutorial Kotlin Coroutines",
-    "target": "com.google.android.youtube:id/search_edit_text"
-  }
-}
-```
-
-**Outbound (HP ➔ Server - Success):**
-```json
-{
-  "type": "COMMAND_RESULT",
-  "command_id": "cmd_inp_01",
-  "status": "SUCCESS",
-  "data": null,
-  "message": "Input text set successfully.",
-  "device_name": "Samsung_A33_5G",
-  "timestamp": 1786000001000
-}
-```
+**Outbound (HP ➔ Server):**
+Mengembalikan `status: "FAILURE"` dengan pesan `"Command ACCESSIBILITY_INPUT_TEXT is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."`
 
 ---
 
-#### 28. `ACCESSIBILITY_SCROLL`
-*Melakukan simulasi usapan layar (scroll) ke atas atau bawah.*
-* **Handler:** `NexaAccessibilityService.kt`
-* **Directions:** `"FORWARD"` (Gulir ke bawah) \| `"BACKWARD"` / `"UP"` (Gulir ke atas).
+#### 28. `ACCESSIBILITY_SCROLL` *(Deprecated - Banking-Safe Guard)*
+* **Handler:** `DeviceCommandDispatcher.kt` (`deprecatedAccessibilityCommand`)
 
-**Inbound (Server ➔ HP):**
-```json
-{
-  "type": "COMMAND",
-  "command_id": "cmd_scr_01",
-  "action": "ACCESSIBILITY_SCROLL",
-  "params": {
-    "direction": "FORWARD"
-  }
-}
-```
-
-**Outbound (HP ➔ Server - Success):**
-```json
-{
-  "type": "COMMAND_RESULT",
-  "command_id": "cmd_scr_01",
-  "status": "SUCCESS",
-  "data": null,
-  "message": "Scroll FORWARD executed.",
-  "device_name": "Samsung_A33_5G",
-  "timestamp": 1786000001000
-}
-```
+**Outbound (HP ➔ Server):**
+Mengembalikan `status: "FAILURE"` dengan pesan `"Command ACCESSIBILITY_SCROLL is deprecated: AccessibilityService removed for m-banking security (FR-CORE-03)."`
 
 ---
 
@@ -1351,7 +1262,7 @@ Untuk perintah-perintah berhak akses tinggi (*GodMode Level ≥ 3* seperti `LOCK
 
 $$\text{Signature} = \text{HMAC-SHA256}\left(\text{timestamp} + \text{"."} + \text{level}, \text{hmacSecret}\right)$$
 
-Jika verifikasi tanda tangan gagal, klien Android langsung menolak eksekusi perintah dan mengembalikan:
+If signature verification fails, the Android client rejects execution:
 ```json
 {
   "type": "COMMAND_RESULT",
@@ -1366,4 +1277,416 @@ Jika verifikasi tanda tangan gagal, klien Android langsung menolak eksekusi peri
 
 ---
 
-*Dokumen ini merupakan spesifikasi resmi N.E.X.A Mobile Bridge v2.0.*
+## 🔑 6. Zero-Trust Hardware Enrollment & Ed25519 Session Ticket Protocol (`/ws`)
+
+Diimplementasikan oleh `DeviceKeystoreManager.kt` & `TicketAuthRepository.kt` di Android serta `src/core/auth/ws_auth_handler.js` & `ticket_service.js` di Server.
+
+### 6.1. Pendaftaran Kunci Publik Perangkat Keras (`ENROLL_SUBMIT` ➔ `ENROLL_OK` / `ENROLL_ERR`)
+Mengikat kunci publik **Android Keystore ECDSA P-256** dengan kode sekali pakai dari CLI `node scripts/nexa-enroll.js`.
+
+**Outbound (HP ➔ Server):**
+```json
+{
+  "type": "ENROLL_SUBMIT",
+  "req_id": "enroll_1786000100",
+  "device_id": "samsung-a33-tuan",
+  "enroll_code": "NX-8492-ABCD",
+  "public_key_spki_der_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."
+}
+```
+
+**Inbound Sukses (Server ➔ HP):**
+```json
+{
+  "type": "ENROLL_OK",
+  "req_id": "enroll_1786000100",
+  "device_id": "samsung-a33-tuan",
+  "fingerprint_sha256": "49:19:7c:0a:54:a9:65:77:...",
+  "enrolled_at": "2026-11-22T08:00:00.000Z",
+  "status": "ACTIVE"
+}
+```
+
+### 6.2. Permintaan Tiket Sesi Sidecar (`TICKET_REQ` ➔ `CHALLENGE` ➔ `CHALLENGE_RESP` ➔ `TICKET`)
+Digunakan untuk mendapatkan tiket **Ed25519** berumur singkat (scope `"logs"` atau `"terminal"`) sebelum membuka Connection B (`/io/logs` atau `/io/term`).
+
+**1. Outbound `TICKET_REQ` (HP ➔ Server):**
+```json
+{
+  "type": "TICKET_REQ",
+  "req_id": "tkt_01",
+  "device_id": "samsung-a33-tuan",
+  "scope": "logs",
+  "resume_sid": ""
+}
+```
+
+**2. Inbound `CHALLENGE` (Server ➔ HP):**
+```json
+{
+  "type": "CHALLENGE",
+  "req_id": "tkt_01",
+  "nonce": "b7f4c2e981a04d56...",
+  "scope": "logs",
+  "sid": "sid_9a8b7c6d",
+  "exp": 1786000130000
+}
+```
+
+**3. Outbound `CHALLENGE_RESP` (HP ➔ Server):**
+Klien menandatangani payload kanonikal tantangan menggunakan kunci privat ECDSA P-256 di dalam Hardware Keystore:
+```json
+{
+  "type": "CHALLENGE_RESP",
+  "req_id": "tkt_01",
+  "device_id": "samsung-a33-tuan",
+  "nonce": "b7f4c2e981a04d56...",
+  "signature_der_b64": "MEUCIQDf..."
+}
+```
+
+**4. Inbound `TICKET` (Server ➔ HP):**
+```json
+{
+  "type": "TICKET",
+  "req_id": "tkt_01",
+  "ticket": "eyJ2IjoxLCJkZXZpY2VfaWQiOiJzYW1zdW5nLWEzMy10dWFuIiwic2NvcGUiOiJsb2dzIi...",
+  "scope": "logs",
+  "sid": "sid_9a8b7c6d",
+  "exp": 1786000160000
+}
+```
+
+---
+
+## 💬 7. Native Mobile Chat, Voice Notes & 10-Minute Replay Protocol (`/ws`)
+
+Diimplementasikan oleh `ChatRepository.kt` & `ChatStreamConsumer.kt` di Android serta `src/interfaces/bridge/mobile_bridge/chat_handler.js` di Server.
+
+### 7.1. Kirim Pesan Teks & Slash Command (`CHAT_SEND`)
+Mendukung idempotensi penuh berbasis `client_msg_id` (maks 128 karakter), batas konten 16 KB, konteks kutipan balasan (`reply_to`), dan perintah slash (`/briefing`, `/budget`, `/vault`, `/search`, `/playbook`, `/capabilities`).
+
+**Outbound (HP ➔ Server):**
+```json
+{
+  "type": "CHAT_SEND",
+  "client_msg_id": "cmsg_1786000200_a1b2",
+  "content": "Tadi beli kopi 15rb pakai jago qris",
+  "intent_hint": "FINANCE",
+  "reply_to": {
+    "message_id": "smsg_991",
+    "role": "assistant",
+    "preview": "Transaksi Pemasukan sebesar Rp150.000 berhasil dicatat"
+  }
+}
+```
+
+### 7.2. Kirim Pesan Suara Native (`CHAT_VOICE_SEND`)
+Mendukung kontainer audio `audio/ogg` (`OggS`), `audio/mp4` / `audio/m4a` (`ftyp`), dan `audio/webm` (`EBML`) hingga batas keras **1,5 MB** (~3 menit / 185.000 ms).
+
+**Outbound (HP ➔ Server):**
+```json
+{
+  "type": "CHAT_VOICE_SEND",
+  "client_msg_id": "vmsg_1786000210_c3d4",
+  "audio_b64": "T2dnUwACAAAAAAAAAAB...",
+  "mime_type": "audio/ogg",
+  "duration_ms": 8450,
+  "waveform": [12, 35, 68, 91, 54, 20]
+}
+```
+
+### 7.3. Status Pemrosesan & Transkripsi (`CHAT_ACK`)
+**Inbound (Server ➔ HP):**
+```json
+{
+  "type": "CHAT_ACK",
+  "client_msg_id": "vmsg_1786000210_c3d4",
+  "status": "THINKING",
+  "transcript": "Tadi beli kopi lima belas ribu pakai jago qris"
+}
+```
+*(Nilai `status`: `"TRANSCRIBING"` | `"THINKING"`).*
+
+### 7.4. Aliran Potongan Teks & Penyelesaian Giliran (`CHAT_CHUNK`)
+Setiap potongan teks dikirim berurutan (`seq = 1..N`, ukuran default 64 karakter), ditutup dengan frame `STREAM_FINAL` yang dapat menyertakan objek kartu interaktif `card`.
+
+**Inbound A - Potongan Streaming (`STREAMING_CHUNK`):**
+```json
+{
+  "type": "CHAT_CHUNK",
+  "client_msg_id": "cmsg_1786000200_a1b2",
+  "seq": 1,
+  "status": "STREAMING_CHUNK",
+  "chunk": "Siap Tuan, transaksi pengeluaran Rp15.000 via Bank Jago (QRIS) "
+}
+```
+
+**Inbound B - Frame Penutup & Kartu Terlampir (`STREAM_FINAL`):**
+```json
+{
+  "type": "CHAT_CHUNK",
+  "client_msg_id": "cmsg_1786000200_a1b2",
+  "seq": 2,
+  "status": "STREAM_FINAL",
+  "chunk": "",
+  "intent": "FINANCE",
+  "card": {
+    "version": 1,
+    "card_id": "fin_15000_kopi",
+    "card_type": "FINANCE_TX",
+    "status": "PENDING"
+  }
+}
+```
+
+**Inbound C - Pembatalan / Galat (`ERROR_ABORT`):**
+```json
+{
+  "type": "CHAT_CHUNK",
+  "client_msg_id": "cmsg_1786000200_a1b2",
+  "seq": 2,
+  "status": "ERROR_ABORT",
+  "chunk": "",
+  "error": "Dibatalkan oleh pengguna."
+}
+```
+
+### 7.5. Sinkronisasi Ulang Setelah Putus Jaringan (`CHAT_RESUME` / `CHAT_RESUME_MISS` / `CHAT_STOP`)
+Server menyimpan riwayat chunk di memori selama **10 menit** (maks 100 giliran) sehingga ponsel yang berpindah dari Wi-Fi ke 5G dapat melanjutkan stream tanpa kehilangan satu huruf pun.
+
+**Outbound `CHAT_RESUME` (HP ➔ Server):**
+```json
+{
+  "type": "CHAT_RESUME",
+  "client_msg_id": "cmsg_1786000200_a1b2",
+  "last_seq": 1
+}
+```
+Jika ditemukan, server memutar ulang seluruh `CHAT_CHUNK` dengan `seq > last_seq` (serta `ACTION_PENDING` yang belum kedaluwarsa). Jika sudah lewat 10 menit, server membalas `{"type": "CHAT_RESUME_MISS", "client_msg_id": "..."}`. Untuk menghentikan generasi yang sedang berjalan, klien mengirim `{"type": "CHAT_STOP", "client_msg_id": "..."}`.
+
+### 7.6. Pesan Proaktif Lintas-Kanal (`CHAT_PROACTIVE`)
+Dikirim oleh `Notifier.js` / `client.js` saat terjadi peristiwa latar belakang (Morning Briefing, Gmail Auto-Sync Mandiri/Jago, Peringatan Jadwal, atau Alert Disiplin):
+```json
+{
+  "type": "CHAT_PROACTIVE",
+  "server_msg_id": "pro_1786000300",
+  "kind": "finance_tx_confirm",
+  "priority": "P0",
+  "content": "Sinkronisasi Keuangan Terbaru: Pengeluaran Rp15.000 di Kopi Kenangan.",
+  "card": { ... },
+  "ts": 1786000300000
+}
+```
+
+---
+
+## 🃏 8. Spesifikasi 12 Kartu Interaktif Native (`card`, `CARD_ACTION`, `CARD_UPDATE`)
+
+Diimplementasikan oleh `src/interfaces/bridge/mobile_bridge/card_handler.js` dan dirender secara native oleh `InteractiveCardView.kt`.
+
+### 8.1. Katalog 12 Tipe Kartu (`card_type`)
+1. `FINANCE_TX`: Konfirmasi/edit transaksi keuangan (*receipt-first* layout, live account `Balance`, picker Akun/Metode/Kategori, Hard Account Gate, dan countdown auto-save 5 menit).
+2. `RECURRING_BILL`: Persetujuan deteksi langganan/tagihan berulang (`approve`, `reject`).
+3. `IDENTITY_PROPOSAL`: Persetujuan hipotesis sifat/direktif baru hasil *Weekly Cognitive Pass* (`approve`, `reject` dengan alasan opsional).
+4. `MEMORY_HYGIENE`: Pemangkasan memori `PHASE` yang meluruh berdasarkan kurva Ebbinghaus (`archive_selected`, `archive_all`, `keep_all`).
+5. `DISCIPLINE_CHECK`: Intervensi batas waktu aplikasi (`valid_research`, `extend_10m` maks 2x/hari, `lock_focus`).
+6. `CALENDAR_CONFLICT`: Resolusi bentrok jadwal Google Calendar (`force_create`, `cancel_create`, `pick_slot`).
+7. `FINANCE_DELETE`: Konfirmasi penghapusan transaksi beserta sibling `split_group_id` (`confirm_delete`, `cancel_delete`).
+8. `TASK_CONFIRM`: Pemilihan kategori daftar tugas Google Tasks (`pick_category`, `cancel`).
+9. `PROACTIVE_TASKS`: Daftar checklist tugas harian interaktif dari Morning Briefing (`complete_selected`).
+10. `VAULT_METADATA`: Editor metadata catatan *2nd Brain Vault* (`update_vault`, `delete_vault`).
+11. `BRIEFING_SUMMARY`: Kartu ringkasan eksekutif Morning/Evening Briefing dengan *quick-prompt chips*.
+12. `BUDGET_RECAP`: Grafik batang progres anggaran bulanan/mingguan beserta indikator *safe-to-spend*.
+
+### 8.2. Skema Lengkap Kartu `FINANCE_TX` (Termasuk Field `Balance` Real-Time)
+```json
+{
+  "version": 1,
+  "card_id": "fin_150000_khansa",
+  "card_type": "FINANCE_TX",
+  "status": "PENDING",
+  "title": "New Transaction Detected",
+  "subtitle": "Bank Jago · Transfer bank",
+  "badge": "Income",
+  "accent": "EMERALD",
+  "hero_value": "+Rp 150.000",
+  "hero_tone": "INCOME",
+  "expires_at": 1786000600000,
+  "expires_label": "Auto-saves in",
+  "prompt_text": "",
+  "fields": [
+    { "key": "time", "label": "Time", "value": "22 Nov · 15:55 WIB" },
+    { "key": "merchant", "label": "Merchant", "value": "KHANSA QONITA" },
+    { "key": "category", "label": "Category", "value": "Pendapatan (umum)" },
+    { "key": "account", "label": "Account", "value": "Bank Jago", "tone": "NEUTRAL" },
+    { "key": "balance", "label": "Balance", "value": "Rp1.250.000" },
+    { "key": "payment_method", "label": "Method", "value": "Transfer bank", "tone": "NEUTRAL" },
+    { "key": "note", "label": "Note", "value": "pendapatan kepanitiaan", "tone": "NEUTRAL" }
+  ],
+  "categories": ["Pendapatan (umum)", "Gaji, faktur", "Lainnya"],
+  "accounts": ["Bank Mandiri", "Bank Jago", "Dana", "Shopee Pay", "Tunai"],
+  "payment_methods": ["QRIS", "Direct Debit", "Transfer bank", "Kartu Kredit", "Tunai"],
+  "meta": {
+    "composite_key": "150000_khansa",
+    "nominal": 150000,
+    "note": "pendapatan kepanitiaan",
+    "category": "Pendapatan (umum)",
+    "account": "Bank Jago",
+    "payment_method": "Transfer bank",
+    "balance": "Rp1.250.000",
+    "time_display": "22 Nov · 15:55 WIB"
+  },
+  "actions": [
+    { "id": "confirm", "label": "Confirm", "style": "PRIMARY" },
+    { "id": "account", "label": "Account", "style": "SECONDARY", "kind": "PICK_ACCOUNT" },
+    { "id": "payment_method", "label": "Method", "style": "SECONDARY", "kind": "PICK_METHOD" },
+    { "id": "category", "label": "Category", "style": "SECONDARY", "kind": "PICK_CATEGORY" },
+    { "id": "edit", "label": "Edit", "style": "SECONDARY", "kind": "EDIT_FINANCE" },
+    { "id": "cancel", "label": "Cancel", "style": "DESTRUCTIVE" }
+  ]
+}
+```
+*(Catatan: Jika akun belum dipilih, field `balance` tidak dikirim dan `expires_at` bernilai `0` karena Hard Account Gate menahan auto-save sampai akun dipilih. Untuk transfer antar-akun, `balance` menampilkan kedua saldo akun, misal `"Dana Rp350.000 · Bank Jago Rp1.250.000"`).*
+
+### 8.3. Aksi Pengguna pada Kartu (`CARD_ACTION`) & Patch Server (`CARD_UPDATE`)
+
+**Outbound `CARD_ACTION` (HP ➔ Server):**
+```json
+{
+  "type": "CARD_ACTION",
+  "card_id": "fin_150000_khansa",
+  "card_type": "FINANCE_TX",
+  "action_id": "confirm",
+  "payload": {
+    "composite_key": "150000_khansa"
+  }
+}
+```
+
+**Inbound `CARD_UPDATE` Setelah Konfirmasi (Server ➔ HP):**
+Server mengambil saldo terbaru pasca-pencatatan dari Supabase, memperbarui `updated_card` (`meta.balance` & field `balance` kini mencerminkan saldo akhir setelah transaksi masuk), dan mengunci status kartu menjadi `RESOLVED`:
+```json
+{
+  "type": "CARD_UPDATE",
+  "card_id": "fin_150000_khansa",
+  "status": "RESOLVED",
+  "resolved_badge": "Recorded",
+  "resolved_detail": "Bank Jago · Transfer bank · Pendapatan (umum) · Saldo Rp1.400.000",
+  "updated_card": { ... },
+  "ts": 1786000315000
+}
+```
+
+---
+
+## 🛡️ 9. Hardware-Biometric Finance Step-Up Gate (`ACTION_PENDING` ➔ `ACTION_AUTH` ➔ `ACTION_RESULT`)
+
+Diimplementasikan oleh `src/core/auth/finance_stepup_service.js` dan `FinanceStepUpBottomSheet.kt`. Ditegakkan langsung pada lapisan eksekusi tool Node.js dengan TTL **30 detik**, nonce sekali pakai, validasi daftar putih penerima (*recipient whitelist*), dan batas nominal harian server.
+
+### 9.1. Tantangan Otorisasi Finansial (`ACTION_PENDING`)
+**Inbound (Server ➔ HP):**
+```json
+{
+  "type": "ACTION_PENDING",
+  "action_id": "act-35358e02",
+  "client_msg_id": "cmsg_1786000400",
+  "nonce": "f19a8c3d7e2b4019...",
+  "ttl_sec": 30,
+  "exp": 1786000430000,
+  "canonical_hash": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918",
+  "display": {
+    "title": "Otorisasi Pembayaran Tagihan",
+    "recipient": "PT PLN (Persero) Tagihan Listrik",
+    "bank": "Bank Mandiri",
+    "acct_last4": "7710",
+    "amount_rp": 350000,
+    "admin_fee_rp": 2500,
+    "total_rp": 352500,
+    "formatted_total": "Rp 352.500",
+    "daily_remaining_after_rp": 1647500
+  }
+}
+```
+
+### 9.2. Pengiriman Tanda Tangan Biometrik (`ACTION_AUTH` / `ACTION_CANCEL`)
+Setelah pengguna memindai sidik jari pada `BiometricPrompt` (`CryptoObject`), perangkat keras Android Keystore menandatangani string kanonikal berikut dengan algoritma `SHA256withECDSA` (P-256):
+$$\text{Payload} = \text{"nexa-action-v1\textbackslash n"} + \text{nonce} + \text{"\textbackslash n"} + \text{action\_id} + \text{"\textbackslash n"} + \text{canonical\_hash}$$
+
+**Outbound `ACTION_AUTH` (HP ➔ Server):**
+```json
+{
+  "type": "ACTION_AUTH",
+  "action_id": "act-35358e02",
+  "device_id": "samsung-a33-tuan",
+  "nonce": "f19a8c3d7e2b4019...",
+  "sig": "MEYCIQDa..."
+}
+```
+*(Untuk membatalkan, klien mengirim `{"type": "ACTION_CANCEL", "action_id": "act-35358e02", "device_id": "samsung-a33-tuan", "reason": "USER_CANCELLED"}`).*
+
+### 9.3. Hasil Eksekusi Terkunci (`ACTION_RESULT`)
+**Inbound (Server ➔ HP):**
+```json
+{
+  "type": "ACTION_RESULT",
+  "action_id": "act-35358e02",
+  "client_msg_id": "cmsg_1786000400",
+  "status": "EXECUTED",
+  "ok": true,
+  "code": "OK",
+  "daily_remaining": 1647500,
+  "formatted_daily_remaining": "Rp 1.647.500",
+  "message": "Otorisasi biometrik valid. Pembayaran Rp 352.500 ke PT PLN (Persero) Tagihan Listrik berhasil dieksekusi."
+}
+```
+
+---
+
+## ⚡ 10. Connection B Binary Framing Protocol (`/io/logs` & `/io/term`, Go Sidecar `nexa-io`)
+
+Diimplementasikan oleh `nexa-io/internal/proto/frame.go` di sisi VPS serta `LogBinaryProtocol.kt` & `TerminalBinaryProtocol.kt` di sisi Android.
+
+### 10.1. Struktur Header Biner 13-Byte (Big-Endian)
+Setiap frame WebSocket Binary pada `/io/logs` dan `/io/term` diawali oleh header tetap **13 byte** diikuti oleh `Payload` sepanjang `Length` (maksimum 4.096 byte pada jalur panas):
+
+```text
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Channel (1B) |  Opcode (1B)  |   Flags (1B)  |   Seq (MSB)   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Seq (3B LSB, uint32 BE)                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                Aux / Credit / Meta (4B, uint32 BE)            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Length (2B, uint16 BE)  |          Payload ...          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+### 10.2. Konstanta Channel ID & Opcode
+- **Channel IDs:**
+  - `0x00`: Control Channel (`ChControl`)
+  - `0x01`: Telemetry Channel (`ChTelemetry`)
+  - `0x02`: Chat Channel (`ChChat`)
+  - `0x03`: Systemd Journal Log Stream (`ChLogs`, `/io/logs`)
+  - `0x10..0xFF`: Interactive VT100 Terminal PTY Sessions (`ChTermMin..ChTermMax`, `/io/term`)
+- **Opcodes:**
+  - `0x01` (`OpOpen`): Buka kanal dengan payload tiket Ed25519 / filter unit log / ukuran awal PTY.
+  - `0x02` (`OpData`): Aliran baris log UTF-8 berredaksi rahasia atau byte I/O PTY terminal.
+  - `0x03` (`OpCredit`): Pembaruan kredit aliran (*flow-control window*) dari klien ke sidecar.
+  - `0x04` (`OpClose`): Penutupan kanal (`0=Normal`, `1=ClientExit`, `2=Idle`, `3=SessionLimit`, `4=Auth`, `5=ServerStop`, `6=DetachExpired`).
+  - `0x05` (`OpResize`): Pembaruan dimensi kolom & baris layar VT100 (`cols: u16, rows: u16`).
+  - `0x06` (`OpErr`): Kode galat protokol (`1=InvalidFrame`, `2=Unauthorized`, `3=ForbiddenUnit`, `4=RateLimited`, `5=FeatureOff`, `6=ResourceLimit`, `7=ResumeFailed`).
+  - `0x07` / `0x08` (`OpPing` / `OpPong`): Detak jantung koneksi biner.
+  - `0x09` (`OpResume`): Penyambungan ulang sesi PTY dari ring buffer 64 KB berdasarkan `last_seq`.
+
+### 10.3. Unit IDs Log Streamer (`ChLogs = 0x03`)
+- `0x00`: `nexa-server.service`
+- `0x01`: `caddy.service`
+- `0x02`: `systemd`
+- `0x03`: `nexa-io` (`nexa-log.service` & `nexa-term.service`)
+
+---
+
+*Dokumen ini merupakan spesifikasi resmi N.E.X.A Mobile Bridge & Sovereign AI Control Center v4.0.0.*
