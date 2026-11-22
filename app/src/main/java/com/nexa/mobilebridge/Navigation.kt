@@ -64,8 +64,23 @@ fun MainNavigation(
             return
         }
         if (backStack.lastOrNull() == destination) return
-        // Keep backStack at max 2 levels ([MainShell, ActiveSecondaryScreen]) so previous
-        // secondary screens and their GPU RenderNodes are disposed immediately.
+
+        // If user taps the Settings gear icon from an active tab (e.g. Terminal to tweak font size),
+        // push Settings on top of that tab so pressing Back returns directly to the active session.
+        if (destination == Settings) {
+            val existingIdx = backStack.indexOf(Settings)
+            if (existingIdx >= 0) {
+                while (backStack.size > existingIdx + 1) {
+                    backStack.removeLastOrNull()
+                }
+            } else {
+                backStack.add(Settings)
+            }
+            return
+        }
+
+        // Navigating to a primary diagnostic destination (BridgeStatus, ServerLogs, RemoteTerminal):
+        // keep only MainShell at index 0 so previous secondary screens (including Settings) are disposed.
         while (backStack.size > 1) {
             backStack.removeLastOrNull()
         }
@@ -73,6 +88,7 @@ fun MainNavigation(
     }
 
     fun startVoiceCall() {
+        MainActivity.markExternalPickerLaunched()
         val intent = Intent(context, FakeCallActivity::class.java).apply {
             action = "com.nexa.mobilebridge.ACTION_CALL_NEXA"
             putExtra("IS_OUTGOING_CALL", true)
@@ -98,12 +114,13 @@ fun MainNavigation(
     }
 
     val topRoute = backStack.lastOrNull()
-    LaunchedEffect(topRoute) {
-        val activeTab = when (topRoute) {
-            MainShell -> NexaMainTab.CHAT
-            BridgeStatus -> NexaMainTab.HUD
-            ServerLogs -> NexaMainTab.LOGS
-            RemoteTerminal -> NexaMainTab.SHELL
+    val hasTerminalInStack = backStack.contains(RemoteTerminal)
+    LaunchedEffect(topRoute, hasTerminalInStack) {
+        val activeTab = when {
+            topRoute == MainShell -> NexaMainTab.CHAT
+            topRoute == BridgeStatus -> NexaMainTab.HUD
+            topRoute == ServerLogs -> NexaMainTab.LOGS
+            topRoute == RemoteTerminal || hasTerminalInStack -> NexaMainTab.SHELL
             else -> null
         }
         chatVisibilityTracker.setVisibleTab(activeTab)

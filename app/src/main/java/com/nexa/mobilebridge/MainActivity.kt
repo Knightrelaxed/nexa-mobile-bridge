@@ -43,8 +43,8 @@ class MainActivity : FragmentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val HOME_STANDBY_HIBERNATE_MS = 10_000L
-        private const val SCREEN_OFF_HIBERNATE_MS = 4_000L
+        private const val HOME_STANDBY_HIBERNATE_MS = 20_000L
+        private const val SCREEN_OFF_HIBERNATE_MS = 5_000L
         private const val TERMINAL_RESUME_GRACE_MS = 130_000L
 
         @Volatile
@@ -174,23 +174,26 @@ class MainActivity : FragmentActivity() {
         standbyHibernationJob = null
         unregisterScreenOffReceiverIfNeeded()
         super.onDestroy()
-        if (!isChangingConfigurations) {
+        if (!isChangingConfigurations && !chatRepository.isLiveCallActive()) {
             // Final graphics & ART heap trim once Activity ViewRootImpl is detached
             CoroutineScope(Dispatchers.Default).launch {
                 delay(350L)
-                trimWindowManagerGraphicsCache(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
-                trimWindowManagerGraphicsCache(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
-                Runtime.getRuntime().gc()
+                if (!chatRepository.isLiveCallActive()) {
+                    trimWindowManagerGraphicsCache(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
+                    trimWindowManagerGraphicsCache(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+                    Runtime.getRuntime().gc()
+                }
             }
         }
     }
 
     private fun scheduleStandbyUiHibernation(isScreenOff: Boolean) {
         standbyHibernationJob?.cancel()
+        if (chatRepository.isLiveCallActive()) return
         val isTerminalVisible = chatVisibilityTracker.visibleTab.value == NexaMainTab.SHELL
         val externalAgeMs = System.currentTimeMillis() - lastExternalPickerLaunchedAtMs
         if (externalAgeMs in 0..90_000L && !isScreenOff) {
-            // Do not auto-finish while user is picking a ringtone or toggling system notification settings
+            // Do not auto-finish while user is picking a ringtone, in a voice call, or in system settings
             return
         }
         val waitMs = when {
@@ -202,6 +205,7 @@ class MainActivity : FragmentActivity() {
             delay(waitMs)
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
             if (isFinishing || isDestroyed || isChangingConfigurations) return@launch
+            if (chatRepository.isLiveCallActive()) return@launch
             if (chatRepository.pendingStepUp.value != null) return@launch
             if (chatRepository.streamState.value.activeClientMsgId != null) return@launch
 
