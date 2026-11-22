@@ -1,4 +1,4 @@
-﻿package com.nexa.mobilebridge.ui.chat
+package com.nexa.mobilebridge.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -667,9 +667,10 @@ fun NexaInteractiveCard(
                             fontWeight = FontWeight.SemiBold,
                             color = statusColor
                         )
-                        if (card.resolvedDetail.isNotEmpty()) {
+                        val cleanDetail = stripCardEmojis(card.resolvedDetail)
+                        if (cleanDetail.isNotEmpty()) {
                             Text(
-                                text = card.resolvedDetail,
+                                text = cleanDetail,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -927,9 +928,10 @@ fun NexaQuickActionChips(
                     tint = statusColor,
                     modifier = Modifier.size(14.dp)
                 )
+                val cleanDetail = stripCardEmojis(card.resolvedDetail)
                 Text(
-                    text = if (card.resolvedDetail.isNotEmpty()) {
-                        "$badgeText Â· ${card.resolvedDetail}"
+                    text = if (cleanDetail.isNotEmpty()) {
+                        "$badgeText \u00B7 $cleanDetail"
                     } else {
                         badgeText
                     },
@@ -1664,14 +1666,14 @@ private fun FinanceTxReceiptCard(
     } ?: ""
     val timeDisplay = (fieldByKey["time"]?.value ?: card.metaString("time_display"))
         .replace(" WIB", "")
-        .replace(" Â· ", ", ")
+        .replace(" \u00B7 ", ", ")
         .trim()
     val adminFeeVal = fieldByKey["admin_fee"]?.value ?: ""
 
     val subjectLine = remember(merchantVal, noteVal) {
         when {
             merchantVal.isNotEmpty() && noteVal.isNotEmpty() &&
-                !noteVal.contains(merchantVal, ignoreCase = true) -> "$merchantVal Â· $noteVal"
+                !noteVal.contains(merchantVal, ignoreCase = true) -> "$merchantVal \u00B7 $noteVal"
             noteVal.isNotEmpty() -> noteVal
             merchantVal.isNotEmpty() -> merchantVal
             else -> ""
@@ -1778,7 +1780,7 @@ private fun FinanceTxReceiptCard(
                 )
                 if (timeDisplay.isNotEmpty()) {
                     Text(
-                        text = " Â· $timeDisplay",
+                        text = " \u00B7 $timeDisplay",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
@@ -1800,7 +1802,7 @@ private fun FinanceTxReceiptCard(
                                 .background(nexaColors.amber)
                         )
                         Text(
-                            text = "Select account Â· auto-save paused",
+                            text = "Select account \u00B7 auto-save paused",
                             style = MaterialTheme.typography.labelSmall,
                             color = nexaColors.amber,
                             fontWeight = FontWeight.Medium
@@ -1849,9 +1851,9 @@ private fun FinanceTxReceiptCard(
                 } else {
                     FinanceReceiptRow(
                         label = "Account",
-                        value = if (hasAccount) rawAccount else "Select",
+                        value = if (hasAccount) rawAccount else (if (effectiveIsPending) "Select" else "-"),
                         isPlaceholder = !hasAccount,
-                        isRequiredMissing = !hasAccount,
+                        isRequiredMissing = !hasAccount && effectiveIsPending,
                         interactive = effectiveIsPending && !isSubmitting,
                         onClick = {
                             onTapHaptic()
@@ -1860,7 +1862,7 @@ private fun FinanceTxReceiptCard(
                     )
                     FinanceReceiptRow(
                         label = "Method",
-                        value = if (hasMethod) rawMethod else "Optional",
+                        value = if (hasMethod) rawMethod else (if (effectiveIsPending) "Optional" else "-"),
                         isPlaceholder = !hasMethod,
                         isRequiredMissing = false,
                         interactive = effectiveIsPending && !isSubmitting,
@@ -1995,10 +1997,6 @@ private fun FinanceTxReceiptCard(
                     isMuted -> Icons.Default.Schedule
                     else -> Icons.Default.CheckCircle
                 }
-                val cleanDetail = card.resolvedDetail
-                    .replace(Regex("^[âœ…âŒâš ï¸â³ðŸ”„\\s]+"), "")
-                    .trim()
-
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -2011,7 +2009,7 @@ private fun FinanceTxReceiptCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = if (cleanDetail.isNotEmpty()) "$badgeText Â· $cleanDetail" else badgeText,
+                        text = badgeText,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = statusColor,
@@ -2097,4 +2095,24 @@ private fun FinanceReceiptRow(
             }
         }
     }
+}
+
+private fun stripCardEmojis(raw: String): String {
+    if (raw.isEmpty()) return ""
+    val sb = StringBuilder(raw.length)
+    var i = 0
+    while (i < raw.length) {
+        val cp = raw.codePointAt(i)
+        val charCount = Character.charCount(cp)
+        val isEmoji = (cp in 0x1F000..0x1FAFF) ||
+            (cp in 0x2600..0x27BF) ||
+            (cp in 0x2300..0x23FF) ||
+            cp == 0xFE0F ||
+            cp == 0x200D
+        if (!isEmoji) {
+            sb.appendCodePoint(cp)
+        }
+        i += charCount
+    }
+    return sb.toString().replace(Regex("\\s+"), " ").trim()
 }
