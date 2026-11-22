@@ -99,6 +99,8 @@ class ChatViewModel @Inject constructor(
 
     val streamState: StateFlow<ActiveChatStreamState> = chatRepository.streamState
     val pendingStepUp: StateFlow<PendingFinanceStepUp?> = chatRepository.pendingStepUp
+    val submittingCardIds: StateFlow<Set<String>> = chatRepository.submittingCardIds
+    val cardErrors: StateFlow<Map<String, String>> = chatRepository.cardErrors
     val voicePlaybackState: StateFlow<VoicePlaybackState> = voiceNotePlayer.state
 
     private val _voiceRecordingState = MutableStateFlow(VoiceRecordingUiState())
@@ -574,6 +576,15 @@ class ChatViewModel @Inject constructor(
     fun expireFinanceStepUp(actionId: String) {
         cancelActiveBiometricPrompt()
         chatRepository.expirePendingActionLocally(actionId, _chatPrefs.value.deviceName)
+    }
+
+    fun submitCardAction(
+        cardId: String,
+        cardType: String,
+        actionId: String,
+        payload: org.json.JSONObject? = null
+    ) {
+        chatRepository.sendCardAction(cardId, cardType, actionId, payload)
     }
 
     override fun onCleared() {

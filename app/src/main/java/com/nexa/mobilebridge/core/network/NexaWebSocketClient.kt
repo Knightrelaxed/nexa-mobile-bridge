@@ -76,7 +76,8 @@ class NexaWebSocketClient @Inject constructor(
             "CHAT_RESUME_MISS",
             "CHAT_PROACTIVE",
             "ACTION_PENDING",
-            "ACTION_RESULT"
+            "ACTION_RESULT",
+            "CARD_UPDATE"
         )
 
         fun fastExtractPcmChunk(text: String): String? {

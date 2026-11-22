@@ -102,7 +102,8 @@ class ChatRepository @Inject constructor(
         val channel: Channel<StreamToken>,
         var consumerJob: Job? = null,
         @Volatile var lastSeq: Int = 0,
-        @Volatile var finalIntentTag: String? = null
+        @Volatile var finalIntentTag: String? = null,
+        @Volatile var finalCardMetadataJson: String? = null
     )
 
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -119,6 +120,12 @@ class ChatRepository @Inject constructor(
 
     private val _pendingStepUp = MutableStateFlow<PendingFinanceStepUp?>(null)
     val pendingStepUp: StateFlow<PendingFinanceStepUp?> = _pendingStepUp.asStateFlow()
+
+    private val _submittingCardIds = MutableStateFlow<Set<String>>(emptySet())
+    val submittingCardIds: StateFlow<Set<String>> = _submittingCardIds.asStateFlow()
+
+    private val _cardErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val cardErrors: StateFlow<Map<String, String>> = _cardErrors.asStateFlow()
 
     init {
         observeIncomingChatEvents()
@@ -695,12 +702,73 @@ class ChatRepository @Inject constructor(
                         "CHAT_PROACTIVE" -> handleChatProactive(obj)
                         "ACTION_PENDING" -> handleActionPending(obj)
                         "ACTION_RESULT" -> handleActionResult(obj)
+                        "CARD_UPDATE" -> handleCardUpdate(obj)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error handling chat WS event: ${e.message}")
                 }
             }
         }
+    }
+
+    /**
+     * Submit an interactive card button action (CARD_ACTION) to the N.E.X.A server.
+     */
+    fun sendCardAction(
+        cardId: String,
+        cardType: String,
+        actionId: String,
+        payload: JSONObject? = null
+    ) {
+        val cleanId = cardId.trim()
+        if (cleanId.isEmpty() || cleanId in _submittingCardIds.value) return
+
+        _cardErrors.update { it - cleanId }
+        _submittingCardIds.update { it + cleanId }
+
+        val frame = JSONObject().apply {
+            put("type", "CARD_ACTION")
+            put("card_id", cleanId)
+            put("card_type", cardType)
+            put("action_id", actionId)
+            put("payload", payload ?: JSONObject())
+        }.toString()
+
+        val sent = webSocketClient.send(frame)
+        if (!sent) {
+            _submittingCardIds.update { it - cleanId }
+            _cardErrors.update { it + (cleanId to "Not connected to server. Check connection and try again.") }
+            return
+        }
+
+        // Safety timeout: never leave a card spinner stuck indefinitely if a WS response is dropped
+        repoScope.launch {
+            delay(10_000L)
+            if (cleanId in _submittingCardIds.value) {
+                _submittingCardIds.update { it - cleanId }
+                _cardErrors.update { it + (cleanId to "Action timed out. Please try again.") }
+            }
+        }
+    }
+
+    private suspend fun handleCardUpdate(obj: JSONObject) {
+        val cardId = obj.optString("card_id", "").trim()
+        if (cardId.isEmpty()) return
+
+        _submittingCardIds.update { it - cardId }
+
+        val err = obj.optString("error", "").trim()
+        val nextStatus = obj.optString("status", "").uppercase()
+        if (err.isNotEmpty() && nextStatus != "RESOLVED" && nextStatus != "EXPIRED") {
+            _cardErrors.update { it + (cardId to err) }
+            return
+        }
+        _cardErrors.update { it - cardId }
+
+        val row = chatMessageDao.findAssistantByCardId(cardId) ?: return
+        val existing = InteractiveCardCodec.parseFromExecutionMetadata(row.executionMetadata) ?: return
+        val updated = InteractiveCardCodec.applyCardUpdateJson(existing, obj.toString())
+        chatMessageDao.updateExecutionMetadata(row.id, InteractiveCardCodec.toExecutionMetadataJson(updated))
     }
 
     private suspend fun handleChatProactive(obj: JSONObject) {
@@ -716,6 +784,10 @@ class ChatRepository @Inject constructor(
             ?: System.currentTimeMillis()
         val ts = if (caughtUp) rawTs else maxOf(rawTs, System.currentTimeMillis())
 
+        val cardObj = obj.optJSONObject("card")
+        val cardMetadataJson = cardObj?.let { InteractiveCardCodec.parseFromJsonString(it.toString()) }
+            ?.let { InteractiveCardCodec.toExecutionMetadataJson(it) }
+
         // Deduplicate by client_msg_id so reconnect replays never duplicate proactive bubbles
         if (chatMessageDao.getByClientMsgIdAndRole(clientMsgId, ChatRole.ASSISTANT) != null) {
             return
@@ -729,7 +801,8 @@ class ChatRepository @Inject constructor(
                 content = content,
                 timestamp = ts,
                 status = ChatStatus.SENT,
-                intentTag = kind
+                intentTag = kind,
+                executionMetadata = cardMetadataJson
             )
         )
         notificationManager.onIncomingMessage(
@@ -831,6 +904,9 @@ class ChatRepository @Inject constructor(
                 }
                 val intentTag = obj.optString("intent", "").takeIf { it.isNotBlank() }
                 session.finalIntentTag = intentTag
+                val finalCardObj = obj.optJSONObject("card")
+                session.finalCardMetadataJson = finalCardObj?.let { InteractiveCardCodec.parseFromJsonString(it.toString()) }
+                    ?.let { InteractiveCardCodec.toExecutionMetadataJson(it) }
                 session.channel.close()
                 activeStreams.remove(clientMsgId)
             }
@@ -1007,6 +1083,10 @@ class ChatRepository @Inject constructor(
                             lastSeq = seq,
                             intentTag = session.finalIntentTag
                         )
+                        val cardMeta = session.finalCardMetadataJson
+                        if (!cardMeta.isNullOrBlank()) {
+                            chatMessageDao.updateExecutionMetadata(msgId, cardMeta)
+                        }
                         // Completed assistant reply while the chat is not on screen -> notification
                         if (status == ChatStatus.SENT && text.isNotBlank()) {
                             notificationManager.onIncomingMessage(

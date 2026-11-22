@@ -55,4 +55,17 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
+
+    @Query(
+        """
+        SELECT * FROM chat_messages
+        WHERE role = 'assistant' AND executionMetadata LIKE '%' || :cardId || '%'
+        ORDER BY timestamp DESC, rowid DESC
+        LIMIT 1
+        """
+    )
+    suspend fun findAssistantByCardId(cardId: String): ChatMessageEntity?
+
+    @Query("UPDATE chat_messages SET executionMetadata = :metadata WHERE id = :messageId")
+    suspend fun updateExecutionMetadata(messageId: String, metadata: String)
 }

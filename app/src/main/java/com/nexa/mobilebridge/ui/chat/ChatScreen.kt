@@ -186,6 +186,8 @@ fun ChatScreen(
     val pagedItems: LazyPagingItems<ChatMessageEntity> = viewModel.pagedMessages.collectAsLazyPagingItems()
     val streamState by viewModel.streamState.collectAsStateWithLifecycle()
     val pendingStepUp by viewModel.pendingStepUp.collectAsStateWithLifecycle()
+    val submittingCardIds by viewModel.submittingCardIds.collectAsStateWithLifecycle()
+    val cardErrors by viewModel.cardErrors.collectAsStateWithLifecycle()
     val chatPrefs by viewModel.chatPrefs.collectAsStateWithLifecycle()
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
@@ -202,6 +204,8 @@ fun ChatScreen(
     var isExpandedComposer by rememberSaveable { mutableStateOf(false) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var activeMenuAnchor by remember { mutableStateOf<MessageMenuAnchor?>(null) }
+    var activeCategoryPickerCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
+    var activeFinanceEditCard by remember { mutableStateOf<com.nexa.mobilebridge.data.chat.InteractiveCardData?>(null) }
     var hasMicPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -601,6 +605,14 @@ fun ChatScreen(
                                     isSelected = isSelected,
                                     isSelectionMode = selectionState.isActive,
                                     isInteractive = isInteractive,
+                                    submittingCardIds = submittingCardIds,
+                                    cardErrors = cardErrors,
+                                    hapticEnabled = chatPrefs.hapticEnabled,
+                                    onSubmitCardAction = { cardId, cardType, actionId, payload ->
+                                        viewModel.submitCardAction(cardId, cardType, actionId, payload)
+                                    },
+                                    onOpenCategoryPicker = { card -> activeCategoryPickerCard = card },
+                                    onOpenFinanceEdit = { card -> activeFinanceEditCard = card },
                                     onTapBubble = { tapOffset ->
                                         if (selectionState.isActive) {
                                             triggerHapticTick()
@@ -834,6 +846,43 @@ fun ChatScreen(
                     viewModel.confirmPendingDelete()
                 },
                 onDismiss = { viewModel.dismissPendingDelete() }
+            )
+        }
+
+        val catCard = activeCategoryPickerCard
+        if (catCard != null) {
+            FinanceCategoryPickerSheet(
+                card = catCard,
+                onSelectCategory = { selectedCategory ->
+                    activeCategoryPickerCard = null
+                    triggerHapticTick()
+                    val payload = org.json.JSONObject().apply {
+                        put("category", selectedCategory)
+                        val key = catCard.metaString("composite_key")
+                        if (key.isNotEmpty()) put("composite_key", key)
+                    }
+                    viewModel.submitCardAction(catCard.cardId, catCard.cardType, "update_category", payload)
+                },
+                onDismiss = { activeCategoryPickerCard = null }
+            )
+        }
+
+        val editCard = activeFinanceEditCard
+        if (editCard != null) {
+            FinanceQuickEditDialog(
+                card = editCard,
+                onSave = { note, nominal ->
+                    activeFinanceEditCard = null
+                    triggerHapticConfirm()
+                    val payload = org.json.JSONObject().apply {
+                        if (note.isNotEmpty()) put("note", note)
+                        if (nominal.isNotEmpty()) put("nominal", nominal)
+                        val key = editCard.metaString("composite_key")
+                        if (key.isNotEmpty()) put("composite_key", key)
+                    }
+                    viewModel.submitCardAction(editCard.cardId, editCard.cardType, "update_fields", payload)
+                },
+                onDismiss = { activeFinanceEditCard = null }
             )
         }
     }
@@ -1600,9 +1649,18 @@ private fun AssistantChatBubble(
     isSelected: Boolean,
     isSelectionMode: Boolean,
     isInteractive: Boolean,
+    submittingCardIds: Set<String> = emptySet(),
+    cardErrors: Map<String, String> = emptyMap(),
+    hapticEnabled: Boolean = true,
+    onSubmitCardAction: (cardId: String, cardType: String, actionId: String, payload: org.json.JSONObject?) -> Unit = { _, _, _, _ -> },
+    onOpenCategoryPicker: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
+    onOpenFinanceEdit: (com.nexa.mobilebridge.data.chat.InteractiveCardData) -> Unit = {},
     onTapBubble: (windowOffset: IntOffset) -> Unit,
     onLongPressBubble: () -> Unit
 ) {
+    val interactiveCard = remember(message.executionMetadata) {
+        com.nexa.mobilebridge.data.chat.InteractiveCardCodec.parseFromExecutionMetadata(message.executionMetadata)
+    }
     val nexaColors = LocalNexaColors.current
     val baseBg = if (nexaColors.isDark) Color(0xFF111720) else MaterialTheme.colorScheme.surface
     val bubbleBg = if (isSelected) {
@@ -1671,9 +1729,19 @@ private fun AssistantChatBubble(
         ) {
             Column(
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (displayContent.isEmpty() && isStreaming) {
+                if (interactiveCard != null) {
+                    NexaInteractiveCard(
+                        card = interactiveCard,
+                        isSubmitting = interactiveCard.cardId in submittingCardIds,
+                        errorMessage = cardErrors[interactiveCard.cardId],
+                        hapticEnabled = hapticEnabled,
+                        onSubmitAction = onSubmitCardAction,
+                        onOpenCategoryPicker = onOpenCategoryPicker,
+                        onOpenFinanceEdit = onOpenFinanceEdit
+                    )
+                } else if (displayContent.isEmpty() && isStreaming) {
                     Text(
                         text = "Thinking...",
                         style = MaterialTheme.typography.bodyMedium,
@@ -1694,7 +1762,7 @@ private fun AssistantChatBubble(
                     )
                 }
 
-                if (!isStreaming || displayContent.isNotEmpty()) {
+                if (!isStreaming || displayContent.isNotEmpty() || interactiveCard != null) {
                     Text(
                         text = formattedTime,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
