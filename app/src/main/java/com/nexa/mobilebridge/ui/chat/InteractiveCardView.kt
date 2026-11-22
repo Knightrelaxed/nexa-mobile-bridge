@@ -1819,6 +1819,8 @@ private fun FinanceTxReceiptCard(
         .replace(" WIB", "")
         .replace(" \u00B7 ", ", ")
         .trim()
+    val balanceVal = fieldByKey["balance"]?.value?.ifBlank { card.metaString("balance") }
+        ?: card.metaString("balance")
     val adminFeeVal = fieldByKey["admin_fee"]?.value ?: ""
 
     val subjectLine = remember(merchantVal, noteVal) {
@@ -1988,7 +1990,7 @@ private fun FinanceTxReceiptCard(
 
             HorizontalDivider(thickness = 0.6.dp, color = nexaColors.cardBorder.copy(alpha = 0.55f))
 
-            // 4. Direct-Tap Clean Rows (Account / Method / Category)
+            // 4. Direct-Tap Clean Rows (Account / Balance / Method / Category)
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (isTransfer && merchantVal.isNotEmpty()) {
                     FinanceReceiptRow(
@@ -1999,6 +2001,17 @@ private fun FinanceTxReceiptCard(
                         interactive = false,
                         onClick = {}
                     )
+                    if (balanceVal.isNotEmpty()) {
+                        FinanceReceiptRow(
+                            label = "Balance",
+                            value = balanceVal,
+                            isPlaceholder = false,
+                            isRequiredMissing = false,
+                            interactive = false,
+                            monospaceValue = true,
+                            onClick = {}
+                        )
+                    }
                 } else {
                     FinanceReceiptRow(
                         label = "Account",
@@ -2011,6 +2024,17 @@ private fun FinanceTxReceiptCard(
                             onOpenAccountPicker(card)
                         }
                     )
+                    if (hasAccount && balanceVal.isNotEmpty()) {
+                        FinanceReceiptRow(
+                            label = "Balance",
+                            value = balanceVal,
+                            isPlaceholder = false,
+                            isRequiredMissing = false,
+                            interactive = false,
+                            monospaceValue = true,
+                            onClick = {}
+                        )
+                    }
                     FinanceReceiptRow(
                         label = "Method",
                         value = if (hasMethod) rawMethod else (if (effectiveIsPending) "Optional" else "-"),
@@ -2180,6 +2204,7 @@ private fun FinanceReceiptRow(
     isPlaceholder: Boolean,
     isRequiredMissing: Boolean,
     interactive: Boolean,
+    monospaceValue: Boolean = false,
     onClick: () -> Unit
 ) {
     val nexaColors = LocalNexaColors.current
@@ -2229,8 +2254,12 @@ private fun FinanceReceiptRow(
             ) {
                 Text(
                     text = value,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
+                    style = if (monospaceValue) {
+                        MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
+                    fontWeight = if (monospaceValue) FontWeight.SemiBold else FontWeight.Medium,
                     color = if (isPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
